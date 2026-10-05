@@ -10,13 +10,11 @@ slint::include_modules!();
 
 struct AppState {
     opts_time: Vec<DateTime<Local>>,
-
+    selected: Option<DateTime<Local>>,
     options: Rc<VecModel<TimeOption>>,
 }
 
-fn update_ui_options(state: &RefCell<AppState>) {
-    let mut state = state.borrow_mut();
-
+fn update_ui_options(state: &mut AppState) {
     let (new_times, new_options) = compute_options();
 
     debug!("compute_options refreshed {} options", new_options.len());
@@ -85,6 +83,49 @@ fn sound_path(sound_asset_name: &str) -> Option<PathBuf> {
     candidates.into_iter().find(|p| p.exists())
 }
 
+fn stop(state: &mut AppState, window: &MainWindow, stop_type: StopType) {
+    info!("stop: timer stopped, back to selection");
+
+    update_ui_options(state);
+
+    window.set_running_state(false);
+    window.set_timer_time(0);
+    state.selected = None;
+    match stop_type {
+        StopType::TimerFinished => window.set_page(Page::TimerFinished),
+        StopType::UserStopped => window.set_page(Page::SelectionPage),
+    }
+
+}
+
+fn tick(state: &mut AppState, window: &MainWindow) {
+    let Some(target) = state.selected else {
+        return;
+    };
+
+    let now = Local::now();
+    let remaining = target - now;
+    let remaining = remaining.num_milliseconds();
+
+    match remaining {
+        1_i64.. => {
+            // update timer
+            window.set_timer_time(remaining);
+            debug!("Remaining: {remaining}");
+        },
+        -59000_i64..=0_i64 => {
+            // play sound and then reset timer
+            stop(state, window, StopType::TimerFinished);
+            play_sound();
+        },
+        _ => {
+            // timer is expired, notify user and return to selection page
+            // this is a temporary solution, TODO: implement a new window for pop up
+            stop(state, window, StopType::UserStopped);  
+        }
+    }
+}
+
 fn play_sound() {
     thread::spawn(|| {
         const SOUND_ASSET_NAME: &str = "game_over.mp3";
@@ -129,7 +170,7 @@ fn main() -> Result<(), slint::PlatformError> {
 
     main_window.set_options(ModelRc::from(options.clone()));
 
-    let app_state = Rc::new(RefCell::new(AppState { opts_time, options }));
+    let app_state = Rc::new(RefCell::new(AppState { opts_time, options, selected: None }));
 
     let current_os = std::env::consts::OS;
     let is_macos = current_os == "macos";
@@ -141,68 +182,42 @@ fn main() -> Result<(), slint::PlatformError> {
 
         move |index| {
             let window = window_weak.unwrap();
-            let idx: usize = index.try_into().unwrap();
-            let state = state_clone.borrow();
-            let now: DateTime<Local> = Local::now();
-            let target_time = state.opts_time[idx];
-            let remaining_time = target_time - now;
+            let mut state = state_clone.borrow_mut();
 
-            let rem_seconds = if remaining_time.num_seconds() > 0 {
-                remaining_time.num_seconds()
-            } else {
-                Duration::minutes(15).num_seconds() + remaining_time.num_seconds()
+            let idx: usize = index.try_into().unwrap();
+            let now: DateTime<Local> = Local::now();
+            let mut target_time = state.opts_time[idx];
+            let mut remaining_time = target_time - now;
+
+            if remaining_time.num_milliseconds() < 0 && idx+1 < state.opts_time.len(){
+                target_time = state.opts_time[idx+1];
+                remaining_time = target_time - now;
             };
 
+            state.selected = Some(target_time);
+
             info!(
-                "select_time: idx={} target={} remaining={}s",
-                idx,
+                "select_time: target={} remaining={}s",
                 target_time.format("%H:%M"),
-                rem_seconds
+                remaining_time
             );
 
-            window.set_timer_time(rem_seconds * 1000);
-            // window.set_timer_time(3 * 1000);
             window.set_page(Page::TimerPage);
             window.set_running_state(true);
-        }
-    });
 
-    // start/pause
-    main_window.on_start_pause({
-        let window_weak = main_window.as_weak();
-
-        move || {
-            let window = window_weak.unwrap();
-            let now_running = !window.get_running_state();
-            let timer_time = window.get_timer_time();
-            if timer_time > 0 {
-                info!(
-                    "start_pause: running={} timer_time={}ms",
-                    now_running, timer_time
-                );
-                window.set_running_state(now_running);
-            } else {
-                info!("start_pause: blocked, timer_time is 0");
-            }
+            tick(&mut state, &window);
         }
     });
 
     main_window.on_stop({
-        let window_weak = main_window.as_weak();
         let state_clone = app_state.clone();
+        let window = main_window.as_weak();
 
         move |stop_type| {
-            let window = window_weak.unwrap();
-            info!("stop: timer stopped, back to selection");
+            let mut state = state_clone.borrow_mut();
+            let window = window.unwrap();
 
-            update_ui_options(&state_clone);
-
-            window.set_running_state(false);
-            window.set_timer_time(0);
-            match stop_type {
-                StopType::TimerFinished => window.set_page(Page::TimerFinished),
-                StopType::UserStopped => window.set_page(Page::SelectionPage),
-            }
+            stop(&mut state, &window, stop_type);
         }
     });
 
@@ -210,13 +225,21 @@ fn main() -> Result<(), slint::PlatformError> {
         let state_clone = app_state.clone();
 
         move || {
-            update_ui_options(&state_clone);
+            let mut state = state_clone.borrow_mut();
+
+            update_ui_options(&mut state);
         }
     });
 
-    main_window.on_play_sound({
-        || {
-            play_sound();
+    main_window.on_tick({
+        let state_clone = app_state.clone();
+        let window = main_window.as_weak();
+
+        move || {
+            let mut state = state_clone.borrow_mut();
+            let window = window.unwrap();
+
+            tick(&mut state, &window);
         }
     });
 

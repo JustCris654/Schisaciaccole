@@ -38,32 +38,29 @@ component SelectionButton inherits VerticalBox {
     }
 }
 
-export component TimerPage {
+component TimerPage {
     in property<float> ui-scale;
     in-out property <duration> timer-time;
     in-out property <bool> running-state;
 
     callback stop(StopType);
-    callback play-sound();
+    callback tick();
 
     timer := Timer {
-	interval  : 1s;
+	interval  : 0.25s;
 	running: running-state;
-	
+
 	triggered() => {
 	    if (running-state) {
-		timer-time -= 1s;
-		if (timer-time <= 0) {
-		    stop(StopType.TimerFinished);
-		    play-sound();
-		}
+		tick();
 	    } 
 	}
     }
 
-    property <int> hours  : Math.floor(timer-time / 60s / 60);
-    property <int> minutes: Math.floor(Math.mod(timer-time / 60s, 60));
-    property <int> seconds: Math.mod(timer-time / 1s, 60);
+    property <int> total-seconds: Math.ceil(timer-time / 1s);
+    property <int> hours  : Math.floor(total-seconds / 3600);
+    property <int> minutes: Math.mod(Math.floor(total-seconds / 60), 60);
+    property <int> seconds: Math.mod(total-seconds, 60);
     property <string> displayTimer: 
         (hours >= 1 ? "0" + hours + ":" : "") +
         (minutes < 10 ? "0" : "") + minutes + ":" +
@@ -81,50 +78,8 @@ export component TimerPage {
 	    horizontal-alignment: center;
 	}
 
-	// HorizontalBox {
-	//     alignment: center;
-	//     if displayHour != "" : HorizontalBox {
-	// 	Text {
-	// 	    text: displayHour;
-	// 	    color: #C682F5;
-	// 	    font-size: 100px * root.ui-scale;
-	// 	    horizontal-alignment: center;
-	// 	}
-	// 	Text {
-	// 	    text: ":";
-	// 	    color: #C682F5;
-	// 	    font-size: 100px * root.ui-scale;
-	// 	    horizontal-alignment: center;
-	// 	}
-	//     }
-
-	//     Text {
-	// 	text: displayMinute;
-	// 	color: #C682F5;
-	// 	font-size: 100px * root.ui-scale;
-	// 	horizontal-alignment: center;
-	//     }
-	//     Text {
-	// 	text: ":";
-	// 	color: #C682F5;
-	// 	font-size: 100px * root.ui-scale;
-	// 	horizontal-alignment: center;
-	//     }
-	//     Text {
-	// 	text: displaySeconds;
-	// 	color: #C682F5;
-	// 	font-size: 100px * root.ui-scale;
-	// 	horizontal-alignment: center;
-	//     }
-	// }
-
 	HorizontalBox {
 	    alignment: center;
-
-	    // Button {
-	    // 	text: running-state ? "Pause" : "Start";
-	    // 	clicked => { start-pause(); }
-	    // }
 
 	    Button {
 		text: "Stop";
@@ -155,10 +110,9 @@ export component MainWindow inherits Window {
     in property     <[TimeOption]> options;
     in property     <bool>     is-macos;
 
-    callback start-pause();
     callback select-time(int);
     callback compute-options();
-    callback play-sound();
+    callback tick();
     callback set-selection-page();
     callback quit();
     callback fullscreen(bool);
@@ -266,7 +220,7 @@ export component MainWindow inherits Window {
 	timer-time <=> root.timer-time;
 	running-state <=> root.running-state;
 	stop(stop-type) => { root.stop(stop-type); }
-	play-sound => { root.play-sound(); }
+	tick => { root.tick(); }
     }
 
     
