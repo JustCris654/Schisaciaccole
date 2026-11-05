@@ -1,13 +1,10 @@
 //! Schisaciaccole: countdown timer for time-boxed Scrum ceremonies.
 
-// The UI wiring of the modules below comes next.
-#[allow(dead_code)]
 mod backend;
-#[allow(dead_code)]
 mod config;
-#[allow(dead_code)]
+mod login;
 mod pkce;
-#[allow(dead_code)]
+mod session;
 mod session_store;
 mod sound;
 mod state;
@@ -23,7 +20,8 @@ use anyhow::Context;
 use log::{error, info, warn};
 use slint::ComponentHandle;
 
-use crate::state::AppState;
+use crate::session::Session;
+use crate::state::{AppState, LOCAL_MODE_NOTICE};
 use crate::ui::{Help, MainWindow};
 
 fn main() -> anyhow::Result<()> {
@@ -33,10 +31,29 @@ fn main() -> anyhow::Result<()> {
 
     let main_window = MainWindow::new().context("failed to create the main window")?;
 
-    let app_state = AppState::new().context("failed to compute the initial time options")?;
+    let mut app_state = AppState::new().context("failed to compute the initial time options")?;
     app_state.bind_options(&main_window);
+    let session = connect_session(&mut app_state);
     app_state.render(&main_window);
     let app_state = Rc::new(RefCell::new(app_state));
+
+    if let Some(session) = &session {
+        session::set_event_handler({
+            let window_weak = main_window.as_weak();
+            let state = app_state.clone();
+            let session = session.clone();
+
+            move |event| {
+                let Some(window) = window_weak.upgrade() else {
+                    return;
+                };
+                let mut state = state.borrow_mut();
+                session::apply_event(&mut state, &session, event);
+                state.render(&window);
+            }
+        });
+        session.spawn_startup_check();
+    }
 
     main_window.set_is_macos(std::env::consts::OS == "macos");
 
@@ -116,6 +133,76 @@ fn main() -> anyhow::Result<()> {
         }
     });
 
+    main_window.on_login({
+        let window_weak = main_window.as_weak();
+        let state = app_state.clone();
+        let session = session.clone();
+
+        move || {
+            let (Some(window), Some(session)) = (window_weak.upgrade(), &session) else {
+                return;
+            };
+            let mut state = state.borrow_mut();
+            match session.start_login() {
+                Ok(true) => state.on_login_started(),
+                Ok(false) => {}
+                Err(e) => {
+                    error!("Cannot start the login: {e}");
+                    state.on_login_failed(login::FAILED_MESSAGE);
+                }
+            }
+            state.render(&window);
+        }
+    });
+
+    main_window.on_cancel_login({
+        let window_weak = main_window.as_weak();
+        let state = app_state.clone();
+        let session = session.clone();
+
+        move || {
+            let Some(window) = window_weak.upgrade() else {
+                return;
+            };
+            if let Some(session) = &session {
+                session.cancel_login();
+            }
+            let mut state = state.borrow_mut();
+            state.on_login_cancelled();
+            state.render(&window);
+        }
+    });
+
+    main_window.on_skip_login({
+        let window_weak = main_window.as_weak();
+        let state = app_state.clone();
+
+        move || {
+            let Some(window) = window_weak.upgrade() else {
+                return;
+            };
+            let mut state = state.borrow_mut();
+            state.on_local_mode("");
+            state.render(&window);
+        }
+    });
+
+    main_window.on_logout({
+        let window_weak = main_window.as_weak();
+        let state = app_state.clone();
+        let session = session.clone();
+
+        move || {
+            let (Some(window), Some(session)) = (window_weak.upgrade(), &session) else {
+                return;
+            };
+            session.spawn_logout();
+            let mut state = state.borrow_mut();
+            state.on_logout_started();
+            state.render(&window);
+        }
+    });
+
     main_window.on_quit(|| {
         if let Err(e) = slint::quit_event_loop() {
             error!("Failed to quit the event loop: {e}");
@@ -158,9 +245,30 @@ fn main() -> anyhow::Result<()> {
     if let Err(e) = i_slint_core::api::set_xdg_app_id(name) {
         warn!("Failed to set the XDG app id: {e}");
     }
-    main_window
-        .run()
-        .context("the main window event loop failed")?;
+    let result = main_window.run();
+    session::clear_event_handler();
+    result.context("the main window event loop failed")?;
 
     Ok(())
+}
+
+/// Creates the backend session when the app was built with a backend URL.
+///
+/// Without a URL nothing is touched (no keychain, no network) and `None` is returned. With one,
+/// `state` moves to the loading page; when the client cannot be created it stays local with a
+/// notice and `None` is returned.
+fn connect_session(state: &mut AppState) -> Option<Rc<Session>> {
+    let url = config::backend_url()?;
+    match Session::connect(&url) {
+        Ok(session) => {
+            info!("Backend session enabled");
+            state.show_loading();
+            Some(Rc::new(session))
+        }
+        Err(e) => {
+            warn!("Backend unavailable, running in local mode: {e}");
+            state.on_local_mode(LOCAL_MODE_NOTICE);
+            None
+        }
+    }
 }

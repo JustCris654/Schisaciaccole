@@ -126,6 +126,7 @@ impl BackendClient {
     ///
     /// Returns [`BackendError::Unreachable`] on connection failure or timeout and
     /// [`BackendError::Server`] or [`BackendError::RateLimited`] on a non-success status.
+    #[allow(dead_code)]
     pub fn health(&self) -> Result<(), BackendError> {
         let request = self.http.get(self.url(HEALTH_PATH));
         send(request)?;
@@ -175,6 +176,7 @@ impl BackendClient {
     /// # Errors
     ///
     /// See [`BackendClient::fetch_me`].
+    #[allow(dead_code)]
     pub fn fetch_meetings(
         &mut self,
         from: DateTime<FixedOffset>,

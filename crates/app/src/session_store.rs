@@ -17,6 +17,7 @@ pub enum SessionStoreError {
     Keyring(#[from] keyring_core::Error),
     /// No keychain implementation exists for this operating system.
     #[error("no keychain available on this platform")]
+    #[cfg_attr(any(target_os = "macos", target_os = "linux"), allow(dead_code))]
     Unsupported,
 }
 

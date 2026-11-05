@@ -2,7 +2,7 @@ import { Palette, Button, VerticalBox, HorizontalBox, AboutSlint } from "std-wid
 
 import "../assets/fonts/Plus_Jakarta_Sans/static/PlusJakartaSans-Medium.ttf";
 
-export enum Page { SelectionPage, TimerPage, TimerFinished }
+export enum Page { SelectionPage, TimerPage, TimerFinished, LoadingPage, LoginPage }
 export enum StopType { TimerFinished, UserStopped }
 
 export struct TimeOption {
@@ -34,6 +34,26 @@ component SelectionButton inherits VerticalBox {
 	    color: black;
 	}
 
+    }
+}
+
+component AccentButton inherits Rectangle {
+    in property <string> text;
+    in property <length> font-size;
+
+    callback clicked <=> touch.clicked;
+
+    background: touch.has-hover ? #A169C7 : #C682F5;
+    border-radius: 4px;
+    min-width: label.preferred-width + 2 * root.font-size;
+    min-height: label.preferred-height + root.font-size;
+
+    touch := TouchArea {}
+
+    label := Text {
+	text: root.text;
+	font-size: root.font-size;
+	color: black;
     }
 }
 
@@ -107,6 +127,11 @@ export component MainWindow inherits Window {
     in property     <Page>     page: SelectionPage; 
     in property     <[TimeOption]> options;
     in property     <bool>     is-macos;
+    in property     <bool>     signed-in;
+    in property     <string>   account-name;
+    in property     <string>   notice;
+    in property     <string>   login-status;
+    in property     <bool>     login-waiting;
 
     callback select-time(int);
     callback compute-options();
@@ -116,6 +141,10 @@ export component MainWindow inherits Window {
     callback fullscreen(bool);
     callback help();
     callback stop(StopType);
+    callback login();
+    callback cancel-login();
+    callback skip-login();
+    callback logout();
 
     if is-macos: MenuBar {
 	Menu {
@@ -124,6 +153,13 @@ export component MainWindow inherits Window {
 		title: @tr("Always on top");
 		activated => { on-top = !on-top; }
 		shortcut: @keys(Control + T);
+	    }
+	}
+	Menu {
+	    title: "Account";
+	    if signed-in: MenuItem {
+		title: "Esci dall'account";
+		activated => { logout(); }
 	    }
 	}
     }
@@ -191,6 +227,29 @@ export component MainWindow inherits Window {
 	padding: 25px * ui-scale;
 
 
+	if root.signed-in : HorizontalLayout {
+	    spacing: 10px * ui-scale;
+
+	    Text {
+		text: "Connesso come " + root.account-name;
+		font-size: 12px * root.ui-scale;
+		vertical-alignment: center;
+		horizontal-stretch: 1;
+		overflow: elide;
+	    }
+
+	    Button {
+		text: "Esci";
+		clicked => { logout(); }
+	    }
+	}
+
+	if root.notice != "" : Text {
+	    text: root.notice;
+	    color: #C682F5;
+	    font-size: 12px * root.ui-scale;
+	}
+
 	Text {
 	    text: "Quando deve finire questa cerimonia?";
 	    font-size: 22px * root.ui-scale;
@@ -209,6 +268,65 @@ export component MainWindow inherits Window {
 		minutes: option.minutes;
 		clicked => { select-time(index); }
 	    }
+	}
+    }
+
+    if page == Page.LoadingPage : VerticalBox {
+	alignment: center;
+	padding: 25px * ui-scale;
+
+	Text {
+	    text: "Connessione…";
+	    font-size: 22px * root.ui-scale;
+	    horizontal-alignment: center;
+	}
+    }
+
+    if page == Page.LoginPage : VerticalBox {
+	alignment: center;
+	padding: 25px * ui-scale;
+	spacing: 15px * ui-scale;
+
+	Text {
+	    text: "Accedi con Google";
+	    color: #C682F5;
+	    font-size: 36px * root.ui-scale;
+	    horizontal-alignment: center;
+	}
+
+	Text {
+	    text: "Vedrai i tuoi meeting di oggi e potrai avviare il countdown sulla fine del meeting.";
+	    font-size: 14px * root.ui-scale;
+	    horizontal-alignment: center;
+	    wrap: word-wrap;
+	}
+
+	HorizontalLayout {
+	    alignment: center;
+	    spacing: 15px * ui-scale;
+
+	    if !root.login-waiting : AccentButton {
+		text: "Accedi con Google";
+		font-size: 18px * root.ui-scale;
+		clicked => { login(); }
+	    }
+
+	    if !root.login-waiting : Button {
+		text: "Usa senza accesso";
+		clicked => { skip-login(); }
+	    }
+
+	    if root.login-waiting : Button {
+		text: "Annulla";
+		clicked => { cancel-login(); }
+	    }
+	}
+
+	Text {
+	    text: root.login-status;
+	    font-size: 14px * root.ui-scale;
+	    horizontal-alignment: center;
+	    wrap: word-wrap;
 	}
     }
 
