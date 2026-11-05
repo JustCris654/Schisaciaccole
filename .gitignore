@@ -1,7 +1,5 @@
 /target
-/ui/assets/fonts/Chillax_Variable/
 /packaging/arch/src/
 /packaging/arch/pkg/
 /packaging/arch/*.pkg.tar.zst
 /Schisaciaccole.app*
-/assets/level_up_copyrighted.mp3

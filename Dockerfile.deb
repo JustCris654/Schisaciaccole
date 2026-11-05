@@ -7,12 +7,14 @@ ENV RUSTUP_HOME=/usr/local/rustup \
 
 RUN apt-get update && apt-get install -y \
     curl build-essential pkg-config ca-certificates libssl-dev \
-    libasound2-dev libfontconfig1-dev \
+    libasound2-dev libfontconfig1-dev libxkbcommon-dev \
     libxcb-shape0-dev libxcb-xfixes0-dev \
-    && rm -rf /var/lib/apt-get/lists/*
+    && rm -rf /var/lib/apt/lists/*
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path \
-    && cargo install cargo-bundle \
+    && cargo install --locked cargo-bundle --version 0.12.0 \
     && chmod -R 777 $RUSTUP_HOME $CARGO_HOME
 
-WORKDIR /app
+# The repo is mounted at /app. cargo-bundle must run from the app crate so its
+# icon/resource paths resolve; the .deb lands in the workspace target/ dir.
+WORKDIR /app/crates/app

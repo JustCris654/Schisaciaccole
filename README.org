@@ -27,76 +27,71 @@ you pressed the button.
 
 * Screenshots
 
-| Selection                                              | Timer                                        |
-|---------------------------------------------------------+-----------------------------------------|
-| [[assets/screenshot_selection_page.png]]                | [[assets/screenshot_timer_page.png]]     |
+| Selection                                           | Timer                                           |
+|-----------------------------------------------------+-------------------------------------------------|
+| [[crates/app/assets/screenshot_selection_page.png]] | [[crates/app/assets/screenshot_timer_page.png]] |
 
 * Requirements
 
 - [[https://www.rust-lang.org/tools/install][Rust]] (stable toolchain, =cargo=)
 
-The default font (*Plus Jakarta Sans*) is bundled — no extra setup needed.
+The font (*Plus Jakarta Sans*, under
+=crates/app/assets/fonts/Plus_Jakarta_Sans/=) is embedded in the binary at
+build time — no extra setup needed.
 
-* Font setup (optional)
+* Project layout
 
-The app ships with *Plus Jakarta Sans* bundled, so it works out of the box.
+The repo is a Cargo workspace:
 
-*Chillax* looks nicer and is the preferred font, but it is *not* bundled — to
-use it, download it and swap two pairs of commented lines in
-[[file:ui/app-window.slint][=ui/app-window.slint=]].
-
-1. Download Chillax: [[https://api.fontshare.com/v2/fonts/download/chillax]]
-2. Unzip it.
-3. Place the OTF Medium weight at exactly this path:
-
-   #+begin_example
-   ui/assets/fonts/Chillax_Variable/Fonts/OTF/Chillax-Medium.otf
-   #+end_example
-
-4. In =ui/app-window.slint=, swap the comments on the import lines (top of
-   file):
-
-   #+begin_src slint
-   import "../assets/fonts/Chillax_Variable/Fonts/OTF/Chillax-Medium.otf";
-   // import "../assets/fonts/Plus_Jakarta_Sans/static/PlusJakartaSans-Medium.ttf";
-   #+end_src
-
-5. ...and on the =default-font-family= lines inside =MainWindow=:
-
-   #+begin_src slint
-   // default-font-family: "Plus Jakarta Sans";
-   default-font-family: "Chillax";
-   #+end_src
+- =crates/app= — the =schisaciaccole= binary: Slint UI (=ui/=), =build.rs=,
+  assets (=assets/=: icons, sound, font) and the bundle metadata.
+- =crates/core= — the =schisaciaccole-core= library.
 
 * Build & run
 
 #+begin_src sh
-cargo run
+cargo run -p schisaciaccole
 #+end_src
 
 For a release build:
 
 #+begin_src sh
-cargo run --release
+cargo run -p schisaciaccole --release
+#+end_src
+
+Tests and the checks CI runs on every push and pull request:
+
+#+begin_src sh
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all --check
 #+end_src
 
 * Packaging
 
-The app icon lives at =assets/icon.png= and the =game_over.mp3= sound ships
-as a resource. At runtime the sound is located relative to the executable, so
-it works from every package layout (dev, deb, macOS app, Arch pkg).
+The app icons live at =crates/app/assets/icon_{128,256,512}.png= and the
+=crates/app/assets/level_up_no_copyright.mp3= sound ships as a resource. At
+runtime the sound is located relative to the executable, so it works from
+every package layout (dev, deb, macOS app, Arch pkg).
 
 ** Linux (.deb) and macOS (.app) — cargo-bundle
 
-#+begin_src sh
-cargo install cargo-bundle          # once
+Run cargo-bundle from the app crate, not from the workspace root: with
+=cargo bundle -p schisaciaccole= at the root it resolves the icon and resource
+paths against the current directory and silently leaves them out of the
+bundle.
 
+#+begin_src sh
+cargo install --locked cargo-bundle   # once
+
+cd crates/app
 cargo bundle --release --format deb   # Linux  -> target/release/bundle/deb/*.deb
 cargo bundle --release --format osx   # macOS  -> *.app (must run on macOS)
 #+end_src
 
-Bundle metadata (name, identifier, icon, bundled resources) lives in the
-=[package.metadata.bundle]= section of =Cargo.toml=.
+The bundles land in the workspace =target/= dir at the repo root. Bundle
+metadata (name, identifier, icon, bundled resources) lives in the
+=[package.metadata.bundle]= section of =crates/app/Cargo.toml=.
 
 ** Linux (.deb) via Docker
 
@@ -119,7 +114,7 @@ docker run --rm \
     -e HOME=/tmp \
     -e CARGO_HOME=/tmp/cargo \
     -v "$(pwd)":/app \
-    -w /app \
+    -w /app/crates/app \
     deb-builder cargo bundle --release --format deb
 #+end_src
 
@@ -135,9 +130,10 @@ the native =cargo bundle= build.
 
 #+begin_quote
 *Run =makepkg= from inside =packaging/arch/=, never from the repo root.*
-makepkg uses =./src= and =./pkg= as its work dirs — at the repo root =./src=
-is the crate's own source directory and makepkg would wipe it. The PKGBUILD
-builds a clean copy under its own =src/=, so the crate is never touched.
+makepkg uses =./src= and =./pkg= as its work dirs and the PKGBUILD finds the
+repo two levels above its own directory. It builds a clean copy of the
+workspace (=Cargo.toml=, =Cargo.lock=, =crates/=) under its own =src/=, so
+the sources are never touched.
 #+end_quote
 
 #+begin_src sh
@@ -151,17 +147,18 @@ license under the standard =/usr= paths.
 
 ** Releases (CI)
 
-Pushing a tag =vX.Y.Z= that matches the =version= in =Cargo.toml= triggers
+Pushing a tag =vX.Y.Z= that matches the =version= in the
+=[workspace.package]= section of the root =Cargo.toml= triggers
 =.github/workflows/release.yml=, which builds the =.deb=, the Arch package
 and an unsigned macOS =.app= (as a =.zip= and a =.dmg=) and attaches them all
 to a GitHub Release:
 
 #+begin_src sh
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.2.0
+git push origin v0.2.0
 #+end_src
 
-A mismatched tag (e.g. tagging =v0.1.0= while =Cargo.toml= says =0.2.0=)
+A mismatched tag (e.g. tagging =v0.2.1= while =Cargo.toml= says =0.2.0=)
 fails the run before anything is built. The workflow can also be triggered
 manually (=workflow_dispatch=) to build and upload all three packages as
 run artifacts without cutting a release.
@@ -172,6 +169,15 @@ The app uses =env_logger=. Control verbosity with the =RUST_LOG= environment
 variable (default is =warn=):
 
 #+begin_src sh
-RUST_LOG=info cargo run     # callback events: selection, start/pause, stop, sound
-RUST_LOG=debug cargo run    # also the periodic option refresh
+RUST_LOG=info cargo run -p schisaciaccole     # callback events: selection, start/pause, stop, sound
+RUST_LOG=debug cargo run -p schisaciaccole    # also the periodic option refresh
 #+end_src
+
+* License
+
+Schisaciaccole is released under the
+[[https://polyformproject.org/licenses/noncommercial/1.0.0][PolyForm Noncommercial License 1.0.0]]
+(see =LICENSE=). Noncommercial use only: commercial use requires the author's
+written permission. Copyright (c) 2026 Cristian Scapin.
+
+The UI is built with [[https://slint.dev][Slint]], used under the Slint Royalty-free license 2.0.

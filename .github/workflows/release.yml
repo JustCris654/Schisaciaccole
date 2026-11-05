@@ -15,11 +15,16 @@ jobs:
       version: ${{ steps.get_version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
 
       - name: Read version from Cargo.toml
         id: get_version
+        # The version is inherited from [workspace.package]; ask cargo for the
+        # resolved version of the app package instead of grepping manifests.
         run: |
-          version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          set -euo pipefail
+          version=$(cargo metadata --no-deps --format-version 1 \
+            | jq -er '.packages[] | select(.name == "schisaciaccole") | .version')
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Check tag matches Cargo.toml version
@@ -49,22 +54,43 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Install cargo-bundle
-        run: cargo install --locked cargo-bundle
+        run: cargo install --locked cargo-bundle --version 0.12.0
 
       - name: Build .deb
+        # Run from the app crate: invoked from the workspace root with
+        # `-p schisaciaccole`, cargo-bundle resolves the icon/resource paths
+        # against the cwd and silently drops them. The bundle still lands in the
+        # workspace target/ dir.
+        working-directory: crates/app
         run: cargo bundle --release --format deb
 
-      - name: Name the artifact after its target OS
+      - name: Check bundle content and name it after its target OS
         run: |
           set -euo pipefail
           ver="${{ needs.version.outputs.version }}"
-          src=$(find target/release/bundle/deb -name '*.deb' -print -quit)
-          mv "$src" "target/release/bundle/deb/schisaciaccole-${ver}-ubuntu-amd64.deb"
+          src=$(find target -path '*/bundle/deb/*.deb' -print -quit)
+          if [ -z "$src" ]; then
+            echo "::error::no .deb found under target/"
+            exit 1
+          fi
+          echo "bundled deb: $src"
+          dpkg-deb -c "$src"
+          contents=$(dpkg-deb -c "$src" | awk '{print $NF}' | sed 's|^\./||')
+          for f in usr/bin/schisaciaccole \
+                   usr/lib/schisaciaccole/assets/level_up_no_copyright.mp3 \
+                   usr/share/icons/hicolor/256x256/apps/schisaciaccole.png; do
+            if ! grep -qxF "$f" <<<"$contents"; then
+              echo "::error::$f missing from $src"
+              exit 1
+            fi
+          done
+          mkdir -p dist
+          mv "$src" "dist/schisaciaccole-${ver}-ubuntu-amd64.deb"
 
       - uses: actions/upload-artifact@v4
         with:
           name: deb
-          path: target/release/bundle/deb/*-ubuntu-amd64.deb
+          path: dist/*-ubuntu-amd64.deb
           if-no-files-found: error
 
   arch:
@@ -112,9 +138,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Install cargo-bundle
-        run: cargo install --locked cargo-bundle
+        run: cargo install --locked cargo-bundle --version 0.12.0
 
       - name: Build .app
+        # Run from the app crate so the icon/resource paths resolve (see the
+        # deb job); the bundle lands in the workspace target/ dir.
+        working-directory: crates/app
         run: cargo bundle --release --format osx
 
       - name: Package .zip and .dmg
@@ -130,6 +159,12 @@ jobs:
             exit 1
           fi
           echo "bundled app: $app"
+          sound="$app/Contents/Resources/assets/level_up_no_copyright.mp3"
+          if [ ! -f "$sound" ]; then
+            echo "::error::$sound missing from the bundle"
+            find "$app" || true
+            exit 1
+          fi
           ditto -c -k --keepParent "$app" "schisaciaccole-${ver}-macos-arm64.zip"
           hdiutil create -volname Schisaciaccole -srcfolder "$app" -ov -format UDZO "schisaciaccole-${ver}-macos-arm64.dmg"
 

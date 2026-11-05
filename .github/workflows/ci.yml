@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [master]
+    branches: [master, v2]
   pull_request:
 
 concurrency:
@@ -23,7 +23,18 @@ jobs:
             libxcb-shape0-dev libxcb-xfixes0-dev
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
 
+      - name: Check formatting
+        run: cargo fmt --all --check
+
       - name: Build
-        run: cargo build --locked --release
+        run: cargo build --locked --workspace
+
+      - name: Test
+        run: cargo test --locked --workspace
+
+      - name: Clippy
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings

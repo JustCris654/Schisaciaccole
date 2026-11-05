@@ -1,6 +1,5 @@
-import { Palette, Button, VerticalBox, HorizontalBox } from "std-widgets.slint";
+import { Palette, Button, VerticalBox, HorizontalBox, AboutSlint } from "std-widgets.slint";
 
-// import "../assets/fonts/Chillax_Variable/Fonts/OTF/Chillax-Medium.otf";
 import "../assets/fonts/Plus_Jakarta_Sans/static/PlusJakartaSans-Medium.ttf";
 
 export enum Page { SelectionPage, TimerPage, TimerFinished }
@@ -40,8 +39,8 @@ component SelectionButton inherits VerticalBox {
 
 component TimerPage {
     in property<float> ui-scale;
-    in-out property <duration> timer-time;
-    in-out property <bool> running-state;
+    in property <duration> timer-time;
+    in property <bool> running-state;
 
     callback stop(StopType);
     callback tick();
@@ -92,10 +91,9 @@ component TimerPage {
 export component MainWindow inherits Window {
     title: "Schisaciaccole";
     icon: @image-url("../assets/icon_256.png");
-    preferred-width: 526px; 
-    preferred-height: 326px;
-    // default-font-family: "Plus Jakarta Sans";
-    default-font-family: "Chillax";
+    preferred-width: 800px;
+    preferred-height: 600px;
+    default-font-family: "Plus Jakarta Sans";
     forward-focus: scope;
 
     property <bool> on-top: false;
@@ -104,9 +102,9 @@ export component MainWindow inherits Window {
 
     property <float> ui-scale: Math.min(root.width / 526px, root.height / 326px);
 
-    in-out property <duration> timer-time: 3s;
-    in-out property <bool>     running-state: false;
-    in-out property <Page>     page: SelectionPage; 
+    in property     <duration> timer-time: 3s;
+    in property     <bool>     running-state: false;
+    in property     <Page>     page: SelectionPage; 
     in property     <[TimeOption]> options;
     in property     <bool>     is-macos;
 
@@ -217,8 +215,8 @@ export component MainWindow inherits Window {
     // render this if page is TimerPage
     if page == Page.TimerPage : TimerPage {
 	ui-scale: root.ui-scale;
-	timer-time <=> root.timer-time;
-	running-state <=> root.running-state;
+	timer-time: root.timer-time;
+	running-state: root.running-state;
 	stop(stop-type) => { root.stop(stop-type); }
 	tick => { root.tick(); }
     }
@@ -260,8 +258,8 @@ export component MainWindow inherits Window {
 
 export component Help inherits Window {
     title: "Schisaciaccole";
-    preferred-width: 526px; 
-    preferred-height: 226px;
+    preferred-width: 526px;
+    preferred-height: 320px;
     always-on-top: true;
 
     // Wrap in a conditional so the window does not statically adopt this
@@ -344,6 +342,10 @@ export component Help inherits Window {
 		    }
 		}
 	    }
+	}
+
+	AboutSlint {
+	    height: 70px;
 	}
     }
 }

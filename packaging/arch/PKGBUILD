@@ -2,19 +2,19 @@
 #
 # Local PKGBUILD: builds the working tree two levels up (the repo root).
 # Run it from THIS directory so makepkg's src/ and pkg/ dirs stay here and
-# never collide with the crate's own src/:
+# never collide with the crates' own src/ dirs:
 #
 #     cd packaging/arch
 #     makepkg -f
 #     sudo pacman -U schisaciaccole-*.pkg.tar.zst
 #
 pkgname=schisaciaccole
-pkgver=0.1.0
+pkgver=0.2.0
 pkgrel=1
 pkgdesc="Countdown timer for time-boxed Scrum ceremonies"
 arch=('x86_64')
 url="https://github.com/JustCris654/schisaciaccole"
-license=('MIT')
+license=('PolyForm-Noncommercial-1.0.0')
 depends=('alsa-lib' 'fontconfig' 'libxkbcommon')
 makedepends=('cargo')
 options=('!lto' '!debug')
@@ -29,7 +29,7 @@ prepare() {
   local b="$srcdir/$pkgname"
   rm -rf "$b"
   mkdir -p "$b"
-  cp -a "$_projroot"/{Cargo.toml,Cargo.lock,build.rs,src,ui,assets} "$b/"
+  cp -a "$_projroot"/{Cargo.toml,Cargo.lock,crates} "$b/"
 
   cd "$b"
   export RUSTUP_TOOLCHAIN=stable
@@ -40,17 +40,18 @@ build() {
   cd "$srcdir/$pkgname"
   export RUSTUP_TOOLCHAIN=stable
   export CARGO_TARGET_DIR="$srcdir/target"
-  cargo build --release --frozen
+  cargo build --release --frozen -p "$pkgname"
 }
 
 package() {
-  local b="$srcdir/$pkgname"
+  local assets="$srcdir/$pkgname/crates/app/assets"
+  local sound=level_up_no_copyright.mp3
 
   install -Dm755 "$srcdir/target/release/$pkgname"  "$pkgdir/usr/bin/$pkgname"
-  install -Dm644 "$b/assets/game_over.mp3"     "$pkgdir/usr/lib/$pkgname/assets/game_over.mp3"
-  install -Dm644 "$b/assets/icon_128.png"      "$pkgdir/usr/share/icons/hicolor/128x128/apps/$pkgname.png"
-  install -Dm644 "$b/assets/icon_256.png"      "$pkgdir/usr/share/icons/hicolor/256x256/apps/$pkgname.png"
-  install -Dm644 "$b/assets/icon_512.png"      "$pkgdir/usr/share/icons/hicolor/512x512/apps/$pkgname.png"
+  install -Dm644 "$assets/$sound"              "$pkgdir/usr/lib/$pkgname/assets/$sound"
+  install -Dm644 "$assets/icon_128.png"        "$pkgdir/usr/share/icons/hicolor/128x128/apps/$pkgname.png"
+  install -Dm644 "$assets/icon_256.png"        "$pkgdir/usr/share/icons/hicolor/256x256/apps/$pkgname.png"
+  install -Dm644 "$assets/icon_512.png"        "$pkgdir/usr/share/icons/hicolor/512x512/apps/$pkgname.png"
   install -Dm644 "$startdir/$pkgname.desktop"  "$pkgdir/usr/share/applications/$pkgname.desktop"
   install -Dm644 "$_projroot/LICENSE"          "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }
