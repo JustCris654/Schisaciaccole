@@ -1,5 +1,14 @@
 //! Schisaciaccole: countdown timer for time-boxed Scrum ceremonies.
 
+// The UI wiring of the modules below comes next.
+#[allow(dead_code)]
+mod backend;
+#[allow(dead_code)]
+mod config;
+#[allow(dead_code)]
+mod pkce;
+#[allow(dead_code)]
+mod session_store;
 mod sound;
 mod state;
 
