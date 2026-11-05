@@ -7,7 +7,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use schisaciaccole_core::api::{
     AUTH_CALLBACK_PATH, AUTH_LOGIN_PATH, AUTH_LOGOUT_PATH, AUTH_REFRESH_PATH, AUTH_TOKEN_PATH,
-    HEALTH_PATH, ME_PATH,
+    HEALTH_PATH, ME_PATH, MEETINGS_PATH,
 };
 use serde::Serialize;
 use sqlx::PgPool;
@@ -17,7 +17,9 @@ use tracing::info_span;
 use crate::auth;
 use crate::config::Config;
 use crate::google::GoogleOidc;
+use crate::google_tokens::GoogleTokenCache;
 use crate::login_store::LoginStore;
+use crate::meetings;
 
 /// State shared by all request handlers. Cloning is cheap.
 #[derive(Clone, Debug)]
@@ -30,17 +32,20 @@ pub struct AppState {
     pub google: Arc<GoogleOidc>,
     /// Logins in progress and one-time codes.
     pub logins: Arc<LoginStore>,
+    /// Google access tokens of the users.
+    pub google_tokens: Arc<GoogleTokenCache>,
 }
 
 impl AppState {
     /// Creates the state from an already validated configuration, a pool
-    /// and a Google client, with an empty login store.
+    /// and a Google client, with an empty login store and token cache.
     pub fn new(config: Config, pool: PgPool, google: GoogleOidc) -> Self {
         Self {
             config: Arc::new(config),
             pool,
             google: Arc::new(google),
             logins: Arc::new(LoginStore::new()),
+            google_tokens: Arc::new(GoogleTokenCache::new()),
         }
     }
 }
@@ -71,6 +76,7 @@ pub fn router(state: AppState) -> Router {
         .route(AUTH_REFRESH_PATH, post(auth::refresh))
         .route(AUTH_LOGOUT_PATH, post(auth::logout))
         .route(ME_PATH, get(auth::me))
+        .route(MEETINGS_PATH, get(meetings::list_meetings))
         .layer(trace)
         .with_state(state)
 }

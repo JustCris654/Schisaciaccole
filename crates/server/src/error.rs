@@ -30,6 +30,16 @@ pub enum ApiFailure {
     #[error("unauthorized")]
     Unauthorized,
 
+    /// Google refused the stored credentials, none are stored, or they lack
+    /// the Calendar scope: 401 `google_reauth_required`.
+    #[error("Google credentials missing, revoked or without Calendar scope")]
+    GoogleReauthRequired,
+
+    /// Google answered with an unexpected error or could not be reached:
+    /// 502 `internal`.
+    #[error("Google request failed: {0}")]
+    BadGateway(String),
+
     /// Database failure: 500 `internal`.
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),
@@ -65,6 +75,16 @@ impl ApiFailure {
                 StatusCode::UNAUTHORIZED,
                 error_codes::UNAUTHORIZED,
                 "missing, invalid or expired credentials".to_string(),
+            ),
+            Self::GoogleReauthRequired => (
+                StatusCode::UNAUTHORIZED,
+                error_codes::GOOGLE_REAUTH_REQUIRED,
+                "Google access must be granted again".to_string(),
+            ),
+            Self::BadGateway(_) => (
+                StatusCode::BAD_GATEWAY,
+                error_codes::INTERNAL,
+                "Google request failed".to_string(),
             ),
             Self::Database(_) | Self::Token(_) | Self::Crypto(_) | Self::Internal(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -125,6 +145,23 @@ mod tests {
 
         assert_eq!(status, StatusCode::UNAUTHORIZED);
         assert_eq!(body.code, "unauthorized");
+    }
+
+    #[tokio::test]
+    async fn google_reauth_required_is_401() {
+        let (status, body) = body_of(ApiFailure::GoogleReauthRequired).await;
+
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(body.code, "google_reauth_required");
+    }
+
+    #[tokio::test]
+    async fn bad_gateway_is_502_without_details() {
+        let (status, body) = body_of(ApiFailure::BadGateway("status 500".to_string())).await;
+
+        assert_eq!(status, StatusCode::BAD_GATEWAY);
+        assert_eq!(body.code, "internal");
+        assert_eq!(body.message, "Google request failed");
     }
 
     #[tokio::test]

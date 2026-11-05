@@ -1,10 +1,12 @@
-//! Google OpenID Connect client used by the login flow.
+//! Google OpenID Connect client used by the login flow and to turn the
+//! stored refresh tokens into access tokens.
 //!
 //! The provider metadata is fetched once at startup through discovery. The
 //! signing keys (JWKS) are fetched again at every code exchange, so a key
 //! rotation by Google never requires a restart.
 
 use std::fmt;
+use std::time::Duration;
 
 use openidconnect::core::{
     CoreAuthDisplay, CoreAuthPrompt, CoreErrorResponseType, CoreGenderClaim, CoreJsonWebKey,
@@ -14,9 +16,9 @@ use openidconnect::core::{
 };
 use openidconnect::reqwest;
 use openidconnect::{
-    AdditionalClaims, AuthenticationFlow, AuthorizationCode, Client, ClientId, ClientSecret,
-    CsrfToken, EmptyExtraTokenFields, EndpointMaybeSet, EndpointNotSet, EndpointSet, IdToken,
-    IdTokenFields, IdTokenVerifier, IssuerUrl, JsonWebKeySet, JsonWebKeySetUrl, Nonce,
+    AccessToken, AdditionalClaims, AuthenticationFlow, AuthorizationCode, Client, ClientId,
+    ClientSecret, CsrfToken, EmptyExtraTokenFields, EndpointMaybeSet, EndpointNotSet, EndpointSet,
+    IdToken, IdTokenFields, IdTokenVerifier, IssuerUrl, JsonWebKeySet, JsonWebKeySetUrl, Nonce,
     OAuth2TokenResponse, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, RefreshToken,
     RequestTokenError, Scope, StandardErrorResponse, StandardTokenResponse, TokenResponse,
 };
@@ -54,6 +56,11 @@ pub enum GoogleError {
     /// that is not a token response.
     #[error("token request failed: {0}")]
     TokenRequest(String),
+
+    /// Google refused the refresh token (`invalid_grant`): it was revoked,
+    /// expired, or issued to another client.
+    #[error("Google refused the refresh token")]
+    InvalidGrant,
 
     /// The token response has no ID token.
     #[error("the token response has no ID token")]
@@ -143,6 +150,15 @@ pub struct GoogleIdentity {
     pub refresh_token: Option<RefreshToken>,
     /// Scopes granted, when the token response lists them.
     pub scopes: Option<Vec<String>>,
+}
+
+/// Short-lived Google access token obtained from a refresh token.
+#[derive(Debug)]
+pub struct GoogleAccessToken {
+    /// The token; its `Debug` output is redacted.
+    pub token: AccessToken,
+    /// Lifetime announced by Google; `None` when the response has none.
+    pub expires_in: Option<Duration>,
 }
 
 /// Google OpenID Connect client: builds authorization URLs and exchanges
@@ -319,6 +335,41 @@ impl GoogleOidc {
             scopes,
         })
     }
+
+    /// HTTP client used for every request to Google. It never follows
+    /// redirects.
+    pub fn http(&self) -> &reqwest::Client {
+        &self.http
+    }
+
+    /// Exchanges `refresh_token` for a new access token at the token
+    /// endpoint found by discovery (`grant_type=refresh_token`).
+    ///
+    /// The scopes and any ID token of the response are ignored.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` when:
+    /// - Google answers `invalid_grant` (`GoogleError::InvalidGrant`);
+    /// - Google answers another OAuth error (`GoogleError::Rejected`);
+    /// - the token endpoint is unreachable or answers garbage
+    ///   (`GoogleError::TokenRequest`).
+    pub async fn refresh_access_token(
+        &self,
+        refresh_token: &str,
+    ) -> Result<GoogleAccessToken, GoogleError> {
+        let refresh_token = RefreshToken::new(refresh_token.to_string());
+        let response = self
+            .client
+            .exchange_refresh_token(&refresh_token)
+            .request_async(&self.http)
+            .await
+            .map_err(refresh_request_error)?;
+        Ok(GoogleAccessToken {
+            token: response.access_token().clone(),
+            expires_in: response.expires_in(),
+        })
+    }
 }
 
 impl fmt::Debug for GoogleOidc {
@@ -346,8 +397,26 @@ where
     }
 }
 
+/// Maps a refresh token request failure like [`token_request_error`],
+/// turning the OAuth error `invalid_grant` into `GoogleError::InvalidGrant`.
+fn refresh_request_error<RE>(
+    err: RequestTokenError<RE, StandardErrorResponse<CoreErrorResponseType>>,
+) -> GoogleError
+where
+    RE: std::error::Error + 'static,
+{
+    match err {
+        RequestTokenError::ServerResponse(response)
+            if matches!(response.error(), CoreErrorResponseType::InvalidGrant) =>
+        {
+            GoogleError::InvalidGrant
+        }
+        other => token_request_error(other),
+    }
+}
+
 /// Joins an error and its sources into one line.
-fn error_chain(err: &dyn std::error::Error) -> String {
+pub(crate) fn error_chain(err: &dyn std::error::Error) -> String {
     let mut message = err.to_string();
     let mut source = err.source();
     while let Some(cause) = source {
