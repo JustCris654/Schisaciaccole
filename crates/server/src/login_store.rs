@@ -10,6 +10,7 @@ use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use openidconnect::{Nonce, PkceCodeVerifier};
+use thiserror::Error;
 use uuid::Uuid;
 
 /// Maximum age of a pending login: the time the user has to complete the
@@ -18,6 +19,17 @@ pub const PENDING_LOGIN_TTL: Duration = Duration::from_secs(10 * 60);
 
 /// Maximum age of a one-time app code.
 pub const APP_CODE_TTL: Duration = Duration::from_secs(60);
+
+/// Maximum number of pending logins kept at the same time.
+pub const MAX_PENDING_LOGINS: usize = 10_000;
+
+/// Maximum number of one-time app codes kept at the same time.
+pub const MAX_APP_CODES: usize = 10_000;
+
+/// The store holds the maximum number of live entries and refuses new ones.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("login store is full")]
+pub struct StoreFull;
 
 /// A login started by `GET /auth/login`, waiting for the Google callback.
 pub struct PendingLogin {
@@ -42,27 +54,40 @@ pub struct AppCode {
     pub app_challenge: String,
 }
 
-/// Map whose entries expire `ttl` after insertion.
+/// Map whose entries expire `ttl` after insertion and which holds at most
+/// `max_entries` entries.
 struct ExpiringMap<V> {
     ttl: Duration,
+    max_entries: usize,
     entries: HashMap<String, (Instant, V)>,
 }
 
 impl<V> ExpiringMap<V> {
-    fn new(ttl: Duration) -> Self {
+    fn new(ttl: Duration, max_entries: usize) -> Self {
         Self {
             ttl,
+            max_entries,
             entries: HashMap::new(),
         }
     }
 
     /// Inserts `value` created at `now`, first dropping every entry expired
     /// at `now`. An entry with the same key is replaced.
-    fn insert(&mut self, key: String, value: V, now: Instant) {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreFull`] when, after the purge, the map holds
+    /// `max_entries` entries and `key` is not one of them; `value` is
+    /// dropped.
+    fn insert(&mut self, key: String, value: V, now: Instant) -> Result<(), StoreFull> {
         let ttl = self.ttl;
         self.entries
             .retain(|_, (created, _)| !is_expired(ttl, *created, now));
+        if self.entries.len() >= self.max_entries && !self.entries.contains_key(&key) {
+            return Err(StoreFull);
+        }
         self.entries.insert(key, (now, value));
+        Ok(())
     }
 
     /// Removes the entry for `key` and returns it if not expired at `now`.
@@ -93,19 +118,30 @@ pub struct LoginStore {
 
 impl LoginStore {
     /// Creates an empty store with the [`PENDING_LOGIN_TTL`] and
-    /// [`APP_CODE_TTL`] lifetimes.
+    /// [`APP_CODE_TTL`] lifetimes and the [`MAX_PENDING_LOGINS`] and
+    /// [`MAX_APP_CODES`] caps.
     pub fn new() -> Self {
         Self {
-            pending: Mutex::new(ExpiringMap::new(PENDING_LOGIN_TTL)),
-            codes: Mutex::new(ExpiringMap::new(APP_CODE_TTL)),
+            pending: Mutex::new(ExpiringMap::new(PENDING_LOGIN_TTL, MAX_PENDING_LOGINS)),
+            codes: Mutex::new(ExpiringMap::new(APP_CODE_TTL, MAX_APP_CODES)),
         }
     }
 
     /// Stores a pending login under the Google `state`, replacing any login
     /// with the same state. Expired pending logins are purged first.
-    pub fn insert_pending(&self, google_state: String, login: PendingLogin, now: Instant) {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreFull`] when [`MAX_PENDING_LOGINS`] logins are still
+    /// valid at `now` and `google_state` is not one of them.
+    pub fn insert_pending(
+        &self,
+        google_state: String,
+        login: PendingLogin,
+        now: Instant,
+    ) -> Result<(), StoreFull> {
         let mut pending = self.pending.lock().unwrap_or_else(PoisonError::into_inner);
-        pending.insert(google_state, login, now);
+        pending.insert(google_state, login, now)
     }
 
     /// Removes and returns the pending login for `google_state`.
@@ -119,9 +155,14 @@ impl LoginStore {
 
     /// Stores a one-time code, replacing any entry with the same code.
     /// Expired codes are purged first.
-    pub fn insert_code(&self, code: String, value: AppCode, now: Instant) {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreFull`] when [`MAX_APP_CODES`] codes are still valid at
+    /// `now` and `code` is not one of them.
+    pub fn insert_code(&self, code: String, value: AppCode, now: Instant) -> Result<(), StoreFull> {
         let mut codes = self.codes.lock().unwrap_or_else(PoisonError::into_inner);
-        codes.insert(code, value, now);
+        codes.insert(code, value, now)
     }
 
     /// Removes and returns the one-time code entry for `code`.
@@ -171,7 +212,9 @@ mod tests {
     fn pending_login_is_returned_once() {
         let store = LoginStore::new();
         let now = Instant::now();
-        store.insert_pending("s".to_string(), pending(5000), now);
+        store
+            .insert_pending("s".to_string(), pending(5000), now)
+            .unwrap();
 
         let first = store.take_pending("s", now);
         let second = store.take_pending("s", now);
@@ -191,7 +234,9 @@ mod tests {
     fn pending_login_is_valid_just_before_ttl() {
         let store = LoginStore::new();
         let now = Instant::now();
-        store.insert_pending("s".to_string(), pending(5000), now);
+        store
+            .insert_pending("s".to_string(), pending(5000), now)
+            .unwrap();
 
         let later = now + PENDING_LOGIN_TTL - Duration::from_millis(1);
 
@@ -202,7 +247,9 @@ mod tests {
     fn pending_login_expires_at_ttl() {
         let store = LoginStore::new();
         let now = Instant::now();
-        store.insert_pending("s".to_string(), pending(5000), now);
+        store
+            .insert_pending("s".to_string(), pending(5000), now)
+            .unwrap();
 
         assert!(store.take_pending("s", now + PENDING_LOGIN_TTL).is_none());
     }
@@ -211,10 +258,14 @@ mod tests {
     fn insert_purges_expired_pending_logins() {
         let store = LoginStore::new();
         let now = Instant::now();
-        store.insert_pending("old".to_string(), pending(5000), now);
+        store
+            .insert_pending("old".to_string(), pending(5000), now)
+            .unwrap();
 
         let later = now + PENDING_LOGIN_TTL;
-        store.insert_pending("new".to_string(), pending(5001), later);
+        store
+            .insert_pending("new".to_string(), pending(5001), later)
+            .unwrap();
 
         let pending = store.pending.lock().unwrap();
         assert!(!pending.entries.contains_key("old"));
@@ -226,7 +277,9 @@ mod tests {
         let store = LoginStore::new();
         let now = Instant::now();
         let value = code();
-        store.insert_code("c".to_string(), value.clone(), now);
+        store
+            .insert_code("c".to_string(), value.clone(), now)
+            .unwrap();
 
         assert_eq!(store.take_code("c", now), Some(value));
         assert_eq!(store.take_code("c", now), None);
@@ -236,7 +289,7 @@ mod tests {
     fn code_expires_after_sixty_seconds() {
         let store = LoginStore::new();
         let now = Instant::now();
-        store.insert_code("c".to_string(), code(), now);
+        store.insert_code("c".to_string(), code(), now).unwrap();
 
         assert_eq!(store.take_code("c", now + Duration::from_secs(60)), None);
     }
@@ -245,12 +298,76 @@ mod tests {
     fn code_is_valid_before_sixty_seconds() {
         let store = LoginStore::new();
         let now = Instant::now();
-        store.insert_code("c".to_string(), code(), now);
+        store.insert_code("c".to_string(), code(), now).unwrap();
 
         assert!(
             store
                 .take_code("c", now + Duration::from_secs(59))
                 .is_some()
         );
+    }
+
+    #[test]
+    fn expiring_map_refuses_new_key_when_full() {
+        let mut map = ExpiringMap::new(Duration::from_secs(60), 2);
+        let now = Instant::now();
+        map.insert("a".to_string(), 1, now).unwrap();
+        map.insert("b".to_string(), 2, now).unwrap();
+
+        let result = map.insert("c".to_string(), 3, now);
+
+        assert_eq!(result, Err(StoreFull));
+        assert!(!map.entries.contains_key("c"));
+    }
+
+    // A replacement does not grow the map, so it is allowed at the cap.
+    #[test]
+    fn expiring_map_replaces_existing_key_when_full() {
+        let mut map = ExpiringMap::new(Duration::from_secs(60), 1);
+        let now = Instant::now();
+        map.insert("a".to_string(), 1, now).unwrap();
+
+        map.insert("a".to_string(), 2, now).unwrap();
+
+        assert_eq!(map.take("a", now), Some(2));
+    }
+
+    #[test]
+    fn expiring_map_accepts_new_key_when_full_of_expired_entries() {
+        let mut map = ExpiringMap::new(Duration::from_secs(60), 1);
+        let now = Instant::now();
+        map.insert("a".to_string(), 1, now).unwrap();
+
+        let later = now + Duration::from_secs(60);
+
+        assert_eq!(map.insert("b".to_string(), 2, later), Ok(()));
+    }
+
+    #[test]
+    fn insert_pending_refuses_login_at_cap() {
+        let store = LoginStore::new();
+        let now = Instant::now();
+        for i in 0..MAX_PENDING_LOGINS {
+            store
+                .insert_pending(format!("s{i}"), pending(5000), now)
+                .unwrap();
+        }
+
+        let result = store.insert_pending("extra".to_string(), pending(5000), now);
+
+        assert_eq!(result, Err(StoreFull));
+    }
+
+    #[test]
+    fn insert_code_refuses_code_at_cap() {
+        let store = LoginStore::new();
+        let now = Instant::now();
+        for i in 0..MAX_APP_CODES {
+            store.insert_code(format!("c{i}"), code(), now).unwrap();
+        }
+
+        let result = store.insert_code("extra".to_string(), code(), now);
+
+        assert_eq!(result, Err(StoreFull));
     }
 }

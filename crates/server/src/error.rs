@@ -40,6 +40,11 @@ pub enum ApiFailure {
     #[error("Google request failed: {0}")]
     BadGateway(String),
 
+    /// The server cannot take the request now, for example because the login
+    /// store is full: 503 `internal`.
+    #[error("service unavailable: {0}")]
+    Unavailable(String),
+
     /// Database failure: 500 `internal`.
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),
@@ -85,6 +90,11 @@ impl ApiFailure {
                 StatusCode::BAD_GATEWAY,
                 error_codes::INTERNAL,
                 "Google request failed".to_string(),
+            ),
+            Self::Unavailable(message) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                error_codes::INTERNAL,
+                message.clone(),
             ),
             Self::Database(_) | Self::Token(_) | Self::Crypto(_) | Self::Internal(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -162,6 +172,15 @@ mod tests {
         assert_eq!(status, StatusCode::BAD_GATEWAY);
         assert_eq!(body.code, "internal");
         assert_eq!(body.message, "Google request failed");
+    }
+
+    #[tokio::test]
+    async fn unavailable_is_503_with_message() {
+        let (status, body) = body_of(ApiFailure::Unavailable("too many logins".to_string())).await;
+
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body.code, "internal");
+        assert_eq!(body.message, "too many logins");
     }
 
     #[tokio::test]

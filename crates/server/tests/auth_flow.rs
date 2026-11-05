@@ -312,7 +312,8 @@ async fn expired_pending_login_shows_expired_page(pool: PgPool) {
     };
     h.state
         .logins
-        .insert_pending("old-state".to_string(), pending, created);
+        .insert_pending("old-state".to_string(), pending, created)
+        .unwrap();
 
     let response = h.callback("old-state").await;
 

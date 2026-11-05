@@ -22,7 +22,7 @@ use schisaciaccole_core::api::{
     AUTH_CALLBACK_PATH, AUTH_LOGIN_PATH, AUTH_LOGOUT_PATH, AUTH_REFRESH_PATH, AUTH_TOKEN_PATH,
     ApiError, ME_PATH, TokenResponse,
 };
-use schisaciaccole_server::app::{AppState, router};
+use schisaciaccole_server::app::{AppState, router_with_limit};
 use schisaciaccole_server::config::Config;
 use schisaciaccole_server::crypto;
 use schisaciaccole_server::google::{GoogleClaims, GoogleIdToken, GoogleOidc};
@@ -129,7 +129,7 @@ pub async fn harness(pool: PgPool) -> Harness {
         .unwrap();
     let state = AppState::new(config, pool, oidc);
     Harness {
-        app: router(state.clone()),
+        app: router_with_limit(state.clone(), None),
         state,
         google,
         key,

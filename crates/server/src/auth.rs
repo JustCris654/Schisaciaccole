@@ -30,7 +30,7 @@ use crate::config::Config;
 use crate::crypto::{self, CryptoError};
 use crate::error::ApiFailure;
 use crate::google::GoogleError;
-use crate::login_store::{AppCode, PendingLogin};
+use crate::login_store::{AppCode, PendingLogin, StoreFull};
 use crate::store;
 use crate::tokens::{self, ACCESS_TOKEN_TTL_SECS};
 
@@ -128,7 +128,8 @@ impl FromRequestParts<AppState> for AuthUser {
 /// # Errors
 ///
 /// Returns 400 `invalid_request` when a parameter is missing or invalid
-/// (see [`validate_login_params`]).
+/// (see [`validate_login_params`]), and 503 `internal` when too many logins
+/// are already in progress.
 pub async fn login(
     State(state): State<AppState>,
     query: Result<Query<LoginQuery>, QueryRejection>,
@@ -150,7 +151,10 @@ pub async fn login(
     };
     state
         .logins
-        .insert_pending(request.state.secret().clone(), pending, Instant::now());
+        .insert_pending(request.state.secret().clone(), pending, Instant::now())
+        .map_err(|_| {
+            ApiFailure::Unavailable("too many logins in progress, retry later".to_string())
+        })?;
     Ok(found(request.url.as_str()))
 }
 
@@ -169,7 +173,8 @@ pub async fn login(
 ///   claim is not the allowed domain;
 /// - `google_reauth_required`: Google sent no refresh token and none is
 ///   stored for the user;
-/// - `internal`: network, database or crypto failure.
+/// - `internal`: network, database or crypto failure, or the one-time code
+///   store is full.
 pub async fn google_callback(
     State(state): State<AppState>,
     query: Result<Query<CallbackQuery>, QueryRejection>,
@@ -403,6 +408,9 @@ enum CallbackError {
 
     #[error(transparent)]
     Crypto(#[from] CryptoError),
+
+    #[error("too many one-time codes in the store")]
+    StoreFull(#[from] StoreFull),
 }
 
 impl CallbackError {
@@ -418,7 +426,9 @@ impl CallbackError {
             ) => error_codes::INVALID_CODE,
             Self::ForbiddenDomain => error_codes::FORBIDDEN_DOMAIN,
             Self::ReauthRequired => error_codes::GOOGLE_REAUTH_REQUIRED,
-            Self::Google(_) | Self::Database(_) | Self::Crypto(_) => error_codes::INTERNAL,
+            Self::Google(_) | Self::Database(_) | Self::Crypto(_) | Self::StoreFull(_) => {
+                error_codes::INTERNAL
+            }
         }
     }
 }
@@ -485,7 +495,7 @@ async fn finish_login(
     };
     state
         .logins
-        .insert_code(app_code.clone(), value, Instant::now());
+        .insert_code(app_code.clone(), value, Instant::now())?;
     Ok(app_code)
 }
 
