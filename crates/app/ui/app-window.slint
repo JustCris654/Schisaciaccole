@@ -1,13 +1,20 @@
-import { Palette, Button, VerticalBox, HorizontalBox, AboutSlint } from "std-widgets.slint";
+import { Palette, Button, VerticalBox, HorizontalBox, AboutSlint, ListView } from "std-widgets.slint";
 
 import "../assets/fonts/Plus_Jakarta_Sans/static/PlusJakartaSans-Medium.ttf";
 
-export enum Page { SelectionPage, TimerPage, TimerFinished, LoadingPage, LoginPage }
+export enum Page { SelectionPage, TimerPage, TimerFinished, LoadingPage, LoginPage, MeetingsPage }
 export enum StopType { TimerFinished, UserStopped }
 
 export struct TimeOption {
     time: string,
     minutes: string,
+}
+
+export struct MeetingRow {
+    time-range: string,
+    title: string,
+    attendees: string,
+    in-progress: bool,
 }
 
 component SelectionButton inherits VerticalBox {
@@ -54,6 +61,151 @@ component AccentButton inherits Rectangle {
 	text: root.text;
 	font-size: root.font-size;
 	color: black;
+    }
+}
+
+component AccountBar inherits HorizontalLayout {
+    in property <string> account-name;
+    in property <float> ui-scale;
+
+    callback logout();
+
+    spacing: 10px * ui-scale;
+
+    Text {
+	text: "Connesso come " + root.account-name;
+	font-size: 12px * root.ui-scale;
+	vertical-alignment: center;
+	horizontal-stretch: 1;
+	overflow: elide;
+    }
+
+    Button {
+	text: "Esci";
+	clicked => { root.logout(); }
+    }
+}
+
+component MeetingsPage {
+    in property <float> ui-scale;
+    in property <string> account-name;
+    in property <[MeetingRow]> meetings;
+    in property <bool> loading;
+    in property <string> error;
+
+    callback select(int);
+    callback refresh();
+    callback logout();
+    callback free-slots();
+
+    init => { root.refresh(); }
+
+    Timer {
+	interval: 60s;
+	running: true;
+
+	triggered() => { root.refresh(); }
+    }
+
+    VerticalBox {
+	padding: 25px * ui-scale;
+	spacing: 10px * ui-scale;
+
+	AccountBar {
+	    account-name: root.account-name;
+	    ui-scale: root.ui-scale;
+	    logout => { root.logout(); }
+	}
+
+	Text {
+	    text: "I meeting di oggi";
+	    font-size: 22px * root.ui-scale;
+	    horizontal-alignment: start;
+	}
+
+	if root.loading : Text {
+	    text: "Caricamento…";
+	    font-size: 14px * root.ui-scale;
+	    vertical-stretch: 1;
+	}
+
+	if !root.loading && root.error != "" && root.meetings.length == 0 : Text {
+	    text: root.error;
+	    color: #C682F5;
+	    font-size: 14px * root.ui-scale;
+	    wrap: word-wrap;
+	    vertical-stretch: 1;
+	}
+
+	if !root.loading && root.error == "" && root.meetings.length == 0 : Text {
+	    text: "Nessun altro meeting oggi.";
+	    font-size: 14px * root.ui-scale;
+	    vertical-stretch: 1;
+	}
+
+	if !root.loading && root.error != "" && root.meetings.length > 0 : Text {
+	    text: root.error;
+	    color: #C682F5;
+	    font-size: 12px * root.ui-scale;
+	    wrap: word-wrap;
+	}
+
+	if !root.loading && root.meetings.length > 0 : ListView {
+	    vertical-stretch: 1;
+
+	    for row[index] in root.meetings : Rectangle {
+		height: 54px * root.ui-scale;
+
+		Rectangle {
+		    height: parent.height - 6px * root.ui-scale;
+		    border-radius: 4px;
+		    border-width: row.in-progress ? 2px : 0px;
+		    border-color: #C682F5;
+		    background: row.in-progress
+			? (touch.has-hover ? #C682F55A : #C682F533)
+			: (touch.has-hover ? #80808040 : #80808022);
+
+		    touch := TouchArea {
+			clicked => { root.select(index); }
+		    }
+
+		    HorizontalLayout {
+			padding-left: 12px * root.ui-scale;
+			padding-right: 12px * root.ui-scale;
+			spacing: 12px * root.ui-scale;
+
+			Text {
+			    text: row.time-range;
+			    font-size: 16px * root.ui-scale;
+			    vertical-alignment: center;
+			}
+
+			Text {
+			    text: row.title;
+			    font-size: 16px * root.ui-scale;
+			    vertical-alignment: center;
+			    horizontal-stretch: 1;
+			    overflow: elide;
+			}
+
+			Text {
+			    text: row.attendees;
+			    font-size: 12px * root.ui-scale;
+			    vertical-alignment: center;
+			}
+		    }
+		}
+	    }
+	}
+
+	HorizontalLayout {
+	    alignment: start;
+
+	    Button {
+		text: "Orari liberi";
+		clicked => { root.free-slots(); }
+	    }
+	}
     }
 }
 
@@ -132,6 +284,9 @@ export component MainWindow inherits Window {
     in property     <string>   notice;
     in property     <string>   login-status;
     in property     <bool>     login-waiting;
+    in property     <[MeetingRow]> meetings;
+    in property     <bool>     meetings-loading;
+    in property     <string>   meetings-error;
 
     callback select-time(int);
     callback compute-options();
@@ -144,6 +299,10 @@ export component MainWindow inherits Window {
     callback login();
     callback cancel-login();
     callback skip-login();
+    callback select-meeting(int);
+    callback refresh-meetings();
+    callback set-meetings-page();
+    callback close-finished();
     callback logout();
 
     if is-macos: MenuBar {
@@ -227,20 +386,18 @@ export component MainWindow inherits Window {
 	padding: 25px * ui-scale;
 
 
-	if root.signed-in : HorizontalLayout {
-	    spacing: 10px * ui-scale;
+	if root.signed-in : AccountBar {
+	    account-name: root.account-name;
+	    ui-scale: root.ui-scale;
+	    logout => { logout(); }
+	}
 
-	    Text {
-		text: "Connesso come " + root.account-name;
-		font-size: 12px * root.ui-scale;
-		vertical-alignment: center;
-		horizontal-stretch: 1;
-		overflow: elide;
-	    }
+	if root.signed-in : HorizontalLayout {
+	    alignment: start;
 
 	    Button {
-		text: "Esci";
-		clicked => { logout(); }
+		text: "I miei meeting";
+		clicked => { set-meetings-page(); }
 	    }
 	}
 
@@ -269,6 +426,18 @@ export component MainWindow inherits Window {
 		clicked => { select-time(index); }
 	    }
 	}
+    }
+
+    if page == Page.MeetingsPage : MeetingsPage {
+	ui-scale: root.ui-scale;
+	account-name: root.account-name;
+	meetings: root.meetings;
+	loading: root.meetings-loading;
+	error: root.meetings-error;
+	select(index) => { select-meeting(index); }
+	refresh => { refresh-meetings(); }
+	logout => { logout(); }
+	free-slots => { set-selection-page(); }
     }
 
     if page == Page.LoadingPage : VerticalBox {
@@ -365,7 +534,7 @@ export component MainWindow inherits Window {
 
 	    Button {
 		text: "Selection page";
-		clicked => { set-selection-page(); }
+		clicked => { close-finished(); }
 	    }
 	}
     }

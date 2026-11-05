@@ -33,6 +33,7 @@ fn main() -> anyhow::Result<()> {
 
     let mut app_state = AppState::new().context("failed to compute the initial time options")?;
     app_state.bind_options(&main_window);
+    app_state.bind_meetings(&main_window);
     let session = connect_session(&mut app_state);
     app_state.render(&main_window);
     let app_state = Rc::new(RefCell::new(app_state));
@@ -71,6 +72,61 @@ fn main() -> anyhow::Result<()> {
             if must_play {
                 sound::play_sound();
             }
+        }
+    });
+
+    main_window.on_select_meeting({
+        let window_weak = main_window.as_weak();
+        let state = app_state.clone();
+
+        move |index| {
+            let Some(window) = window_weak.upgrade() else {
+                return;
+            };
+            let mut state = state.borrow_mut();
+            let must_play = state.select_meeting(index);
+            state.render(&window);
+            if must_play {
+                sound::play_sound();
+            }
+        }
+    });
+
+    main_window.on_refresh_meetings({
+        let session = session.clone();
+
+        move || {
+            if let Some(session) = &session {
+                session.spawn_meetings_fetch();
+            }
+        }
+    });
+
+    main_window.on_set_meetings_page({
+        let window_weak = main_window.as_weak();
+        let state = app_state.clone();
+
+        move || {
+            let Some(window) = window_weak.upgrade() else {
+                return;
+            };
+            let mut state = state.borrow_mut();
+            state.show_meetings_page();
+            state.render(&window);
+        }
+    });
+
+    main_window.on_close_finished({
+        let window_weak = main_window.as_weak();
+        let state = app_state.clone();
+
+        move || {
+            let Some(window) = window_weak.upgrade() else {
+                return;
+            };
+            let mut state = state.borrow_mut();
+            state.show_home();
+            state.render(&window);
         }
     });
 

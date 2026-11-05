@@ -13,8 +13,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::Duration;
 
+use chrono::{DateTime, FixedOffset, Local, TimeZone};
 use log::{debug, info, warn};
-use schisaciaccole_core::api::Me;
+use schisaciaccole_core::api::{Me, Meeting};
 
 use crate::backend::{BackendClient, BackendError};
 use crate::login::{self, LoginError, LoopbackServer};
@@ -24,6 +25,9 @@ use crate::state::{AppState, OFFLINE_NOTICE};
 
 /// How long the login waits for the browser to come back.
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+
+/// Shown on the meetings page when the meetings cannot be loaded for any other reason.
+pub const MEETINGS_FAILED_MESSAGE: &str = "Impossibile caricare i meeting.";
 
 /// Result of a worker, delivered to the UI thread.
 #[derive(Debug)]
@@ -39,6 +43,13 @@ pub enum AppEvent {
     },
     /// The session was revoked and forgotten.
     LoggedOut,
+    /// The meetings fetch `request` ended.
+    MeetingsLoaded {
+        /// Id given by [`Session::spawn_meetings_fetch`].
+        request: u64,
+        /// Meetings from now to the end of the day, or why they could not be fetched.
+        result: Result<Vec<Meeting>, BackendError>,
+    },
 }
 
 /// What the startup check found.
@@ -66,6 +77,29 @@ pub fn startup_outcome(result: Result<Me, BackendError>) -> StartupOutcome {
             StartupOutcome::Offline
         }
     }
+}
+
+/// Message for the user about a failed meetings fetch.
+///
+/// A missing or dead session is not handled here: it sends the user to the login page.
+pub fn meetings_error_message(error: &BackendError) -> &'static str {
+    match error {
+        BackendError::Unreachable => login::UNREACHABLE_MESSAGE,
+        BackendError::RateLimited => login::RATE_LIMITED_MESSAGE,
+        _ => MEETINGS_FAILED_MESSAGE,
+    }
+}
+
+/// Range of the meetings to fetch: from `now` to 23:59:59.999 of the same day in `now`'s zone.
+///
+/// The end of the day is used even when less than a minute is left. Returns `None` when that
+/// instant does not exist in the zone (a daylight saving gap at midnight).
+fn remaining_day_range<Tz: TimeZone>(
+    now: &DateTime<Tz>,
+) -> Option<(DateTime<FixedOffset>, DateTime<FixedOffset>)> {
+    let end_of_day = now.date_naive().and_hms_milli_opt(23, 59, 59, 999)?;
+    let end = now.timezone().from_local_datetime(&end_of_day).latest()?;
+    Some((now.fixed_offset(), end.fixed_offset()))
 }
 
 /// UI-thread callback receiving the worker events.
@@ -114,6 +148,8 @@ pub struct Session {
     client: Arc<Mutex<BackendClient>>,
     login: RefCell<Option<ActiveLogin>>,
     next_attempt: Cell<u64>,
+    /// Id of the latest meetings fetch; the results of older ones are ignored.
+    meetings_request: Cell<u64>,
 }
 
 impl Session {
@@ -138,6 +174,7 @@ impl Session {
             client: Arc::new(Mutex::new(client)),
             login: RefCell::new(None),
             next_attempt: Cell::new(0),
+            meetings_request: Cell::new(0),
         })
     }
 
@@ -207,6 +244,40 @@ impl Session {
         }
     }
 
+    /// Fetches today's remaining meetings on a worker and posts [`AppEvent::MeetingsLoaded`].
+    ///
+    /// Each call supersedes the previous one: see [`Session::is_current_meetings_request`].
+    /// When the worker cannot be started, or the end of the day cannot be computed, a generic
+    /// failure is posted.
+    pub fn spawn_meetings_fetch(&self) {
+        let request = self.meetings_request.get().wrapping_add(1);
+        self.meetings_request.set(request);
+
+        let client = self.client.clone();
+        let spawned = spawn("meetings", move || {
+            let result = match remaining_day_range(&Local::now()) {
+                Some((from, to)) => lock(&client).fetch_meetings(from, to),
+                None => {
+                    warn!("Cannot compute the end of the day");
+                    Err(BackendError::Decode)
+                }
+            };
+            post(AppEvent::MeetingsLoaded { request, result });
+        });
+        if let Err(e) = spawned {
+            warn!("Cannot start the meetings fetch: {e}");
+            post(AppEvent::MeetingsLoaded {
+                request,
+                result: Err(BackendError::Decode),
+            });
+        }
+    }
+
+    /// True when `request` is the latest meetings fetch, so its result is still wanted.
+    pub fn is_current_meetings_request(&self, request: u64) -> bool {
+        self.meetings_request.get() == request
+    }
+
     /// Revokes the session on a worker and posts [`AppEvent::LoggedOut`].
     ///
     /// A failure to forget the local session is logged and the event is posted anyway. When the
@@ -226,7 +297,8 @@ impl Session {
     }
 }
 
-/// Applies a worker event to the UI state. Results of stale login attempts are dropped.
+/// Applies a worker event to the UI state. Results of stale login attempts and meetings fetches
+/// are dropped, and so are meetings results when no account is signed in.
 pub fn apply_event(state: &mut AppState, session: &Session, event: AppEvent) {
     match event {
         AppEvent::StartupChecked(StartupOutcome::SignedIn(me)) => state.on_signed_in(&me),
@@ -247,6 +319,21 @@ pub fn apply_event(state: &mut AppState, session: &Session, event: AppEvent) {
             }
         }
         AppEvent::LoggedOut => state.on_logged_out(),
+        AppEvent::MeetingsLoaded { request, result } => {
+            if !session.is_current_meetings_request(request) || !state.is_signed_in() {
+                debug!("Ignoring the result of meetings request {request}");
+                return;
+            }
+            match result {
+                Ok(meetings) => state.on_meetings_loaded(meetings),
+                Err(BackendError::NotLoggedIn) => state.on_session_lost(""),
+                Err(BackendError::ReauthRequired) => state.on_session_lost(login::REAUTH_MESSAGE),
+                Err(e) => {
+                    warn!("Meetings fetch failed: {e}");
+                    state.on_meetings_failed(meetings_error_message(&e));
+                }
+            }
+        }
     }
 }
 
@@ -340,6 +427,7 @@ mod tests {
             client: Arc::new(Mutex::new(client)),
             login: RefCell::new(None),
             next_attempt: Cell::new(0),
+            meetings_request: Cell::new(0),
         }
     }
 
@@ -434,8 +522,136 @@ mod tests {
         };
         apply_event(&mut state, &session, event);
 
-        assert_eq!(state.page(), Page::SelectionPage);
+        assert_eq!(state.page(), Page::MeetingsPage);
         assert_eq!(state.account(), Some("a@x.it"));
+    }
+
+    fn signed_in_state() -> AppState {
+        let mut state = sample_state();
+        state.on_signed_in(&me());
+        state
+    }
+
+    fn meetings_event(request: u64, result: Result<Vec<Meeting>, BackendError>) -> AppEvent {
+        AppEvent::MeetingsLoaded { request, result }
+    }
+
+    #[test]
+    fn stale_meetings_result_is_ignored() {
+        let session = offline_session();
+        session.meetings_request.set(2);
+        let mut state = signed_in_state();
+
+        apply_event(
+            &mut state,
+            &session,
+            meetings_event(1, Err(BackendError::Decode)),
+        );
+
+        assert_eq!(state.page(), Page::MeetingsPage);
+        assert!(!state.has_meetings_error());
+    }
+
+    #[test]
+    fn meetings_result_without_account_is_ignored() {
+        let session = offline_session();
+        session.meetings_request.set(1);
+        let mut state = sample_state();
+        state.on_login_required("");
+
+        apply_event(
+            &mut state,
+            &session,
+            meetings_event(1, Err(BackendError::Decode)),
+        );
+
+        assert_eq!(state.page(), Page::LoginPage);
+    }
+
+    #[test]
+    fn meetings_failure_is_shown() {
+        let session = offline_session();
+        session.meetings_request.set(1);
+        let mut state = signed_in_state();
+
+        apply_event(
+            &mut state,
+            &session,
+            meetings_event(1, Err(BackendError::Unreachable)),
+        );
+
+        assert_eq!(state.page(), Page::MeetingsPage);
+        assert!(state.has_meetings_error());
+    }
+
+    #[test]
+    fn meetings_without_session_show_login() {
+        let session = offline_session();
+        session.meetings_request.set(1);
+        let mut state = signed_in_state();
+
+        apply_event(
+            &mut state,
+            &session,
+            meetings_event(1, Err(BackendError::NotLoggedIn)),
+        );
+
+        assert_eq!(state.page(), Page::LoginPage);
+        assert!(!state.is_signed_in());
+    }
+
+    #[test]
+    fn meetings_reauth_shows_login_with_message() {
+        let session = offline_session();
+        session.meetings_request.set(1);
+        let mut state = signed_in_state();
+
+        apply_event(
+            &mut state,
+            &session,
+            meetings_event(1, Err(BackendError::ReauthRequired)),
+        );
+
+        assert_eq!(state.page(), Page::LoginPage);
+        assert_eq!(state.login_status(), login::REAUTH_MESSAGE);
+    }
+
+    #[test]
+    fn maps_meetings_errors_to_messages() {
+        assert_eq!(
+            meetings_error_message(&BackendError::Unreachable),
+            login::UNREACHABLE_MESSAGE
+        );
+        assert_eq!(
+            meetings_error_message(&BackendError::RateLimited),
+            login::RATE_LIMITED_MESSAGE
+        );
+        assert_eq!(
+            meetings_error_message(&BackendError::Decode),
+            MEETINGS_FAILED_MESSAGE
+        );
+    }
+
+    fn fixed(hour: u32, minute: u32) -> DateTime<FixedOffset> {
+        let zone = FixedOffset::east_opt(2 * 3600).unwrap();
+        zone.with_ymd_and_hms(2026, 3, 10, hour, minute, 0).unwrap()
+    }
+
+    #[test]
+    fn day_range_ends_at_the_end_of_the_local_day() {
+        let (from, to) = remaining_day_range(&fixed(10, 30)).unwrap();
+
+        assert_eq!(from, fixed(10, 30));
+        assert_eq!(to.to_rfc3339(), "2026-03-10T23:59:59.999+02:00");
+    }
+
+    #[test]
+    fn day_range_keeps_the_end_of_day_when_little_is_left() {
+        let now = fixed(23, 59) + chrono::Duration::seconds(30);
+
+        let (_, to) = remaining_day_range(&now).unwrap();
+
+        assert_eq!(to.to_rfc3339(), "2026-03-10T23:59:59.999+02:00");
     }
 
     #[test]

@@ -176,7 +176,6 @@ impl BackendClient {
     /// # Errors
     ///
     /// See [`BackendClient::fetch_me`].
-    #[allow(dead_code)]
     pub fn fetch_meetings(
         &mut self,
         from: DateTime<FixedOffset>,
