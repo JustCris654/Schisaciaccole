@@ -5,22 +5,29 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+aes-gcm = "0.11.1"
 anyhow = "1.0.104"
 axum = "0.8"
 base64 = "0.23.1"
 chrono = { version = "0.4.45", features = ["serde"] }
 dotenvy = "0.15.7"
+getrandom = "0.4.3"
+jsonwebtoken = { version = "11.1.0", default-features = false, features = ["rust_crypto"] }
+openidconnect = "4.1.0"
 schisaciaccole-core = { version = "0.2.0", path = "../core" }
 serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "macros", "migrate", "uuid", "chrono"] }
 thiserror = "2.0.21"
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "signal"] }
 tower-http = { version = "0.7.1", features = ["trace"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+url = "2.5.8"
 uuid = { version = "1.29.0", features = ["v4", "serde"] }
 
 [dev-dependencies]
 http-body-util = "0.1.5"
-serde_json = "1.0.154"
 tower = { version = "0.5.3", features = ["util"] }
+wiremock = "0.6.5"

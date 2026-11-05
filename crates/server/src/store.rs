@@ -205,6 +205,30 @@ pub async fn find_active_session_by_hash(
     .await
 }
 
+/// Finds the session with this id if it is still usable.
+///
+/// Returns `Ok(None)` when the id is unknown, the session is revoked, or
+/// `expires_at` is not after `now`.
+///
+/// # Errors
+///
+/// Returns `Err` when the query fails.
+pub async fn find_active_session_by_id(
+    pool: &PgPool,
+    session_id: Uuid,
+    now: DateTime<Utc>,
+) -> Result<Option<Session>, sqlx::Error> {
+    sqlx::query_as!(
+        Session,
+        "SELECT id, user_id, expires_at FROM app_sessions
+         WHERE id = $1 AND revoked_at IS NULL AND expires_at > $2",
+        session_id,
+        now,
+    )
+    .fetch_optional(pool)
+    .await
+}
+
 /// Replaces the refresh token hash and expiry of a session, atomically.
 ///
 /// The update applies only if the session is not revoked and still stores
@@ -456,6 +480,59 @@ mod tests {
         let again = revoke_session(&pool, id, now).await.unwrap();
 
         assert!(!again);
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn active_session_is_found_by_id(pool: PgPool) {
+        let user = new_user(&pool).await;
+        let now = Utc::now();
+        let id = create_session(&pool, user.id, b"hash-1", None, now + Duration::days(1))
+            .await
+            .unwrap();
+
+        let session = find_active_session_by_id(&pool, id, now)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(session.id, id);
+        assert_eq!(session.user_id, user.id);
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn unknown_id_finds_no_session(pool: PgPool) {
+        let found = find_active_session_by_id(&pool, Uuid::new_v4(), Utc::now())
+            .await
+            .unwrap();
+
+        assert_eq!(found, None);
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn revoked_session_is_not_found_by_id(pool: PgPool) {
+        let user = new_user(&pool).await;
+        let now = Utc::now();
+        let id = create_session(&pool, user.id, b"hash-1", None, now + Duration::days(1))
+            .await
+            .unwrap();
+        revoke_session(&pool, id, now).await.unwrap();
+
+        let found = find_active_session_by_id(&pool, id, now).await.unwrap();
+
+        assert_eq!(found, None);
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn expired_session_is_not_found_by_id(pool: PgPool) {
+        let user = new_user(&pool).await;
+        let now = Utc::now();
+        let id = create_session(&pool, user.id, b"hash-1", None, now - Duration::seconds(1))
+            .await
+            .unwrap();
+
+        let found = find_active_session_by_id(&pool, id, now).await.unwrap();
+
+        assert_eq!(found, None);
     }
 
     #[sqlx::test(migrations = "./migrations")]

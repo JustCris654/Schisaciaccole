@@ -1,9 +1,11 @@
 //! Entry point of the Schisaciaccole server.
 
 use anyhow::Context;
+use schisaciaccole_core::api::AUTH_CALLBACK_PATH;
 use schisaciaccole_server::app::{AppState, router};
 use schisaciaccole_server::config::Config;
 use schisaciaccole_server::db;
+use schisaciaccole_server::google::GoogleOidc;
 use tokio::net::TcpListener;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -21,7 +23,15 @@ async fn main() -> anyhow::Result<()> {
     db::migrate(&pool)
         .await
         .context("database migration failed")?;
-    let app = router(AppState::new(config, pool));
+    let google = GoogleOidc::discover(&config, AUTH_CALLBACK_PATH)
+        .await
+        .with_context(|| {
+            format!(
+                "Google OpenID discovery failed for {}",
+                config.google_issuer_url
+            )
+        })?;
+    let app = router(AppState::new(config, pool, google));
 
     let listener = TcpListener::bind(bind_addr)
         .await

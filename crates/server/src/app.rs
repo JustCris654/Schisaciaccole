@@ -2,14 +2,22 @@
 
 use std::sync::Arc;
 
-use axum::routing::get;
+use axum::extract::Request;
+use axum::routing::{get, post};
 use axum::{Json, Router};
-use schisaciaccole_core::api::HEALTH_PATH;
+use schisaciaccole_core::api::{
+    AUTH_CALLBACK_PATH, AUTH_LOGIN_PATH, AUTH_LOGOUT_PATH, AUTH_REFRESH_PATH, AUTH_TOKEN_PATH,
+    HEALTH_PATH, ME_PATH,
+};
 use serde::Serialize;
 use sqlx::PgPool;
 use tower_http::trace::TraceLayer;
+use tracing::info_span;
 
+use crate::auth;
 use crate::config::Config;
+use crate::google::GoogleOidc;
+use crate::login_store::LoginStore;
 
 /// State shared by all request handlers. Cloning is cheap.
 #[derive(Clone, Debug)]
@@ -18,14 +26,21 @@ pub struct AppState {
     pub config: Arc<Config>,
     /// Connection pool of the application database.
     pub pool: PgPool,
+    /// Google OpenID Connect client.
+    pub google: Arc<GoogleOidc>,
+    /// Logins in progress and one-time codes.
+    pub logins: Arc<LoginStore>,
 }
 
 impl AppState {
-    /// Creates the state from an already validated configuration and a pool.
-    pub fn new(config: Config, pool: PgPool) -> Self {
+    /// Creates the state from an already validated configuration, a pool
+    /// and a Google client, with an empty login store.
+    pub fn new(config: Config, pool: PgPool, google: GoogleOidc) -> Self {
         Self {
             config: Arc::new(config),
             pool,
+            google: Arc::new(google),
+            logins: Arc::new(LoginStore::new()),
         }
     }
 }
@@ -37,10 +52,26 @@ struct Health {
 }
 
 /// Builds the router with all routes and the tracing layer.
+///
+/// Request spans record the method and the path only: query strings carry
+/// login states and codes, which must never be logged.
 pub fn router(state: AppState) -> Router {
+    let trace = TraceLayer::new_for_http().make_span_with(|request: &Request| {
+        info_span!(
+            "request",
+            method = %request.method(),
+            path = %request.uri().path(),
+        )
+    });
     Router::new()
         .route(HEALTH_PATH, get(health))
-        .layer(TraceLayer::new_for_http())
+        .route(AUTH_LOGIN_PATH, get(auth::login))
+        .route(AUTH_CALLBACK_PATH, get(auth::google_callback))
+        .route(AUTH_TOKEN_PATH, post(auth::token))
+        .route(AUTH_REFRESH_PATH, post(auth::refresh))
+        .route(AUTH_LOGOUT_PATH, post(auth::logout))
+        .route(ME_PATH, get(auth::me))
+        .layer(trace)
         .with_state(state)
 }
 
@@ -74,7 +105,24 @@ mod tests {
         let pool = PgPoolOptions::new()
             .connect_lazy("postgres://u:p@localhost/x")
             .unwrap();
-        AppState::new(config, pool)
+        let metadata = serde_json::from_value(serde_json::json!({
+            "issuer": "https://issuer.example.com",
+            "authorization_endpoint": "https://issuer.example.com/authorize",
+            "token_endpoint": "https://issuer.example.com/token",
+            "jwks_uri": "https://issuer.example.com/jwks",
+            "response_types_supported": ["code"],
+            "subject_types_supported": ["public"],
+            "id_token_signing_alg_values_supported": ["RS256"],
+        }))
+        .unwrap();
+        let google = GoogleOidc::from_metadata(
+            &config,
+            AUTH_CALLBACK_PATH,
+            metadata,
+            openidconnect::reqwest::Client::new(),
+        )
+        .unwrap();
+        AppState::new(config, pool, google)
     }
 
     #[tokio::test]
