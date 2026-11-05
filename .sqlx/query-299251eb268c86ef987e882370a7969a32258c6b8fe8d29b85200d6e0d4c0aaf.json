@@ -1,0 +1,43 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO users (id, google_sub, email, display_name)\n         VALUES ($1, $2, $3, $4)\n         ON CONFLICT (google_sub)\n         DO UPDATE SET email = EXCLUDED.email, display_name = EXCLUDED.display_name\n         RETURNING id, google_sub, email, display_name",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "google_sub",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "email",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "display_name",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "299251eb268c86ef987e882370a7969a32258c6b8fe8d29b85200d6e0d4c0aaf"
+}

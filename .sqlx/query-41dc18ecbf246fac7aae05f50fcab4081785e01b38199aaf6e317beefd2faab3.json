@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE app_sessions SET refresh_token_hash = $3, expires_at = $4\n         WHERE id = $1 AND refresh_token_hash = $2 AND revoked_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Bytea",
+        "Bytea",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "41dc18ecbf246fac7aae05f50fcab4081785e01b38199aaf6e317beefd2faab3"
+}

@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO google_credentials (user_id, refresh_token_enc, scopes)\n         VALUES ($1, $2, $3)\n         ON CONFLICT (user_id)\n         DO UPDATE SET refresh_token_enc = EXCLUDED.refresh_token_enc,\n                       scopes = EXCLUDED.scopes,\n                       updated_at = now()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Bytea",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "67fb74cf3bf338c5cffa658cc2e483ab8c90195fefe98ba6b8a70b07b8da9211"
+}

@@ -3,6 +3,7 @@
 use anyhow::Context;
 use schisaciaccole_server::app::{AppState, router};
 use schisaciaccole_server::config::Config;
+use schisaciaccole_server::db;
 use tokio::net::TcpListener;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -14,7 +15,13 @@ async fn main() -> anyhow::Result<()> {
 
     let config = Config::from_env().context("invalid configuration")?;
     let bind_addr = config.bind_addr;
-    let app = router(AppState::new(config));
+    let pool = db::connect(&config.database_url)
+        .await
+        .context("database connection failed")?;
+    db::migrate(&pool)
+        .await
+        .context("database migration failed")?;
+    let app = router(AppState::new(config, pool));
 
     let listener = TcpListener::bind(bind_addr)
         .await

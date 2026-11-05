@@ -6,6 +6,7 @@ use axum::routing::get;
 use axum::{Json, Router};
 use schisaciaccole_core::api::HEALTH_PATH;
 use serde::Serialize;
+use sqlx::PgPool;
 use tower_http::trace::TraceLayer;
 
 use crate::config::Config;
@@ -15,13 +16,16 @@ use crate::config::Config;
 pub struct AppState {
     /// Server configuration.
     pub config: Arc<Config>,
+    /// Connection pool of the application database.
+    pub pool: PgPool,
 }
 
 impl AppState {
-    /// Creates the state from an already validated configuration.
-    pub fn new(config: Config) -> Self {
+    /// Creates the state from an already validated configuration and a pool.
+    pub fn new(config: Config, pool: PgPool) -> Self {
         Self {
             config: Arc::new(config),
+            pool,
         }
     }
 }
@@ -50,6 +54,7 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use http_body_util::BodyExt;
+    use sqlx::postgres::PgPoolOptions;
     use tower::ServiceExt;
 
     use super::*;
@@ -66,7 +71,10 @@ mod tests {
             _ => None,
         })
         .unwrap();
-        AppState::new(config)
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgres://u:p@localhost/x")
+            .unwrap();
+        AppState::new(config, pool)
     }
 
     #[tokio::test]

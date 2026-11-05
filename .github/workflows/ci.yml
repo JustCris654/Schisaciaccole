@@ -12,6 +12,20 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-22.04
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: schisaciaccole
+          POSTGRES_PASSWORD: schisaciaccole
+          POSTGRES_DB: schisaciaccole
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -30,11 +44,32 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all --check
 
+      # Build and clippy run offline, without DATABASE_URL, to prove that the
+      # committed .sqlx data is complete.
       - name: Build
+        env:
+          SQLX_OFFLINE: "true"
         run: cargo build --locked --workspace
 
+      # SQLX_OFFLINE forces the macros to use .sqlx; DATABASE_URL is only used at
+      # runtime by #[sqlx::test] (needs CREATEDB, fine for the service superuser).
       - name: Test
+        env:
+          SQLX_OFFLINE: "true"
+          DATABASE_URL: postgres://schisaciaccole:schisaciaccole@localhost:5432/schisaciaccole
         run: cargo test --locked --workspace
 
       - name: Clippy
+        env:
+          SQLX_OFFLINE: "true"
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Install sqlx-cli
+        run: cargo install sqlx-cli --version 0.8.6 --no-default-features --features rustls,postgres --locked
+
+      - name: Check sqlx offline data is up to date
+        env:
+          DATABASE_URL: postgres://schisaciaccole:schisaciaccole@localhost:5432/schisaciaccole
+        run: |
+          sqlx migrate run --source crates/server/migrations
+          cargo sqlx prepare --workspace --check

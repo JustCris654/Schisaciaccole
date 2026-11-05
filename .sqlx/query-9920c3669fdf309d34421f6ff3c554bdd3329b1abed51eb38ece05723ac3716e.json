@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT refresh_token_enc, scopes FROM google_credentials WHERE user_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "refresh_token_enc",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 1,
+        "name": "scopes",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "9920c3669fdf309d34421f6ff3c554bdd3329b1abed51eb38ece05723ac3716e"
+}

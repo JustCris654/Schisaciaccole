@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE app_sessions SET revoked_at = $2\n         WHERE refresh_token_hash = $1 AND revoked_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Bytea",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2e7bc8fe411993a8e5ce45b99669d2b3154eb9ee06d88770f7cd421be596a2cc"
+}
