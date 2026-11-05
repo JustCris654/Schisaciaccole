@@ -173,6 +173,28 @@ pub struct GoogleOidc {
     signing_algs: Vec<CoreJwsSigningAlgorithm>,
 }
 
+/// Time allowed to open a connection to Google.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Time allowed for a whole request to Google, from connection to the end
+/// of the response body.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Builds the HTTP client used for discovery, code exchange and refresh:
+/// it does not follow redirects and has connect and request timeouts.
+///
+/// # Errors
+///
+/// Returns `Err` when the client cannot be built.
+fn build_http_client() -> Result<reqwest::Client, GoogleError> {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(REQUEST_TIMEOUT)
+        .build()
+        .map_err(GoogleError::HttpClient)
+}
+
 impl GoogleOidc {
     /// Runs OpenID discovery on `config.google_issuer_url` and builds the
     /// client. The redirect URI is `public_base_url` followed by
@@ -185,10 +207,7 @@ impl GoogleOidc {
     /// be fetched or parsed, the issuer in the document differs from the
     /// configured one, or the document has no token endpoint.
     pub async fn discover(config: &Config, redirect_path: &str) -> Result<Self, GoogleError> {
-        let http = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(GoogleError::HttpClient)?;
+        let http = build_http_client()?;
         let issuer =
             IssuerUrl::new(config.google_issuer_url.clone()).map_err(GoogleError::BadUrl)?;
         let metadata = CoreProviderMetadata::discover_async(issuer, &http)
@@ -536,6 +555,11 @@ mod tests {
             request.pkce_verifier.secret(),
             challenge
         ));
+    }
+
+    #[test]
+    fn http_client_builds_with_timeouts() {
+        assert!(build_http_client().is_ok());
     }
 
     #[test]
