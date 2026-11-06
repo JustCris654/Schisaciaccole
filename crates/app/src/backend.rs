@@ -212,7 +212,6 @@ impl BackendClient {
     ///
     /// Returns [`BackendError::Server`] with status 400 when the backend rejects the request.
     /// Otherwise see [`BackendClient::fetch_me`].
-    #[allow(dead_code)]
     pub fn save_template(
         &mut self,
         request: &PutTemplateRequest,
@@ -230,7 +229,6 @@ impl BackendClient {
     ///
     /// Returns [`BackendError::Server`] with status 404 and code `not_found` when the template
     /// does not exist. Otherwise see [`BackendClient::fetch_me`] (no decode error can occur).
-    #[allow(dead_code)]
     pub fn delete_template(&mut self, id: &str) -> Result<(), BackendError> {
         let url = self.segments_url(&["api", "v1", "templates", id])?;
         self.send_authenticated(Method::DELETE, &url, &[], None::<&()>)?;

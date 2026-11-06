@@ -1,8 +1,8 @@
-import { Palette, Button, VerticalBox, HorizontalBox, AboutSlint, ListView } from "std-widgets.slint";
+import { Palette, Button, VerticalBox, HorizontalBox, AboutSlint, ListView, LineEdit, SpinBox, CheckBox } from "std-widgets.slint";
 
 import "../assets/fonts/Plus_Jakarta_Sans/static/PlusJakartaSans-Medium.ttf";
 
-export enum Page { SelectionPage, TimerPage, TimerFinished, LoadingPage, LoginPage, MeetingsPage }
+export enum Page { SelectionPage, TimerPage, TimerFinished, LoadingPage, LoginPage, MeetingsPage, EditorPage }
 export enum StopType { TimerFinished, UserStopped }
 
 export struct TimeOption {
@@ -16,6 +16,14 @@ export struct MeetingRow {
     attendees: string,
     in-progress: bool,
     has-template: bool,
+}
+
+export struct EditorRow {
+    label: string,
+    minutes: int,
+    included: bool,
+    attendee: bool,
+    email: string,
 }
 
 component SelectionButton inherits VerticalBox {
@@ -95,6 +103,7 @@ component MeetingsPage {
     in property <string> error;
 
     callback select(int);
+    callback open-editor(int);
     callback refresh();
     callback logout();
     callback free-slots();
@@ -205,6 +214,16 @@ component MeetingsPage {
 				vertical-alignment: center;
 			    }
 			}
+
+			VerticalLayout {
+			    alignment: center;
+
+			    AccentButton {
+				text: "Editor";
+				font-size: 11px * root.ui-scale;
+				clicked => { root.open-editor(index); }
+			    }
+			}
 		    }
 		}
 	    }
@@ -218,6 +237,210 @@ component MeetingsPage {
 		clicked => { root.free-slots(); }
 	    }
 	}
+    }
+}
+
+component EditorPage {
+    in property <float> ui-scale;
+    in property <string> title;
+    in property <string> time-range;
+    in property <string> duration;
+    in property <bool> attendees-warning;
+    in property <bool> loading;
+    in property <bool> busy;
+    in property <string> notice;
+    in property <string> unassigned;
+    in property <bool> over;
+    in property <bool> has-template;
+    in property <[EditorRow]> rows;
+
+    callback set-label(int, string);
+    callback set-minutes(int, int);
+    callback set-included(int, bool);
+    callback move-up(int);
+    callback move-down(int);
+    callback remove-row(int);
+    callback add-row();
+    callback reset();
+    callback save();
+    callback delete-template();
+    callback start-meeting();
+    callback back();
+
+    VerticalBox {
+        padding: 15px * root.ui-scale;
+        spacing: 6px * root.ui-scale;
+
+        Text {
+            text: root.title;
+            font-size: 20px * root.ui-scale;
+            overflow: elide;
+        }
+
+        Text {
+            text: root.time-range + "  ·  " + root.duration;
+            font-size: 12px * root.ui-scale;
+        }
+
+        if root.attendees-warning : Text {
+            text: "Lista partecipanti incompleta: aggiungi le voci mancanti";
+            color: #C682F5;
+            font-size: 12px * root.ui-scale;
+            wrap: word-wrap;
+        }
+
+        if root.loading : Text {
+            text: "Caricamento…";
+            font-size: 14px * root.ui-scale;
+            vertical-stretch: 1;
+        }
+
+        if !root.loading : ListView {
+            vertical-stretch: 1;
+
+            for row[index] in root.rows : Rectangle {
+                height: 44px * root.ui-scale;
+                opacity: row.included ? 1 : 0.5;
+
+                HorizontalLayout {
+                    padding-right: 8px * root.ui-scale;
+                    padding-top: 2px * root.ui-scale;
+                    padding-bottom: 2px * root.ui-scale;
+                    spacing: 6px * root.ui-scale;
+
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        alignment: center;
+
+                        LineEdit {
+                            text <=> row.label;
+                            font-size: 12px * root.ui-scale;
+                            edited(text) => { root.set-label(index, text); }
+                        }
+
+                        if row.attendee : Text {
+                            text: row.email;
+                            font-size: 9px * root.ui-scale;
+                            overflow: elide;
+                        }
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        SpinBox {
+                            width: 70px * root.ui-scale;
+                            minimum: 0;
+                            maximum: 600;
+                            value <=> row.minutes;
+                            edited(value) => { root.set-minutes(index, value); }
+                        }
+                    }
+
+                    Text {
+                        text: "min";
+                        font-size: 12px * root.ui-scale;
+                        vertical-alignment: center;
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        Button {
+                            text: "su";
+                            enabled: index > 0;
+                            clicked => { root.move-up(index); }
+                        }
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        Button {
+                            text: "giù";
+                            enabled: index < root.rows.length - 1;
+                            clicked => { root.move-down(index); }
+                        }
+                    }
+
+                    if row.attendee : VerticalLayout {
+                        alignment: center;
+
+                        CheckBox {
+                            text: "incluso";
+                            checked <=> row.included;
+                            toggled => { root.set-included(index, self.checked); }
+                        }
+                    }
+
+                    if !row.attendee : VerticalLayout {
+                        alignment: center;
+
+                        Button {
+                            text: "Rimuovi";
+                            clicked => { root.remove-row(index); }
+                        }
+                    }
+                }
+            }
+        }
+
+        if root.notice != "" : Text {
+            text: root.notice;
+            color: #C682F5;
+            font-size: 12px * root.ui-scale;
+        }
+
+        Text {
+            text: root.unassigned;
+            color: root.over ? #C682F5 : Palette.foreground;
+            font-size: 14px * root.ui-scale;
+        }
+
+        HorizontalLayout {
+            spacing: 6px * root.ui-scale;
+            alignment: start;
+
+            Button {
+                text: "Aggiungi voce";
+                enabled: !root.loading;
+                clicked => { root.add-row(); }
+            }
+
+            Button {
+                text: "Ripristina slot uguali";
+                enabled: !root.loading;
+                clicked => { root.reset(); }
+            }
+
+            Button {
+                text: "Salva come preferenza";
+                enabled: !root.loading && !root.busy;
+                clicked => { root.save(); }
+            }
+
+            if root.has-template : Button {
+                text: "Elimina preferenza";
+                enabled: !root.loading && !root.busy;
+                clicked => { root.delete-template(); }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 10px * root.ui-scale;
+            alignment: start;
+
+            AccentButton {
+                text: "Avvia";
+                font-size: 14px * root.ui-scale;
+                clicked => { if (!root.loading) { root.start-meeting(); } }
+            }
+
+            Button {
+                text: "Indietro";
+                clicked => { root.back(); }
+            }
+        }
     }
 }
 
@@ -337,6 +560,8 @@ export component MainWindow inherits Window {
     forward-focus: scope;
 
     property <bool> on-top: false;
+    // Single-letter shortcuts are off on the editor page, where names are typed.
+    property <bool> letter-keys-enabled: page != Page.EditorPage;
 
     always-on-top: on-top;
 
@@ -362,6 +587,17 @@ export component MainWindow inherits Window {
     in property     <bool>     slots-warning;
     in property     <bool>     plan-loading;
     in property     <bool>     plan-warning;
+    in property     <[EditorRow]> editor-rows;
+    in property     <string>   editor-title;
+    in property     <string>   editor-time-range;
+    in property     <string>   editor-duration;
+    in property     <bool>     editor-attendees-warning;
+    in property     <bool>     editor-loading;
+    in property     <bool>     editor-busy;
+    in property     <string>   editor-notice;
+    in property     <string>   editor-unassigned;
+    in property     <bool>     editor-over;
+    in property     <bool>     editor-has-template;
 
     callback select-time(int);
     callback compute-options();
@@ -380,6 +616,26 @@ export component MainWindow inherits Window {
     callback close-finished();
     callback logout();
     callback next-slot();
+    callback open-editor(int);
+    callback editor-set-label(int, string);
+    callback editor-set-minutes(int, int);
+    callback editor-set-included(int, bool);
+    callback editor-move-up(int);
+    callback editor-move-down(int);
+    callback editor-remove-row(int);
+    callback editor-add-row();
+    callback editor-reset();
+    callback editor-save();
+    callback editor-delete();
+    callback editor-start();
+    callback editor-back();
+
+    // Leaving the editor drops its focused text field: give the focus back to the shortcuts.
+    changed page => {
+        if (page != Page.EditorPage) {
+            scope.focus();
+        }
+    }
 
     if is-macos: MenuBar {
 	Menu {
@@ -402,11 +658,13 @@ export component MainWindow inherits Window {
     scope := FocusScope {
         KeyBinding {
             keys: @keys(Q);
+            enabled: root.letter-keys-enabled;
             activated => { quit(); }
         }
 
         KeyBinding {
             keys: @keys(M);
+            enabled: root.letter-keys-enabled;
             activated => { fullscreen(false); }
         }
 
@@ -417,16 +675,19 @@ export component MainWindow inherits Window {
 
         KeyBinding {
             keys: @keys(T);
+            enabled: root.letter-keys-enabled;
             activated => { on-top = !on-top; }
         }
 
         KeyBinding {
             keys: @keys(H);
+            enabled: root.letter-keys-enabled;
             activated => { help(); }
         }
 
         KeyBinding {
             keys: @keys(N);
+            enabled: root.letter-keys-enabled;
             activated => { next-slot(); }
         }
     }
@@ -518,9 +779,39 @@ export component MainWindow inherits Window {
 	loading: root.meetings-loading;
 	error: root.meetings-error;
 	select(index) => { select-meeting(index); }
+	open-editor(index) => { root.open-editor(index); }
 	refresh => { refresh-meetings(); }
 	logout => { logout(); }
 	free-slots => { set-selection-page(); }
+    }
+
+    if page == Page.EditorPage : EditorPage {
+	width: root.width;
+	height: root.height;
+	ui-scale: root.ui-scale;
+	title: root.editor-title;
+	time-range: root.editor-time-range;
+	duration: root.editor-duration;
+	attendees-warning: root.editor-attendees-warning;
+	loading: root.editor-loading;
+	busy: root.editor-busy;
+	notice: root.editor-notice;
+	unassigned: root.editor-unassigned;
+	over: root.editor-over;
+	has-template: root.editor-has-template;
+	rows: root.editor-rows;
+	set-label(index, text) => { root.editor-set-label(index, text); }
+	set-minutes(index, value) => { root.editor-set-minutes(index, value); }
+	set-included(index, included) => { root.editor-set-included(index, included); }
+	move-up(index) => { root.editor-move-up(index); }
+	move-down(index) => { root.editor-move-down(index); }
+	remove-row(index) => { root.editor-remove-row(index); }
+	add-row => { root.editor-add-row(); }
+	reset => { root.editor-reset(); }
+	save => { root.editor-save(); }
+	delete-template => { root.editor-delete(); }
+	start-meeting => { root.editor-start(); }
+	back => { root.editor-back(); }
     }
 
     if page == Page.LoadingPage : VerticalBox {

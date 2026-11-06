@@ -15,13 +15,13 @@ use std::time::Duration;
 
 use chrono::{DateTime, FixedOffset, Local, TimeZone};
 use log::{debug, info, warn};
-use schisaciaccole_core::api::{Me, Meeting, SlotPlan};
+use schisaciaccole_core::api::{Me, Meeting, SlotPlan, Template};
 
 use crate::backend::{BackendClient, BackendError};
 use crate::login::{self, LoginError, LoopbackServer};
 use crate::pkce;
 use crate::session_store::{self, KeyringStore, MemoryStore, SessionStore};
-use crate::state::{AppState, OFFLINE_NOTICE};
+use crate::state::{AppState, OFFLINE_NOTICE, TemplateDelete, TemplateSave};
 
 /// How long the login waits for the browser to come back.
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(5 * 60);
@@ -52,13 +52,43 @@ pub enum AppEvent {
     },
     /// The slot plan fetch `request` ended.
     PlanLoaded {
-        /// Id given by [`Session::spawn_plan_fetch`].
+        /// Id given by [`Session::spawn_plan_fetch`], counted per purpose.
         request: u64,
+        /// What the plan was asked for.
+        purpose: PlanPurpose,
         /// Meeting the plan was asked for.
         event_id: String,
         /// The plan, or why it could not be fetched.
         result: Result<SlotPlan, BackendError>,
     },
+    /// The template save `request` ended.
+    TemplateSaved {
+        /// Id given by [`Session::spawn_template_save`].
+        request: u64,
+        /// Meeting of the editor that asked for the save.
+        event_id: String,
+        /// The saved template, or why it could not be saved.
+        result: Result<Template, BackendError>,
+    },
+    /// The template deletion `request` ended.
+    TemplateDeleted {
+        /// Id given by [`Session::spawn_template_delete`].
+        request: u64,
+        /// Meeting of the editor that asked for the deletion.
+        event_id: String,
+        /// Nothing, or why the template could not be deleted.
+        result: Result<(), BackendError>,
+    },
+}
+
+/// What a slot plan is fetched for; each purpose has its own request ids, so a result is only
+/// ever applied where it was asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlanPurpose {
+    /// Speaking slots of the countdown that has just started.
+    Timer,
+    /// Rows of the slot editor.
+    Editor,
 }
 
 /// What the startup check found.
@@ -159,8 +189,12 @@ pub struct Session {
     next_attempt: Cell<u64>,
     /// Id of the latest meetings fetch; the results of older ones are ignored.
     meetings_request: Cell<u64>,
-    /// Id of the latest slot plan fetch; the results of older ones are ignored.
+    /// Id of the latest slot plan fetch for the timer; the results of older ones are ignored.
     plan_request: Cell<u64>,
+    /// Id of the latest slot plan fetch for the editor; the results of older ones are ignored.
+    editor_plan_request: Cell<u64>,
+    /// Id of the latest template save or deletion; the results of older ones are ignored.
+    template_request: Cell<u64>,
 }
 
 impl Session {
@@ -187,6 +221,8 @@ impl Session {
             next_attempt: Cell::new(0),
             meetings_request: Cell::new(0),
             plan_request: Cell::new(0),
+            editor_plan_request: Cell::new(0),
+            template_request: Cell::new(0),
         })
     }
 
@@ -290,13 +326,16 @@ impl Session {
         self.meetings_request.get() == request
     }
 
-    /// Fetches the slot plan of meeting `event_id` on a worker and posts [`AppEvent::PlanLoaded`].
+    /// Fetches the slot plan of meeting `event_id` for `purpose` on a worker and posts
+    /// [`AppEvent::PlanLoaded`].
     ///
-    /// Each call supersedes the previous one: see [`Session::is_current_plan_request`]. When the
-    /// worker cannot be started a generic failure is posted.
-    pub fn spawn_plan_fetch(&self, event_id: &str) {
-        let request = self.plan_request.get().wrapping_add(1);
-        self.plan_request.set(request);
+    /// Each call supersedes the previous one with the same purpose: see
+    /// [`Session::is_current_plan_request`]. When the worker cannot be started a generic failure
+    /// is posted.
+    pub fn spawn_plan_fetch(&self, event_id: &str, purpose: PlanPurpose) {
+        let counter = self.plan_counter(purpose);
+        let request = counter.get().wrapping_add(1);
+        counter.set(request);
 
         let client = self.client.clone();
         let worker_event_id = event_id.to_string();
@@ -304,6 +343,7 @@ impl Session {
             let result = lock(&client).fetch_plan(&worker_event_id);
             post(AppEvent::PlanLoaded {
                 request,
+                purpose,
                 event_id: worker_event_id,
                 result,
             });
@@ -312,15 +352,100 @@ impl Session {
             warn!("Cannot start the plan fetch: {e}");
             post(AppEvent::PlanLoaded {
                 request,
+                purpose,
                 event_id: event_id.to_string(),
                 result: Err(BackendError::Decode),
             });
         }
     }
 
-    /// True when `request` is the latest plan fetch, so its result is still wanted.
-    pub fn is_current_plan_request(&self, request: u64) -> bool {
-        self.plan_request.get() == request
+    /// True when `request` is the latest plan fetch for `purpose`, so its result is still
+    /// wanted.
+    pub fn is_current_plan_request(&self, purpose: PlanPurpose, request: u64) -> bool {
+        self.plan_counter(purpose).get() == request
+    }
+
+    /// Request id counter of the plan fetches for `purpose`.
+    fn plan_counter(&self, purpose: PlanPurpose) -> &Cell<u64> {
+        match purpose {
+            PlanPurpose::Timer => &self.plan_request,
+            PlanPurpose::Editor => &self.editor_plan_request,
+        }
+    }
+
+    /// Saves a slot template on a worker and posts [`AppEvent::TemplateSaved`].
+    ///
+    /// Each template save or deletion supersedes the previous one: see
+    /// [`Session::is_current_template_request`]. When the worker cannot be started a generic
+    /// failure is posted.
+    pub fn spawn_template_save(&self, save: TemplateSave) {
+        let request = self.next_template_request();
+        let client = self.client.clone();
+        let TemplateSave {
+            event_id,
+            request: body,
+        } = save;
+        let worker_event_id = event_id.clone();
+        let spawned = spawn("template-save", move || {
+            let result = lock(&client).save_template(&body);
+            post(AppEvent::TemplateSaved {
+                request,
+                event_id: worker_event_id,
+                result,
+            });
+        });
+        if let Err(e) = spawned {
+            warn!("Cannot start the template save: {e}");
+            post(AppEvent::TemplateSaved {
+                request,
+                event_id,
+                result: Err(BackendError::Decode),
+            });
+        }
+    }
+
+    /// Deletes a slot template on a worker and posts [`AppEvent::TemplateDeleted`].
+    ///
+    /// Each template save or deletion supersedes the previous one: see
+    /// [`Session::is_current_template_request`]. When the worker cannot be started a generic
+    /// failure is posted.
+    pub fn spawn_template_delete(&self, delete: TemplateDelete) {
+        let request = self.next_template_request();
+        let client = self.client.clone();
+        let TemplateDelete {
+            event_id,
+            template_id,
+        } = delete;
+        let worker_event_id = event_id.clone();
+        let spawned = spawn("template-delete", move || {
+            let result = lock(&client).delete_template(&template_id);
+            post(AppEvent::TemplateDeleted {
+                request,
+                event_id: worker_event_id,
+                result,
+            });
+        });
+        if let Err(e) = spawned {
+            warn!("Cannot start the template deletion: {e}");
+            post(AppEvent::TemplateDeleted {
+                request,
+                event_id,
+                result: Err(BackendError::Decode),
+            });
+        }
+    }
+
+    /// Takes the id of a new template request.
+    fn next_template_request(&self) -> u64 {
+        let request = self.template_request.get().wrapping_add(1);
+        self.template_request.set(request);
+        request
+    }
+
+    /// True when `request` is the latest template save or deletion, so its result is still
+    /// wanted.
+    pub fn is_current_template_request(&self, request: u64) -> bool {
+        self.template_request.get() == request
     }
 
     /// Revokes the session on a worker and posts [`AppEvent::LoggedOut`].
@@ -342,10 +467,13 @@ impl Session {
     }
 }
 
-/// Applies a worker event to the UI state. Results of stale login attempts, meetings fetches and
-/// plan fetches are dropped, and so are meetings results when no account is signed in.
+/// Applies a worker event to the UI state. Results of stale login attempts, meetings fetches,
+/// plan fetches and template requests are dropped, and so are meetings results when no account
+/// is signed in. A plan result goes to the timer or to the editor, as its purpose says.
 ///
-/// A plan failure never ends the session: it only changes the slots of the running meeting.
+/// A plan failure never ends the session: it only changes the slots of the running meeting or
+/// the editor rows. A successful template save or deletion starts a meetings fetch, so the
+/// saved-slots marker of the list follows.
 pub fn apply_event(state: &mut AppState, session: &Session, event: AppEvent) {
     match event {
         AppEvent::StartupChecked(StartupOutcome::SignedIn(me)) => state.on_signed_in(&me),
@@ -383,14 +511,44 @@ pub fn apply_event(state: &mut AppState, session: &Session, event: AppEvent) {
         }
         AppEvent::PlanLoaded {
             request,
+            purpose,
             event_id,
             result,
         } => {
-            if !session.is_current_plan_request(request) {
-                debug!("Ignoring the result of plan request {request}");
+            if !session.is_current_plan_request(purpose, request) {
+                debug!("Ignoring the result of {purpose:?} plan request {request}");
                 return;
             }
-            state.on_plan_loaded(&event_id, result);
+            match purpose {
+                PlanPurpose::Timer => state.on_plan_loaded(&event_id, result),
+                PlanPurpose::Editor => state.on_editor_plan_loaded(&event_id, result),
+            }
+        }
+        AppEvent::TemplateSaved {
+            request,
+            event_id,
+            result,
+        } => {
+            if !session.is_current_template_request(request) {
+                debug!("Ignoring the result of template request {request}");
+                return;
+            }
+            if state.on_template_saved(&event_id, result) {
+                session.spawn_meetings_fetch();
+            }
+        }
+        AppEvent::TemplateDeleted {
+            request,
+            event_id,
+            result,
+        } => {
+            if !session.is_current_template_request(request) {
+                debug!("Ignoring the result of template request {request}");
+                return;
+            }
+            if state.on_template_deleted(&event_id, result) {
+                session.spawn_meetings_fetch();
+            }
         }
     }
 }
@@ -463,7 +621,9 @@ fn spawn(name: &str, job: impl FnOnce() + Send + 'static) -> std::io::Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::tests::{sample_state, state_on_timer};
+    use crate::state::tests::{
+        sample_state, state_on_editor, state_on_loading_editor, state_on_timer,
+    };
     use crate::ui::Page;
     use schisaciaccole_core::api::{AUTH_TOKEN_PATH, ME_PATH};
     use serde_json::json;
@@ -487,6 +647,8 @@ mod tests {
             next_attempt: Cell::new(0),
             meetings_request: Cell::new(0),
             plan_request: Cell::new(0),
+            editor_plan_request: Cell::new(0),
+            template_request: Cell::new(0),
         }
     }
 
@@ -678,6 +840,7 @@ mod tests {
     fn plan_event(request: u64, result: Result<SlotPlan, BackendError>) -> AppEvent {
         AppEvent::PlanLoaded {
             request,
+            purpose: PlanPurpose::Timer,
             event_id: "now".to_string(),
             result,
         }
@@ -714,6 +877,174 @@ mod tests {
         assert_eq!(state.page(), Page::TimerPage);
         assert!(state.is_signed_in());
         assert!(state.has_plan_warning());
+    }
+
+    fn editor_plan_event(request: u64, result: Result<SlotPlan, BackendError>) -> AppEvent {
+        AppEvent::PlanLoaded {
+            request,
+            purpose: PlanPurpose::Editor,
+            event_id: "now".to_string(),
+            result,
+        }
+    }
+
+    #[test]
+    fn current_editor_plan_fills_the_editor() {
+        let session = offline_session();
+        session.editor_plan_request.set(1);
+        let mut state = state_on_loading_editor(&["Bob", "Ann"]);
+
+        apply_event(
+            &mut state,
+            &session,
+            editor_plan_event(1, Err(BackendError::Unreachable)),
+        );
+
+        assert!(!state.is_editor_loading());
+        assert_eq!(state.editor_labels(), vec!["Ann", "Bob"]);
+        assert_eq!(state.page(), Page::EditorPage);
+    }
+
+    // The editor counter is behind while the timer counter matches the request id.
+    #[test]
+    fn stale_editor_plan_is_ignored_even_when_the_timer_id_matches() {
+        let session = offline_session();
+        session.plan_request.set(1);
+        session.editor_plan_request.set(2);
+        let mut state = state_on_loading_editor(&["Bob", "Ann"]);
+
+        apply_event(
+            &mut state,
+            &session,
+            editor_plan_event(1, Err(BackendError::Unreachable)),
+        );
+
+        assert!(state.is_editor_loading());
+    }
+
+    #[test]
+    fn timer_plan_event_does_not_reach_the_editor() {
+        let session = offline_session();
+        session.plan_request.set(1);
+        session.editor_plan_request.set(1);
+        let mut state = state_on_loading_editor(&["Bob", "Ann"]);
+
+        apply_event(
+            &mut state,
+            &session,
+            plan_event(1, Err(BackendError::Unreachable)),
+        );
+
+        assert!(state.is_editor_loading());
+        assert!(state.editor_labels().is_empty());
+    }
+
+    #[test]
+    fn editor_plan_event_does_not_reach_the_timer() {
+        let session = offline_session();
+        session.plan_request.set(1);
+        session.editor_plan_request.set(1);
+        let mut state = state_on_timer(&["Carl", "Ann", "Bob"], false);
+
+        apply_event(
+            &mut state,
+            &session,
+            editor_plan_event(1, Err(BackendError::Unreachable)),
+        );
+
+        assert!(state.is_plan_pending());
+        assert!(!state.has_plan_warning());
+    }
+
+    fn saved_event(request: u64, result: Result<Template, BackendError>) -> AppEvent {
+        AppEvent::TemplateSaved {
+            request,
+            event_id: "now".to_string(),
+            result,
+        }
+    }
+
+    fn template() -> Template {
+        Template {
+            id: "t9".to_string(),
+            meeting_title: "now".to_string(),
+            entries: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn saved_template_refreshes_the_meetings() {
+        let session = offline_session();
+        let mut state = state_on_editor(&["Bob", "Ann"]);
+        let save = state.start_template_save().unwrap();
+        session.template_request.set(1);
+        let before = session.meetings_request.get();
+
+        apply_event(&mut state, &session, saved_event(1, Ok(template())));
+
+        assert_eq!(save.event_id, "now");
+        assert_eq!(state.editor_template_id().as_deref(), Some("t9"));
+        assert_eq!(session.meetings_request.get(), before + 1);
+    }
+
+    #[test]
+    fn failed_save_does_not_refresh_the_meetings() {
+        let session = offline_session();
+        let mut state = state_on_editor(&["Bob", "Ann"]);
+        let _ = state.start_template_save();
+        session.template_request.set(1);
+
+        apply_event(
+            &mut state,
+            &session,
+            saved_event(1, Err(BackendError::Unreachable)),
+        );
+
+        assert_eq!(session.meetings_request.get(), 0);
+        assert_eq!(state.page(), Page::EditorPage);
+    }
+
+    #[test]
+    fn stale_template_result_is_ignored() {
+        let session = offline_session();
+        let mut state = state_on_editor(&["Bob", "Ann"]);
+        let _ = state.start_template_save();
+        session.template_request.set(2);
+
+        apply_event(&mut state, &session, saved_event(1, Ok(template())));
+
+        assert_eq!(state.editor_template_id(), None);
+        assert_eq!(session.meetings_request.get(), 0);
+    }
+
+    #[test]
+    fn deleted_template_refreshes_the_meetings() {
+        let session = offline_session();
+        let mut state = state_on_editor(&["Bob", "Ann"]);
+        let _ = state.start_template_save();
+        let _ = state.on_template_saved("now", Ok(template()));
+        let _ = state.start_template_delete().unwrap();
+        session.template_request.set(1);
+
+        let event = AppEvent::TemplateDeleted {
+            request: 1,
+            event_id: "now".to_string(),
+            result: Ok(()),
+        };
+        apply_event(&mut state, &session, event);
+
+        assert_eq!(state.editor_template_id(), None);
+        assert_eq!(session.meetings_request.get(), 1);
+    }
+
+    #[test]
+    fn plan_fetches_count_per_purpose() {
+        let session = offline_session();
+        session.editor_plan_request.set(4);
+
+        assert!(session.is_current_plan_request(PlanPurpose::Timer, 0));
+        assert!(session.is_current_plan_request(PlanPurpose::Editor, 4));
+        assert!(!session.is_current_plan_request(PlanPurpose::Timer, 4));
     }
 
     #[test]

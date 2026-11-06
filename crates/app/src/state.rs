@@ -5,15 +5,19 @@ use std::rc::Rc;
 
 use chrono::{DateTime, FixedOffset, Local, TimeZone};
 use log::{debug, error, info, warn};
-use schisaciaccole_core::api::{Me, Meeting, PlanEntry, SlotPlan};
-use schisaciaccole_core::{
-    DEFAULT_OPTION_COUNT, QuarterOption, SlotSchedule, TickOutcome, TimeError, build_plan,
-    evaluate, participants, quarter_options, resolve_target,
+use schisaciaccole_core::api::{
+    EntryKind, Me, Meeting, PlanEntry, PutTemplateRequest, SlotPlan, Template, error_codes,
 };
-use slint::{ModelRc, VecModel};
+use schisaciaccole_core::{
+    DEFAULT_OPTION_COUNT, EditorEntry, QuarterOption, SlotSchedule, TickOutcome, TimeError,
+    build_plan, evaluate, participants, quarter_options, resolve_target,
+};
+use slint::{Model, ModelRc, VecModel};
 
 use crate::backend::BackendError;
-use crate::ui::{MainWindow, MeetingRow, Page, StopType, TimeOption};
+use crate::editor::SlotEditor;
+use crate::login::REAUTH_MESSAGE;
+use crate::ui::{EditorRow, MainWindow, MeetingRow, Page, StopType, TimeOption};
 
 /// Login page status while the browser login is in progress.
 pub const LOGIN_WAITING_STATUS: &str = "Completa l'accesso nel browser…";
@@ -23,6 +27,25 @@ pub const OFFLINE_NOTICE: &str = "Server non raggiungibile: modalità locale";
 pub const LOCAL_MODE_NOTICE: &str = "Accesso non disponibile: modalità locale";
 /// Selection page notice while the logout runs.
 pub const LOGOUT_NOTICE: &str = "Disconnessione…";
+
+/// Editor notice when the saved plan could not be loaded.
+const EDITOR_PLAN_FALLBACK_NOTICE: &str = "Preferenza non caricata: slot uguali";
+/// Editor notice while a template save runs.
+const TEMPLATE_SAVING_NOTICE: &str = "Salvataggio…";
+/// Editor notice after a template save.
+const TEMPLATE_SAVED_NOTICE: &str = "Preferenza salvata";
+/// Editor notice when the backend rejects the template as invalid.
+const TEMPLATE_INVALID_NOTICE: &str = "Preferenza non valida";
+/// Editor notice when a template save fails for any other reason.
+const TEMPLATE_SAVE_FAILED_NOTICE: &str = "Salvataggio non riuscito";
+/// Editor notice while a template deletion runs.
+const TEMPLATE_DELETING_NOTICE: &str = "Eliminazione…";
+/// Editor notice after a template deletion.
+const TEMPLATE_DELETED_NOTICE: &str = "Preferenza eliminata";
+/// Editor notice when a template deletion fails.
+const TEMPLATE_DELETE_FAILED_NOTICE: &str = "Eliminazione non riuscita";
+/// Editor notice when "Avvia" is pressed after the meeting ended.
+const MEETING_OVER_NOTICE: &str = "Il meeting è già terminato";
 
 /// Sound the caller must play after a state update.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,6 +76,35 @@ struct MeetingRun {
     started_at: DateTime<Local>,
     /// True until the plan result (or its fallback) has been applied.
     plan_pending: bool,
+}
+
+/// Template save the caller must send; see [`AppState::start_template_save`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TemplateSave {
+    /// Meeting of the editor that asked for the save; its result must come back with it.
+    pub event_id: String,
+    /// Template to save.
+    pub request: PutTemplateRequest,
+}
+
+/// Template deletion the caller must send; see [`AppState::start_template_delete`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TemplateDelete {
+    /// Meeting of the editor that asked for the deletion; its result must come back with it.
+    pub event_id: String,
+    /// Id of the template to delete.
+    pub template_id: String,
+}
+
+/// Editor page open on one meeting.
+struct OpenEditor {
+    editor: SlotEditor,
+    /// True until the plan result (or its fallback) has filled the rows.
+    loading: bool,
+    /// True while a template save or deletion runs.
+    busy: bool,
+    /// Status line of the editor page; empty when there is none.
+    notice: &'static str,
 }
 
 /// What the meetings page shows besides the rows.
@@ -98,6 +150,9 @@ pub struct AppState {
     run: Option<MeetingRun>,
     /// True when the saved plan could not be loaded and equal slots are used instead.
     plan_fallback: bool,
+    /// Slot editor of the editor page; `None` on every other page.
+    editor: Option<OpenEditor>,
+    editor_model: Rc<VecModel<EditorRow>>,
 }
 
 impl AppState {
@@ -130,6 +185,8 @@ impl AppState {
             slots_warning: false,
             run: None,
             plan_fallback: false,
+            editor: None,
+            editor_model: Rc::new(VecModel::from(Vec::new())),
         })
     }
 
@@ -213,23 +270,11 @@ impl AppState {
             return nothing;
         };
 
-        let now = Local::now();
-        let target = meeting.end.with_timezone(&Local);
-        let slots_warning = meeting.attendees_omitted;
-        let run = MeetingRun {
-            event_id: meeting.event_id.clone(),
-            meeting: meeting.clone(),
-            started_at: now,
-            plan_pending: true,
-        };
-        info!("select_meeting: target={}", target.format("%H:%M"));
-
-        self.clear_slots();
-        self.slots_warning = slots_warning;
-        self.run = Some(run);
-        self.page = Page::TimerPage;
-        self.target = Some(target);
-        let sound = self.tick();
+        info!(
+            "select_meeting: target={}",
+            meeting.end.with_timezone(&Local).format("%H:%M")
+        );
+        let sound = self.start_run(meeting.clone(), Local::now(), true);
         let plan_event_id = self
             .run
             .as_ref()
@@ -239,6 +284,57 @@ impl AppState {
             sound,
             plan_event_id,
         }
+    }
+
+    /// Starts the countdown to the end of `meeting`, clicked at `now`, and moves to the timer page.
+    ///
+    /// Drops any speaking slots, warnings and open editor, sets the attendees warning of the
+    /// meeting and records it as running; `plan_pending` tells whether a slot plan is still
+    /// expected for it. Returns the sound of the first update (see [`AppState::tick`]), which
+    /// may already stop the countdown when the meeting is over.
+    fn start_run(
+        &mut self,
+        meeting: Meeting,
+        now: DateTime<Local>,
+        plan_pending: bool,
+    ) -> TickSound {
+        let target = meeting.end.with_timezone(&Local);
+        self.clear_slots();
+        self.editor = None;
+        self.slots_warning = meeting.attendees_omitted;
+        self.run = Some(MeetingRun {
+            event_id: meeting.event_id.clone(),
+            meeting,
+            started_at: now,
+            plan_pending,
+        });
+        self.page = Page::TimerPage;
+        self.target = Some(target);
+        self.tick()
+    }
+
+    /// Splits the time from `started_at` to `target` into speaking slots by the `weighted`
+    /// entries, in order, and stores the index of the slot covering `now`.
+    ///
+    /// Edge cases: with fewer than two slots, or slots that would be too short, the countdown
+    /// stays plain (no slots).
+    fn install_slots(
+        &mut self,
+        weighted: Vec<(String, u64)>,
+        started_at: &DateTime<Local>,
+        target: &DateTime<Local>,
+        now: &DateTime<Local>,
+    ) {
+        let slots = SlotSchedule::new(weighted, started_at, target);
+        self.slot_index = slots
+            .as_ref()
+            .and_then(|schedule| schedule.current(now))
+            .map(|view| view.index);
+        info!(
+            "install_slots: slots={}",
+            slots.as_ref().map_or(0, SlotSchedule::len)
+        );
+        self.slots = slots;
     }
 
     /// Applies the slot plan fetched for `event_id`; see [`AppState::apply_plan`].
@@ -285,16 +381,352 @@ impl AppState {
                 weighted_slots(&equal)
             }
         };
-        let slots = SlotSchedule::new(weighted, &started_at, &target);
-        self.slot_index = slots
-            .as_ref()
-            .and_then(|schedule| schedule.current(now))
-            .map(|view| view.index);
+        self.install_slots(weighted, &started_at, &target, now);
+    }
+
+    /// Opens the slot editor on the meeting in row `index` and moves to the editor page.
+    ///
+    /// The editor starts without rows, loading: the caller must fetch the slot plan of the
+    /// returned event id for the editor and pass the result to
+    /// [`AppState::on_editor_plan_loaded`].
+    ///
+    /// Edge cases: a negative `index` or one out of range is logged and ignored; the state does
+    /// not change and `None` is returned.
+    pub fn open_editor(&mut self, index: i32) -> Option<String> {
+        let Ok(position) = usize::try_from(index) else {
+            warn!("open_editor: ignoring negative meeting index {index}");
+            return None;
+        };
+        let Some(meeting) = self.shown.get(position) else {
+            warn!("open_editor: ignoring out of range meeting index {index}");
+            return None;
+        };
+
+        let editor = SlotEditor::new(meeting.clone());
+        let event_id = editor.event_id().to_string();
+        self.editor = Some(OpenEditor {
+            editor,
+            loading: true,
+            busy: false,
+            notice: "",
+        });
+        self.page = Page::EditorPage;
+        Some(event_id)
+    }
+
+    /// Leaves the editor for the meetings page (see [`AppState::show_home`]) and drops its rows;
+    /// results still on their way for it are ignored when they arrive.
+    pub fn close_editor(&mut self) {
+        self.editor = None;
+        self.page = self.home_page();
+    }
+
+    /// Fills the editor rows from the slot plan fetched for `event_id`.
+    ///
+    /// On success the rows come from the plan over the nominal meeting duration and the
+    /// template id of the plan is remembered. On any error, whatever it is, the rows come from
+    /// the equal plan of the participants and a notice says so; the session is never ended by
+    /// a plan failure.
+    ///
+    /// Edge cases: the result is dropped when the editor is not open on `event_id` or its plan
+    /// was already applied.
+    pub fn on_editor_plan_loaded(
+        &mut self,
+        event_id: &str,
+        result: Result<SlotPlan, BackendError>,
+    ) {
+        let Some(open) = self.editor_on(event_id) else {
+            debug!("on_editor_plan_loaded: editor not open on the meeting, dropping the plan");
+            return;
+        };
+        if !open.loading {
+            debug!("on_editor_plan_loaded: plan already applied, dropping it");
+            return;
+        }
+        open.loading = false;
+        match result {
+            Ok(plan) => open.editor.load_plan(&plan),
+            Err(err) => {
+                warn!("on_editor_plan_loaded: plan not loaded, using equal slots: {err}");
+                open.editor.reset_to_equal();
+                open.notice = EDITOR_PLAN_FALLBACK_NOTICE;
+            }
+        }
+    }
+
+    /// Sets the label of editor row `index`; see [`SlotEditor::set_label`].
+    ///
+    /// Edge cases: ignored without an editor, while its plan loads, or for a negative or out of
+    /// range index (logged).
+    pub fn editor_set_label(&mut self, index: i32, label: &str) {
+        if let (Some(row), Some(editor)) = (row_index(index), self.editable()) {
+            editor.set_label(row, label);
+        }
+    }
+
+    /// Sets the minutes of editor row `index`, clamped; see [`SlotEditor::set_minutes`].
+    ///
+    /// Edge cases: as for [`AppState::editor_set_label`].
+    pub fn editor_set_minutes(&mut self, index: i32, minutes: i32) {
+        if let (Some(row), Some(editor)) = (row_index(index), self.editable()) {
+            editor.set_minutes(row, minutes);
+        }
+    }
+
+    /// Includes or excludes the attendee of editor row `index`; see
+    /// [`SlotEditor::set_included`].
+    ///
+    /// Edge cases: as for [`AppState::editor_set_label`]; manual rows stay included.
+    pub fn editor_set_included(&mut self, index: i32, included: bool) {
+        if let (Some(row), Some(editor)) = (row_index(index), self.editable()) {
+            editor.set_included(row, included);
+        }
+    }
+
+    /// Moves editor row `index` one place up; see [`SlotEditor::move_up`].
+    ///
+    /// Edge cases: as for [`AppState::editor_set_label`]; the first row does not move.
+    pub fn editor_move_up(&mut self, index: i32) {
+        if let (Some(row), Some(editor)) = (row_index(index), self.editable()) {
+            editor.move_up(row);
+        }
+    }
+
+    /// Moves editor row `index` one place down; see [`SlotEditor::move_down`].
+    ///
+    /// Edge cases: as for [`AppState::editor_set_label`]; the last row does not move.
+    pub fn editor_move_down(&mut self, index: i32) {
+        if let (Some(row), Some(editor)) = (row_index(index), self.editable()) {
+            editor.move_down(row);
+        }
+    }
+
+    /// Removes editor row `index` when it was added by hand; see [`SlotEditor::remove_row`].
+    ///
+    /// Edge cases: as for [`AppState::editor_set_label`]; attendee rows are kept.
+    pub fn editor_remove_row(&mut self, index: i32) {
+        if let (Some(row), Some(editor)) = (row_index(index), self.editable()) {
+            editor.remove_row(row);
+        }
+    }
+
+    /// Appends a manual row to the editor; see [`SlotEditor::add_manual_row`].
+    ///
+    /// Edge cases: ignored without an editor, while its plan loads, or at the row limit.
+    pub fn editor_add_row(&mut self) {
+        if let Some(editor) = self.editable() {
+            editor.add_manual_row();
+        }
+    }
+
+    /// Replaces the editor rows with the equal plan, keeping the template id; see
+    /// [`SlotEditor::reset_to_equal`].
+    ///
+    /// Edge cases: ignored without an editor or while its plan loads.
+    pub fn editor_reset(&mut self) {
+        if let Some(editor) = self.editable() {
+            editor.reset_to_equal();
+        }
+    }
+
+    /// Starts the countdown of the edited meeting now, with speaking slots from the editor rows,
+    /// and moves to the timer page. No plan is fetched: the slots are built at once.
+    ///
+    /// The time from now to the meeting end is split by the saved form of the rows (see
+    /// [`SlotEditor::start_slots`]) with the same rules as a fetched plan. Returns the sound of
+    /// the first update (see [`AppState::tick`]).
+    ///
+    /// Edge cases: without an editor or while its plan loads nothing happens. When the meeting
+    /// is already over the editor stays open with a notice. With fewer than two slots, or slots
+    /// too short, the countdown is plain.
+    #[must_use]
+    pub fn start_from_editor(&mut self) -> TickSound {
+        let now = Local::now();
+        let Some(open) = self.editor.as_mut() else {
+            debug!("start_from_editor: no editor");
+            return TickSound::None;
+        };
+        if open.loading {
+            debug!("start_from_editor: plan still loading");
+            return TickSound::None;
+        }
+        if open.editor.meeting().end <= now {
+            warn!("start_from_editor: the meeting is over");
+            open.notice = MEETING_OVER_NOTICE;
+            return TickSound::None;
+        }
+
+        let meeting = open.editor.meeting().clone();
+        let weighted = open.editor.start_slots();
         info!(
-            "apply_plan: slots={}",
-            slots.as_ref().map_or(0, SlotSchedule::len)
+            "start_from_editor: target={}",
+            meeting.end.with_timezone(&Local).format("%H:%M")
         );
-        self.slots = slots;
+        let sound = self.start_run(meeting, now, false);
+        if let Some(target) = self.target {
+            self.install_slots(weighted, &now, &target, &now);
+        }
+        sound
+    }
+
+    /// Starts saving the editor rows as the template of the meeting title.
+    ///
+    /// Returns the request the caller must send; its result goes to
+    /// [`AppState::on_template_saved`]. Until then the editor is busy and says it is saving.
+    ///
+    /// Edge cases: returns `None` and changes nothing without an editor, while its plan loads,
+    /// or while another save or deletion runs.
+    pub fn start_template_save(&mut self) -> Option<TemplateSave> {
+        let open = self.idle_editor()?;
+        open.busy = true;
+        open.notice = TEMPLATE_SAVING_NOTICE;
+        Some(TemplateSave {
+            event_id: open.editor.event_id().to_string(),
+            request: open.editor.save_request(),
+        })
+    }
+
+    /// Applies the result of the template save started for `event_id`.
+    ///
+    /// On success the template id is remembered and a notice confirms the save; the return
+    /// value is then `true`: the caller must fetch the meetings again so their saved-slots
+    /// marker follows. On error the rows are kept: a missing or dead session ends it as a
+    /// meetings fetch does (login page), a 400 shows "invalid", anything else a failure notice.
+    ///
+    /// Edge cases: the result is dropped (`false`) when the editor is no longer open on
+    /// `event_id` or no request runs for it.
+    #[must_use]
+    pub fn on_template_saved(
+        &mut self,
+        event_id: &str,
+        result: Result<Template, BackendError>,
+    ) -> bool {
+        let Some(open) = self.busy_editor(event_id) else {
+            debug!("on_template_saved: editor gone or not saving, dropping the result");
+            return false;
+        };
+        open.busy = false;
+        match result {
+            Ok(template) => {
+                open.editor.set_template_id(Some(template.id));
+                open.notice = TEMPLATE_SAVED_NOTICE;
+                true
+            }
+            Err(err) => {
+                self.on_template_failed(err, TEMPLATE_INVALID_NOTICE, TEMPLATE_SAVE_FAILED_NOTICE);
+                false
+            }
+        }
+    }
+
+    /// Starts deleting the saved template of the edited meeting.
+    ///
+    /// Returns what the caller must send; its result goes to [`AppState::on_template_deleted`].
+    /// Until then the editor is busy and says it is deleting.
+    ///
+    /// Edge cases: returns `None` and changes nothing without an editor, without a known
+    /// template, while its plan loads, or while another save or deletion runs.
+    pub fn start_template_delete(&mut self) -> Option<TemplateDelete> {
+        let open = self.idle_editor()?;
+        let template_id = open.editor.template_id()?.to_string();
+        open.busy = true;
+        open.notice = TEMPLATE_DELETING_NOTICE;
+        Some(TemplateDelete {
+            event_id: open.editor.event_id().to_string(),
+            template_id,
+        })
+    }
+
+    /// Applies the result of the template deletion started for `event_id`.
+    ///
+    /// On success, or when the template was already gone (404 `not_found`), the template id is
+    /// forgotten, the rows go back to the equal plan and a notice confirms it; the return value
+    /// is then `true`: the caller must fetch the meetings again. Other errors are handled as for
+    /// [`AppState::on_template_saved`], with a deletion failure notice.
+    ///
+    /// Edge cases: the result is dropped (`false`) when the editor is no longer open on
+    /// `event_id` or no request runs for it.
+    #[must_use]
+    pub fn on_template_deleted(
+        &mut self,
+        event_id: &str,
+        result: Result<(), BackendError>,
+    ) -> bool {
+        let Some(open) = self.busy_editor(event_id) else {
+            debug!("on_template_deleted: editor gone or not deleting, dropping the result");
+            return false;
+        };
+        open.busy = false;
+        match result {
+            Err(err) if !is_not_found(&err) => {
+                self.on_template_failed(
+                    err,
+                    TEMPLATE_DELETE_FAILED_NOTICE,
+                    TEMPLATE_DELETE_FAILED_NOTICE,
+                );
+                false
+            }
+            _ => {
+                open.editor.set_template_id(None);
+                open.editor.reset_to_equal();
+                open.notice = TEMPLATE_DELETED_NOTICE;
+                true
+            }
+        }
+    }
+
+    /// Handles a failed template request: a missing or dead session is lost (login page), a
+    /// 400 shows `invalid` on the editor and any other error shows `failed`.
+    fn on_template_failed(
+        &mut self,
+        error: BackendError,
+        invalid: &'static str,
+        failed: &'static str,
+    ) {
+        match error {
+            BackendError::NotLoggedIn => self.on_session_lost(""),
+            BackendError::ReauthRequired => self.on_session_lost(REAUTH_MESSAGE),
+            other => {
+                warn!("Template request failed: {other}");
+                let notice = match other {
+                    BackendError::Server { status: 400, .. } => invalid,
+                    _ => failed,
+                };
+                if let Some(open) = self.editor.as_mut() {
+                    open.notice = notice;
+                }
+            }
+        }
+    }
+
+    /// Open editor on the meeting `event_id`, if any.
+    fn editor_on(&mut self, event_id: &str) -> Option<&mut OpenEditor> {
+        self.editor
+            .as_mut()
+            .filter(|open| open.editor.event_id() == event_id)
+    }
+
+    /// Open editor on the meeting `event_id` while one of its requests runs, if any.
+    fn busy_editor(&mut self, event_id: &str) -> Option<&mut OpenEditor> {
+        self.editor_on(event_id).filter(|open| open.busy)
+    }
+
+    /// Open editor that may send a request: loaded and with no request running.
+    fn idle_editor(&mut self) -> Option<&mut OpenEditor> {
+        self.editor
+            .as_mut()
+            .filter(|open| !open.loading && !open.busy)
+    }
+
+    /// Editor whose rows may change: open and loaded.
+    fn editable(&mut self) -> Option<&mut SlotEditor> {
+        match self.editor.as_mut() {
+            Some(open) if !open.loading => Some(&mut open.editor),
+            _ => {
+                debug!("Editor not open or still loading, ignoring the change");
+                None
+            }
+        }
     }
 
     /// Updates the countdown against the current time.
@@ -481,9 +913,11 @@ impl AppState {
         self.page = Page::LoadingPage;
     }
 
-    /// Records the signed-in account and moves to the meetings page, waiting for a fetch.
+    /// Records the signed-in account and moves to the meetings page, waiting for a fetch. Any
+    /// open editor is dropped.
     pub fn on_signed_in(&mut self, me: &Me) {
         self.account = Some(account_label(me));
+        self.editor = None;
         self.notice = "";
         self.login_status = "";
         self.login_waiting = false;
@@ -491,18 +925,22 @@ impl AppState {
         self.page = Page::MeetingsPage;
     }
 
-    /// Moves to the idle login page with `status` (empty for none), forgetting any account.
+    /// Moves to the idle login page with `status` (empty for none), forgetting any account and
+    /// dropping any open editor.
     pub fn on_login_required(&mut self, status: &'static str) {
         self.forget_meetings();
+        self.editor = None;
         self.account = None;
         self.login_status = status;
         self.login_waiting = false;
         self.page = Page::LoginPage;
     }
 
-    /// Moves to the selection page without an account, showing `notice` (empty for none).
+    /// Moves to the selection page without an account, showing `notice` (empty for none). Any
+    /// open editor is dropped.
     pub fn on_local_mode(&mut self, notice: &'static str) {
         self.account = None;
+        self.editor = None;
         self.notice = notice;
         self.login_waiting = false;
         self.page = Page::SelectionPage;
@@ -527,9 +965,10 @@ impl AppState {
     }
 
     /// Hides the account (and its meetings) while the logout runs and tells the user it is in progress, on the
-    /// selection page.
+    /// selection page. Any open editor is dropped.
     pub fn on_logout_started(&mut self) {
         self.forget_meetings();
+        self.editor = None;
         self.account = None;
         self.notice = LOGOUT_NOTICE;
         self.page = Page::SelectionPage;
@@ -556,7 +995,12 @@ impl AppState {
         window.set_meetings(ModelRc::from(self.meetings_model.clone()));
     }
 
-    /// Pushes page, running state, timer, account and status lines to `window`.
+    /// Binds the shared editor rows model to `window`; call once after creating the window.
+    pub fn bind_editor_rows(&self, window: &MainWindow) {
+        window.set_editor_rows(ModelRc::from(self.editor_model.clone()));
+    }
+
+    /// Pushes page, running state, timer, account, status lines and editor to `window`.
     pub fn render(&self, window: &MainWindow) {
         window.set_page(self.page);
         window.set_running_state(self.target.is_some());
@@ -593,6 +1037,34 @@ impl AppState {
                 window.set_next_slot_name("".into());
             }
         }
+        self.render_editor(window);
+    }
+
+    /// Pushes the editor header, rows, footer and status to `window`. Without an editor the
+    /// rows are emptied and the other editor properties are left as they are (not shown).
+    fn render_editor(&self, window: &MainWindow) {
+        let Some(open) = self.editor.as_ref() else {
+            sync_editor_rows(&self.editor_model, &[]);
+            return;
+        };
+        let editor = &open.editor;
+        let meeting = editor.meeting();
+        sync_editor_rows(&self.editor_model, editor.rows());
+        window.set_editor_title(meeting.title.as_str().into());
+        window.set_editor_time_range(time_range(meeting, &Local).into());
+        window.set_editor_duration(format!("Durata {} min", editor.duration_minutes()).into());
+        window.set_editor_attendees_warning(meeting.attendees_omitted);
+        window.set_editor_loading(open.loading);
+        window.set_editor_busy(open.busy);
+        window.set_editor_notice(open.notice.into());
+        let unassigned = if open.loading {
+            String::new()
+        } else {
+            editor.unassigned_text()
+        };
+        window.set_editor_unassigned(unassigned.into());
+        window.set_editor_over(editor.is_over());
+        window.set_editor_has_template(editor.template_id().is_some());
     }
 }
 
@@ -648,6 +1120,40 @@ impl AppState {
     pub fn is_login_waiting(&self) -> bool {
         self.login_waiting
     }
+
+    /// True while the editor page is open.
+    pub fn has_editor(&self) -> bool {
+        self.editor.is_some()
+    }
+
+    /// True while the editor waits for its plan.
+    pub fn is_editor_loading(&self) -> bool {
+        self.editor.as_ref().is_some_and(|open| open.loading)
+    }
+
+    /// Labels of the editor rows; empty without an editor.
+    pub fn editor_labels(&self) -> Vec<String> {
+        match self.editor.as_ref() {
+            Some(open) => open
+                .editor
+                .rows()
+                .iter()
+                .map(|row| row.label.clone())
+                .collect(),
+            None => Vec::new(),
+        }
+    }
+
+    /// Template id known to the editor.
+    pub fn editor_template_id(&self) -> Option<String> {
+        let open = self.editor.as_ref()?;
+        open.editor.template_id().map(str::to_string)
+    }
+
+    /// Status line of the editor; empty without an editor.
+    pub fn editor_notice(&self) -> &'static str {
+        self.editor.as_ref().map_or("", |open| open.notice)
+    }
 }
 
 /// Name shown for the signed-in account: the display name, or the email when the display name
@@ -680,9 +1186,55 @@ fn visible_meetings(meetings: &[Meeting], now: &DateTime<FixedOffset>) -> Vec<Me
     shown
 }
 
+/// Converts a negative row index from the UI into `None` (logged).
+fn row_index(index: i32) -> Option<usize> {
+    match usize::try_from(index) {
+        Ok(row) => Some(row),
+        Err(_) => {
+            debug!("Ignoring negative editor row {index}");
+            None
+        }
+    }
+}
+
+/// True when `error` says the requested resource does not exist (404 `not_found`).
+fn is_not_found(error: &BackendError) -> bool {
+    matches!(
+        error,
+        BackendError::Server { status: 404, code, .. } if code == error_codes::NOT_FOUND
+    )
+}
+
+/// Builds the UI row of an editor entry. Minutes above `i32::MAX` (never produced by the
+/// editor) are shown as `i32::MAX`.
+fn editor_row(entry: &EditorEntry) -> EditorRow {
+    EditorRow {
+        label: entry.label.as_str().into(),
+        minutes: i32::try_from(entry.minutes).unwrap_or(i32::MAX),
+        included: entry.included,
+        attendee: entry.kind == EntryKind::Attendee,
+        email: entry.email.as_deref().unwrap_or_default().into(),
+    }
+}
+
+/// Makes `model` show `entries`. When the row count is the same only the rows that differ are
+/// replaced, so a row being edited keeps its focus; otherwise the whole model is replaced.
+fn sync_editor_rows(model: &VecModel<EditorRow>, entries: &[EditorEntry]) {
+    if model.row_count() != entries.len() {
+        model.set_vec(entries.iter().map(editor_row).collect::<Vec<_>>());
+        return;
+    }
+    for (position, entry) in entries.iter().enumerate() {
+        let row = editor_row(entry);
+        if model.row_data(position).as_ref() != Some(&row) {
+            model.set_row_data(position, row);
+        }
+    }
+}
+
 /// Turns plan entries into `(label, weight)` slots: entries with weight 0 are skipped, the order
 /// is kept. Empty input gives an empty list.
-fn weighted_slots(entries: &[PlanEntry]) -> Vec<(String, u64)> {
+pub(crate) fn weighted_slots(entries: &[PlanEntry]) -> Vec<(String, u64)> {
     let mut weighted = Vec::with_capacity(entries.len());
     for entry in entries {
         if entry.weight > 0 {
@@ -701,8 +1253,6 @@ fn meeting_row<Tz: TimeZone>(meeting: &Meeting, now: &DateTime<FixedOffset>, tz:
 where
     Tz::Offset: Display,
 {
-    let start = meeting.start.with_timezone(tz);
-    let end = meeting.end.with_timezone(tz);
     let count = meeting.attendees.len();
     let attendees = if count == 1 {
         "1 partecipante".to_string()
@@ -711,12 +1261,22 @@ where
     };
 
     MeetingRow {
-        time_range: format!("{}–{}", start.format("%H:%M"), end.format("%H:%M")).into(),
+        time_range: time_range(meeting, tz).into(),
         title: meeting.title.as_str().into(),
         attendees: attendees.into(),
         in_progress: is_in_progress(meeting, now),
         has_template: meeting.has_template,
     }
+}
+
+/// Formats the start and end of `meeting` in `tz` as `HH:MM–HH:MM`.
+fn time_range<Tz: TimeZone>(meeting: &Meeting, tz: &Tz) -> String
+where
+    Tz::Offset: Display,
+{
+    let start = meeting.start.with_timezone(tz);
+    let end = meeting.end.with_timezone(tz);
+    format!("{}–{}", start.format("%H:%M"), end.format("%H:%M"))
 }
 
 /// Splits quarter options into their end times and the rows the UI shows.
@@ -747,8 +1307,7 @@ where
 pub mod tests {
     use super::*;
     use chrono::{NaiveDate, Utc};
-    use schisaciaccole_core::api::{Attendee, EntryKind, PlanSource, ResponseStatus};
-    use slint::Model;
+    use schisaciaccole_core::api::{Attendee, PlanSource, ResponseStatus};
 
     /// State on the selection page, as at startup without a backend.
     pub fn sample_state() -> AppState {
@@ -1543,5 +2102,580 @@ pub mod tests {
         meeting.has_template = true;
 
         assert!(meeting_row(&meeting, &at(8, 0), &Utc).has_template);
+    }
+
+    /// Signed-in state on the meetings page with one meeting "now" in progress: it started an
+    /// hour ago and ends in 30 minutes (90 minutes nominal), with the given attendees.
+    fn state_with_meeting_in_progress(names: &[&str]) -> AppState {
+        let now = Local::now().fixed_offset();
+        let mut in_progress = meeting(
+            "now",
+            now - chrono::Duration::hours(1),
+            now + chrono::Duration::minutes(30),
+        );
+        in_progress.attendees = names.iter().map(|name| named_attendee(name)).collect();
+        let mut state = sample_state();
+        state.on_signed_in(&me(None));
+        state.on_meetings_loaded(vec![in_progress]);
+        state
+    }
+
+    /// State with the editor open on the meeting "now" and its plan still loading.
+    pub fn state_on_loading_editor(names: &[&str]) -> AppState {
+        let mut state = state_with_meeting_in_progress(names);
+        state.open_editor(0).unwrap();
+        state
+    }
+
+    /// State with the editor open on the meeting "now", filled with the equal plan (30 minutes
+    /// each for three attendees).
+    pub fn state_on_editor(names: &[&str]) -> AppState {
+        let mut state = state_on_loading_editor(names);
+        state.on_editor_plan_loaded("now", Ok(equal_plan(names)));
+        state
+    }
+
+    fn equal_plan(names: &[&str]) -> SlotPlan {
+        SlotPlan {
+            source: PlanSource::Equal,
+            template_id: None,
+            entries: names.iter().map(|name| plan_entry(name, 1)).collect(),
+        }
+    }
+
+    fn template(id: &str) -> Template {
+        Template {
+            id: id.to_string(),
+            meeting_title: "now".to_string(),
+            entries: Vec::new(),
+        }
+    }
+
+    fn server_error(status: u16, code: &str) -> BackendError {
+        BackendError::Server {
+            status,
+            code: code.to_string(),
+            message: String::new(),
+        }
+    }
+
+    fn editor(state: &AppState) -> &SlotEditor {
+        &state.editor.as_ref().unwrap().editor
+    }
+
+    /// Editor filled from the saved template "t1", which gives every attendee the same weight.
+    fn state_with_template(names: &[&str]) -> AppState {
+        let mut state = state_on_loading_editor(names);
+        let plan = plan_of(names.iter().map(|name| plan_entry(name, 1)).collect());
+        state.on_editor_plan_loaded("now", Ok(plan));
+        state
+    }
+
+    #[test]
+    fn opening_the_editor_shows_loading_and_asks_for_the_plan() {
+        let mut state = state_with_meeting_in_progress(&["Ann", "Bob"]);
+
+        let event_id = state.open_editor(0);
+
+        assert_eq!(event_id.as_deref(), Some("now"));
+        assert_eq!(state.page, Page::EditorPage);
+        assert!(state.is_editor_loading());
+        assert!(state.editor_labels().is_empty());
+        assert_eq!(state.target, None);
+    }
+
+    #[test]
+    fn opening_the_editor_out_of_range_changes_nothing() {
+        let mut state = state_with_meeting_in_progress(&["Ann", "Bob"]);
+
+        assert_eq!(state.open_editor(1), None);
+        assert_eq!(state.open_editor(-1), None);
+
+        assert_eq!(state.page, Page::MeetingsPage);
+        assert!(!state.has_editor());
+    }
+
+    #[test]
+    fn editor_plan_fills_the_rows_and_the_template_id() {
+        let mut state = state_on_loading_editor(&["Carl", "Ann", "Bob"]);
+        let plan = plan_of(vec![
+            plan_entry("Bob", 1),
+            plan_entry("Ann", 2),
+            plan_entry("Carl", 0),
+        ]);
+
+        state.on_editor_plan_loaded("now", Ok(plan));
+
+        assert_eq!(state.editor_labels(), vec!["Bob", "Ann", "Carl"]);
+        assert_eq!(editor(&state).rows()[1].minutes, 60);
+        assert_eq!(state.editor_template_id().as_deref(), Some("t1"));
+        assert!(!state.is_editor_loading());
+        assert_eq!(state.editor_notice(), "");
+    }
+
+    #[test]
+    fn editor_plan_does_not_start_the_timer() {
+        let mut state = state_on_loading_editor(&["Ann", "Bob"]);
+
+        state.on_editor_plan_loaded("now", Ok(equal_plan(&["Ann", "Bob"])));
+
+        assert_eq!(state.page, Page::EditorPage);
+        assert_eq!(state.target, None);
+        assert!(!state.has_slots());
+    }
+
+    #[test]
+    fn editor_plan_is_not_applied_to_the_timer() {
+        let mut state = state_on_timer(&["Carl", "Ann", "Bob"], false);
+
+        state.on_editor_plan_loaded("now", Ok(equal_plan(&["Ann", "Bob"])));
+
+        assert!(state.is_plan_pending());
+        assert!(!state.has_slots());
+    }
+
+    #[test]
+    fn timer_plan_is_not_applied_to_the_editor() {
+        let mut state = state_on_loading_editor(&["Ann", "Bob"]);
+
+        state.on_plan_loaded("now", Ok(equal_plan(&["Ann", "Bob"])));
+
+        assert!(state.is_editor_loading());
+        assert!(state.editor_labels().is_empty());
+        assert_eq!(state.target, None);
+    }
+
+    #[test]
+    fn editor_plan_error_gives_equal_rows_and_a_notice() {
+        let mut state = state_on_loading_editor(&["Carl", "Ann", "Bob"]);
+
+        state.on_editor_plan_loaded("now", Err(BackendError::NotLoggedIn));
+
+        assert_eq!(state.editor_labels(), vec!["Ann", "Bob", "Carl"]);
+        assert!(editor(&state).rows().iter().all(|row| row.minutes == 30));
+        assert_eq!(state.editor_notice(), EDITOR_PLAN_FALLBACK_NOTICE);
+        assert_eq!(state.editor_template_id(), None);
+        assert!(state.is_signed_in());
+        assert_eq!(state.page, Page::EditorPage);
+    }
+
+    #[test]
+    fn editor_plan_for_another_meeting_is_dropped() {
+        let mut state = state_on_loading_editor(&["Ann", "Bob"]);
+
+        state.on_editor_plan_loaded("other", Ok(equal_plan(&["Ann", "Bob"])));
+
+        assert!(state.is_editor_loading());
+    }
+
+    #[test]
+    fn editor_plan_applied_twice_keeps_the_first_result() {
+        let mut state = state_on_editor(&["Ann", "Bob"]);
+
+        state.on_editor_plan_loaded("now", Err(BackendError::Unreachable));
+
+        assert_eq!(state.editor_notice(), "");
+    }
+
+    #[test]
+    fn editor_plan_after_leaving_the_editor_is_dropped() {
+        let mut state = state_on_loading_editor(&["Ann", "Bob"]);
+        state.close_editor();
+
+        state.on_editor_plan_loaded("now", Ok(equal_plan(&["Ann", "Bob"])));
+
+        assert!(!state.has_editor());
+        assert_eq!(state.page, Page::MeetingsPage);
+    }
+
+    #[test]
+    fn closing_the_editor_goes_back_to_the_meetings() {
+        let mut state = state_on_editor(&["Ann", "Bob"]);
+
+        state.close_editor();
+
+        assert_eq!(state.page, Page::MeetingsPage);
+        assert!(!state.has_editor());
+    }
+
+    #[test]
+    fn rows_cannot_change_while_the_plan_loads() {
+        let mut state = state_on_loading_editor(&["Ann", "Bob"]);
+
+        state.editor_add_row();
+        state.editor_reset();
+
+        assert!(state.editor_labels().is_empty());
+    }
+
+    #[test]
+    fn row_operations_reach_the_editor() {
+        let mut state = state_on_editor(&["Ann", "Bob", "Carl"]);
+
+        state.editor_move_down(0);
+        state.editor_set_label(2, "Carlo");
+        state.editor_set_minutes(2, 700);
+        state.editor_set_included(0, false);
+        state.editor_add_row();
+        state.editor_remove_row(3);
+
+        assert_eq!(state.editor_labels(), vec!["Bob", "Ann", "Carlo"]);
+        assert_eq!(editor(&state).rows()[2].minutes, 600);
+        assert!(!editor(&state).rows()[0].included);
+    }
+
+    #[test]
+    fn negative_row_index_is_ignored() {
+        let mut state = state_on_editor(&["Ann", "Bob", "Carl"]);
+
+        state.editor_set_label(-1, "X");
+        state.editor_move_up(-1);
+        state.editor_remove_row(-1);
+
+        assert_eq!(state.editor_labels(), vec!["Ann", "Bob", "Carl"]);
+    }
+
+    #[test]
+    fn starting_from_the_editor_builds_slots_from_its_rows() {
+        let mut state = state_on_editor(&["Ann", "Bob", "Carl"]);
+        state.editor_set_included(1, false);
+
+        let sound = state.start_from_editor();
+
+        assert_eq!(sound, TickSound::None);
+        assert_eq!(state.page, Page::TimerPage);
+        assert!(!state.is_plan_pending());
+        assert!(!state.has_editor());
+        let schedule = state.slots.as_ref().unwrap();
+        // Ann, Carl and the 30 unassigned minutes share the 30 minutes left equally.
+        assert_eq!(schedule.len(), 3);
+        let view = schedule.current(&Local::now()).unwrap();
+        assert_eq!(view.name, "Ann");
+        assert_eq!(view.next_name.as_deref(), Some("Carl"));
+        assert!(view.remaining_ms > 9 * 60 * 1000 && view.remaining_ms <= 10 * 60 * 1000);
+        assert_eq!(state.slot_index, Some(0));
+    }
+
+    #[test]
+    fn starting_from_the_editor_counts_down_to_the_meeting_end() {
+        let mut state = state_on_editor(&["Ann", "Bob"]);
+        let end = editor(&state).meeting().end;
+
+        let _ = state.start_from_editor();
+
+        assert_eq!(state.target, Some(end.with_timezone(&Local)));
+        assert!(state.timer_ms > 0);
+    }
+
+    #[test]
+    fn starting_while_the_plan_loads_does_nothing() {
+        let mut state = state_on_loading_editor(&["Ann", "Bob"]);
+
+        let sound = state.start_from_editor();
+
+        assert_eq!(sound, TickSound::None);
+        assert_eq!(state.page, Page::EditorPage);
+        assert_eq!(state.target, None);
+    }
+
+    #[test]
+    fn starting_after_the_meeting_ended_stays_on_the_editor() {
+        let mut state = state_on_editor(&["Ann", "Bob"]);
+        let now = Local::now().fixed_offset();
+        let ended = meeting(
+            "now",
+            now - chrono::Duration::hours(1),
+            now - chrono::Duration::minutes(1),
+        );
+        state.editor.as_mut().unwrap().editor = SlotEditor::new(ended);
+
+        let sound = state.start_from_editor();
+
+        assert_eq!(sound, TickSound::None);
+        assert_eq!(state.page, Page::EditorPage);
+        assert_eq!(state.target, None);
+        assert_eq!(state.editor_notice(), MEETING_OVER_NOTICE);
+    }
+
+    #[test]
+    fn save_sends_the_rows_with_the_meeting_title() {
+        let mut state = state_on_editor(&["Ann", "Bob"]);
+        state.editor_set_minutes(0, 10);
+
+        let save = state.start_template_save().unwrap();
+
+        assert_eq!(save.event_id, "now");
+        assert_eq!(save.request.meeting_title, "now");
+        assert_eq!(save.request.entries.len(), 3);
+        assert_eq!(state.editor_notice(), TEMPLATE_SAVING_NOTICE);
+        assert!(state.editor.as_ref().unwrap().busy);
+    }
+
+    #[test]
+    fn save_is_refused_while_another_runs() {
+        let mut state = state_on_editor(&["Ann", "Bob"]);
+        let _ = state.start_template_save();
+
+        assert_eq!(state.start_template_save(), None);
+        assert_eq!(state.start_template_delete(), None);
+    }
+
+    #[test]
+    fn save_is_refused_while_the_plan_loads() {
+        let mut state = state_on_loading_editor(&["Ann", "Bob"]);
+
+        assert_eq!(state.start_template_save(), None);
+    }
+
+    #[test]
+    fn saved_template_is_remembered_and_asks_for_a_refresh() {
+        let mut state = state_on_editor(&["Ann", "Bob"]);
+        let _ = state.start_template_save();
+
+        let refresh = state.on_template_saved("now", Ok(template("t9")));
+
+        assert!(refresh);
+        assert_eq!(state.editor_template_id().as_deref(), Some("t9"));
+        assert_eq!(state.editor_notice(), TEMPLATE_SAVED_NOTICE);
+        assert!(!state.editor.as_ref().unwrap().busy);
+    }
+
+    #[test]
+    fn save_without_session_shows_the_login() {
+        let mut state = state_on_editor(&["Ann", "Bob"]);
+        let _ = state.start_template_save();
+
+        let refresh = state.on_template_saved("now", Err(BackendError::NotLoggedIn));
+
+        assert!(!refresh);
+        assert_eq!(state.page, Page::LoginPage);
+        assert!(!state.is_signed_in());
+        assert!(!state.has_editor());
+    }
+
+    #[test]
+    fn save_needing_reauth_shows_the_login_with_a_message() {
+        let mut state = state_on_editor(&["Ann", "Bob"]);
+        let _ = state.start_template_save();
+
+        let _ = state.on_template_saved("now", Err(BackendError::ReauthRequired));
+
+        assert_eq!(state.page, Page::LoginPage);
+        assert_eq!(state.login_status, REAUTH_MESSAGE);
+    }
+
+    #[test]
+    fn rejected_save_keeps_the_rows_with_a_notice() {
+        let mut state = state_on_editor(&["Ann", "Bob"]);
+        state.editor_set_minutes(0, 12);
+        let _ = state.start_template_save();
+
+        let refresh = state.on_template_saved("now", Err(server_error(400, "invalid_request")));
+
+        assert!(!refresh);
+        assert_eq!(state.page, Page::EditorPage);
+        assert_eq!(state.editor_notice(), TEMPLATE_INVALID_NOTICE);
+        assert_eq!(editor(&state).rows()[0].minutes, 12);
+        assert_eq!(state.editor_template_id(), None);
+    }
+
+    #[test]
+    fn failed_save_shows_a_notice() {
+        let mut state = state_on_editor(&["Ann", "Bob"]);
+        let _ = state.start_template_save();
+
+        let refresh = state.on_template_saved("now", Err(BackendError::Unreachable));
+
+        assert!(!refresh);
+        assert_eq!(state.editor_notice(), TEMPLATE_SAVE_FAILED_NOTICE);
+        assert!(state.start_template_save().is_some());
+    }
+
+    #[test]
+    fn save_result_after_leaving_the_editor_is_dropped() {
+        let mut state = state_on_editor(&["Ann", "Bob"]);
+        let _ = state.start_template_save();
+        state.close_editor();
+
+        let refresh = state.on_template_saved("now", Err(BackendError::NotLoggedIn));
+
+        assert!(!refresh);
+        assert_eq!(state.page, Page::MeetingsPage);
+        assert!(state.is_signed_in());
+    }
+
+    #[test]
+    fn save_result_without_a_running_save_is_dropped() {
+        let mut state = state_on_editor(&["Ann", "Bob"]);
+
+        let refresh = state.on_template_saved("now", Ok(template("t9")));
+
+        assert!(!refresh);
+        assert_eq!(state.editor_template_id(), None);
+    }
+
+    #[test]
+    fn delete_needs_a_known_template() {
+        let mut state = state_on_editor(&["Ann", "Bob"]);
+
+        assert_eq!(state.start_template_delete(), None);
+        assert_eq!(state.editor_notice(), "");
+    }
+
+    #[test]
+    fn delete_sends_the_template_id() {
+        let mut state = state_with_template(&["Ann", "Bob"]);
+
+        let delete = state.start_template_delete().unwrap();
+
+        assert_eq!(delete.event_id, "now");
+        assert_eq!(delete.template_id, "t1");
+        assert_eq!(state.editor_notice(), TEMPLATE_DELETING_NOTICE);
+    }
+
+    #[test]
+    fn deleted_template_resets_to_equal_rows() {
+        let mut state = state_with_template(&["Ann", "Bob"]);
+        state.editor_set_minutes(0, 1);
+        let _ = state.start_template_delete();
+
+        let refresh = state.on_template_deleted("now", Ok(()));
+
+        assert!(refresh);
+        assert_eq!(state.editor_template_id(), None);
+        assert!(editor(&state).rows().iter().all(|row| row.minutes == 45));
+        assert_eq!(state.editor_notice(), TEMPLATE_DELETED_NOTICE);
+    }
+
+    #[test]
+    fn template_already_gone_counts_as_deleted() {
+        let mut state = state_with_template(&["Ann", "Bob"]);
+        let _ = state.start_template_delete();
+
+        let refresh =
+            state.on_template_deleted("now", Err(server_error(404, error_codes::NOT_FOUND)));
+
+        assert!(refresh);
+        assert_eq!(state.editor_template_id(), None);
+        assert_eq!(state.editor_notice(), TEMPLATE_DELETED_NOTICE);
+    }
+
+    #[test]
+    fn failed_delete_keeps_the_template() {
+        let mut state = state_with_template(&["Ann", "Bob"]);
+        let _ = state.start_template_delete();
+
+        let refresh = state.on_template_deleted("now", Err(server_error(500, "internal")));
+
+        assert!(!refresh);
+        assert_eq!(state.editor_template_id().as_deref(), Some("t1"));
+        assert_eq!(state.editor_notice(), TEMPLATE_DELETE_FAILED_NOTICE);
+    }
+
+    #[test]
+    fn delete_without_session_shows_the_login() {
+        let mut state = state_with_template(&["Ann", "Bob"]);
+        let _ = state.start_template_delete();
+
+        let _ = state.on_template_deleted("now", Err(BackendError::NotLoggedIn));
+
+        assert_eq!(state.page, Page::LoginPage);
+    }
+
+    #[test]
+    fn delete_result_for_another_meeting_is_dropped() {
+        let mut state = state_with_template(&["Ann", "Bob"]);
+        let _ = state.start_template_delete();
+
+        let refresh = state.on_template_deleted("other", Ok(()));
+
+        assert!(!refresh);
+        assert_eq!(state.editor_template_id().as_deref(), Some("t1"));
+    }
+
+    #[test]
+    fn delete_result_after_leaving_the_editor_is_dropped() {
+        let mut state = state_with_template(&["Ann", "Bob"]);
+        let _ = state.start_template_delete();
+        state.close_editor();
+
+        let refresh = state.on_template_deleted("now", Ok(()));
+
+        assert!(!refresh);
+        assert!(!state.has_editor());
+    }
+
+    #[test]
+    fn losing_the_session_drops_the_editor() {
+        let mut state = state_on_editor(&["Ann", "Bob"]);
+
+        state.on_session_lost("");
+
+        assert!(!state.has_editor());
+    }
+
+    fn editor_entry(label: &str, minutes: u32) -> EditorEntry {
+        EditorEntry {
+            kind: EntryKind::Attendee,
+            email: Some(format!("{}@x.it", label.to_lowercase())),
+            label: label.to_string(),
+            minutes,
+            included: true,
+        }
+    }
+
+    #[test]
+    fn editor_row_shows_attendee_email_and_minutes() {
+        let row = editor_row(&editor_entry("Ann", 7));
+
+        assert_eq!(row.label, "Ann");
+        assert_eq!(row.minutes, 7);
+        assert!(row.attendee);
+        assert!(row.included);
+        assert_eq!(row.email, "ann@x.it");
+    }
+
+    #[test]
+    fn manual_editor_row_has_no_email() {
+        let mut entry = editor_entry("Voce", 5);
+        entry.kind = EntryKind::Manual;
+        entry.email = None;
+
+        let row = editor_row(&entry);
+
+        assert!(!row.attendee);
+        assert_eq!(row.email, "");
+    }
+
+    #[test]
+    fn sync_replaces_only_the_changed_row() {
+        let model = VecModel::from(vec![
+            editor_row(&editor_entry("Ann", 1)),
+            editor_row(&editor_entry("Bob", 1)),
+        ]);
+
+        sync_editor_rows(&model, &[editor_entry("Ann", 1), editor_entry("Bob", 2)]);
+
+        assert_eq!(model.row_count(), 2);
+        assert_eq!(model.row_data(1).unwrap().minutes, 2);
+    }
+
+    #[test]
+    fn sync_with_another_row_count_replaces_the_rows() {
+        let model = VecModel::from(vec![editor_row(&editor_entry("Ann", 1))]);
+
+        sync_editor_rows(&model, &[editor_entry("Bob", 1), editor_entry("Carl", 1)]);
+
+        assert_eq!(model.row_count(), 2);
+        assert_eq!(model.row_data(0).unwrap().label, "Bob");
+    }
+
+    #[test]
+    fn sync_of_no_entries_empties_the_model() {
+        let model = VecModel::from(vec![editor_row(&editor_entry("Ann", 1))]);
+
+        sync_editor_rows(&model, &[]);
+
+        assert_eq!(model.row_count(), 0);
     }
 }
