@@ -429,6 +429,8 @@ export component MainWindow inherits Window {
     }
 
     if page == Page.MeetingsPage : MeetingsPage {
+	width: root.width;
+	height: root.height;
 	ui-scale: root.ui-scale;
 	account-name: root.account-name;
 	meetings: root.meetings;
