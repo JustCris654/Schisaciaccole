@@ -76,15 +76,19 @@ fn main() -> anyhow::Result<()> {
     main_window.on_select_meeting({
         let window_weak = main_window.as_weak();
         let state = app_state.clone();
+        let session = session.clone();
 
         move |index| {
             let Some(window) = window_weak.upgrade() else {
                 return;
             };
             let mut state = state.borrow_mut();
-            let tick_sound = state.select_meeting(index);
+            let selection = state.select_meeting(index);
             state.render(&window);
-            play_for(tick_sound);
+            if let (Some(session), Some(event_id)) = (&session, &selection.plan_event_id) {
+                session.spawn_plan_fetch(event_id);
+            }
+            play_for(selection.sound);
         }
     });
 

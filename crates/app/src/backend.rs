@@ -198,7 +198,6 @@ impl BackendClient {
     /// does not exist and with status 400 when the request is invalid. Otherwise see
     /// [`BackendClient::fetch_me`]; [`BackendError::Unreachable`] is also returned when the
     /// base URL cannot be extended with a path.
-    #[allow(dead_code)]
     pub fn fetch_plan(&mut self, event_id: &str) -> Result<SlotPlan, BackendError> {
         let url = self.segments_url(&["api", "v1", "meetings", event_id, "plan"])?;
         self.json_request(Method::GET, &url, &[], None::<&()>)

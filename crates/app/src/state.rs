@@ -5,13 +5,14 @@ use std::rc::Rc;
 
 use chrono::{DateTime, FixedOffset, Local, TimeZone};
 use log::{debug, error, info, warn};
-use schisaciaccole_core::api::{Me, Meeting};
+use schisaciaccole_core::api::{Me, Meeting, PlanEntry, SlotPlan};
 use schisaciaccole_core::{
-    DEFAULT_OPTION_COUNT, QuarterOption, SlotSchedule, TickOutcome, TimeError, evaluate,
-    participants, quarter_options, resolve_target,
+    DEFAULT_OPTION_COUNT, QuarterOption, SlotSchedule, TickOutcome, TimeError, build_plan,
+    evaluate, participants, quarter_options, resolve_target,
 };
 use slint::{ModelRc, VecModel};
 
+use crate::backend::BackendError;
 use crate::ui::{MainWindow, MeetingRow, Page, StopType, TimeOption};
 
 /// Login page status while the browser login is in progress.
@@ -32,6 +33,26 @@ pub enum TickSound {
     SlotEnd,
     /// The meeting or countdown finished: the finish sound.
     MeetingEnd,
+}
+
+/// What a call to [`AppState::select_meeting`] asks of the caller.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MeetingSelection {
+    /// Sound to play, see [`AppState::tick`].
+    pub sound: TickSound,
+    /// Event id of the meeting whose slot plan the caller must fetch, if any; the result goes to
+    /// [`AppState::on_plan_loaded`].
+    pub plan_event_id: Option<String>,
+}
+
+/// Meeting whose countdown is running, kept to build the speaking slots when its plan arrives.
+struct MeetingRun {
+    event_id: String,
+    meeting: Meeting,
+    /// Instant of the click: the slots split the time from here to the meeting end.
+    started_at: DateTime<Local>,
+    /// True until the plan result (or its fallback) has been applied.
+    plan_pending: bool,
 }
 
 /// What the meetings page shows besides the rows.
@@ -73,6 +94,10 @@ pub struct AppState {
     slot_index: Option<usize>,
     /// True when the attendee list of the selected meeting is incomplete.
     slots_warning: bool,
+    /// Meeting selected from the list while its countdown runs.
+    run: Option<MeetingRun>,
+    /// True when the saved plan could not be loaded and equal slots are used instead.
+    plan_fallback: bool,
 }
 
 impl AppState {
@@ -103,6 +128,8 @@ impl AppState {
             slots: None,
             slot_index: None,
             slots_warning: false,
+            run: None,
+            plan_fallback: false,
         })
     }
 
@@ -162,49 +189,112 @@ impl AppState {
 
     /// Starts the countdown to the end of the meeting in row `index` and moves to the timer page.
     ///
-    /// The time left is split equally among the participants of the meeting (see
-    /// [`schisaciaccole_core::participants`]); with fewer than two participants, or slots that
-    /// would be too short, the countdown stays plain. The attendees warning is set when the
-    /// calendar omitted some attendees, whether or not slots exist. Returns the sound to play,
-    /// which is [`TickSound::MeetingEnd`] only if the end is reached at once (see
-    /// [`AppState::tick`]).
+    /// The countdown starts at once and without speaking slots: the slot plan is fetched by the
+    /// caller, which must do it for the event id in [`MeetingSelection::plan_event_id`] and pass
+    /// the result to [`AppState::on_plan_loaded`]. Until then the timer shows the plan as
+    /// loading. The attendees warning is set when the calendar omitted some attendees. The sound
+    /// is [`TickSound::MeetingEnd`] only if the end is reached at once (see [`AppState::tick`]).
     ///
     /// Edge cases: a negative `index` or one out of range is logged and ignored; the state does
-    /// not change and [`TickSound::None`] is returned.
+    /// not change, the sound is [`TickSound::None`] and there is no plan to fetch. When the
+    /// countdown stops at once (meeting already over) there is no plan to fetch either.
     #[must_use]
-    pub fn select_meeting(&mut self, index: i32) -> TickSound {
+    pub fn select_meeting(&mut self, index: i32) -> MeetingSelection {
+        let nothing = MeetingSelection {
+            sound: TickSound::None,
+            plan_event_id: None,
+        };
         let Ok(position) = usize::try_from(index) else {
             warn!("select_meeting: ignoring negative meeting index {index}");
-            return TickSound::None;
+            return nothing;
         };
         let Some(meeting) = self.shown.get(position) else {
             warn!("select_meeting: ignoring out of range meeting index {index}");
-            return TickSound::None;
+            return nothing;
         };
 
         let now = Local::now();
         let target = meeting.end.with_timezone(&Local);
-        let mut weighted = Vec::with_capacity(meeting.attendees.len());
-        for participant in participants(meeting) {
-            weighted.push((participant.name, 1));
-        }
-        let slots = SlotSchedule::new(weighted, &now, &target);
-        let slot_index = slots
-            .as_ref()
-            .and_then(|schedule| schedule.current(&now))
-            .map(|view| view.index);
-        info!(
-            "select_meeting: target={} slots={}",
-            target.format("%H:%M"),
-            slots.as_ref().map_or(0, SlotSchedule::len)
-        );
+        let slots_warning = meeting.attendees_omitted;
+        let run = MeetingRun {
+            event_id: meeting.event_id.clone(),
+            meeting: meeting.clone(),
+            started_at: now,
+            plan_pending: true,
+        };
+        info!("select_meeting: target={}", target.format("%H:%M"));
 
-        self.slots_warning = meeting.attendees_omitted;
-        self.slots = slots;
-        self.slot_index = slot_index;
+        self.clear_slots();
+        self.slots_warning = slots_warning;
+        self.run = Some(run);
         self.page = Page::TimerPage;
         self.target = Some(target);
-        self.tick()
+        let sound = self.tick();
+        let plan_event_id = self
+            .run
+            .as_ref()
+            .filter(|run| run.plan_pending)
+            .map(|run| run.event_id.clone());
+        MeetingSelection {
+            sound,
+            plan_event_id,
+        }
+    }
+
+    /// Applies the slot plan fetched for `event_id`; see [`AppState::apply_plan`].
+    ///
+    /// Never stops the countdown and never plays a sound, whatever the result.
+    pub fn on_plan_loaded(&mut self, event_id: &str, result: Result<SlotPlan, BackendError>) {
+        self.apply_plan(event_id, result, &Local::now());
+    }
+
+    /// Builds the speaking slots of the running meeting from a plan result, at time `now`.
+    ///
+    /// The time from the click to the meeting end is split by the weights of the plan entries
+    /// above zero, in order. On an error, whatever it is, equal slots for the participants of the
+    /// meeting are used instead and the fallback warning is shown; a running countdown is never
+    /// interrupted by a plan failure. The current slot is the one covering `now`, so a plan that
+    /// arrives late does not replay the slots already over and no sound is due.
+    ///
+    /// Edge cases: the result is dropped when the timer is not running on the meeting
+    /// `event_id` (stopped, another meeting, other page) or when its plan was already applied.
+    /// With fewer than two slots, or slots that would be too short, the countdown stays plain.
+    fn apply_plan(
+        &mut self,
+        event_id: &str,
+        result: Result<SlotPlan, BackendError>,
+        now: &DateTime<Local>,
+    ) {
+        let (Some(target), Some(run)) = (self.target, self.run.as_mut()) else {
+            debug!("apply_plan: no running meeting, dropping the plan");
+            return;
+        };
+        if self.page != Page::TimerPage || run.event_id != event_id || !run.plan_pending {
+            debug!("apply_plan: plan is not for the running meeting, dropping it");
+            return;
+        }
+        run.plan_pending = false;
+        let started_at = run.started_at;
+
+        let weighted = match result {
+            Ok(plan) => weighted_slots(&plan.entries),
+            Err(err) => {
+                warn!("apply_plan: plan not loaded, using equal slots: {err}");
+                let equal = build_plan(&participants(&run.meeting), None);
+                self.plan_fallback = true;
+                weighted_slots(&equal)
+            }
+        };
+        let slots = SlotSchedule::new(weighted, &started_at, &target);
+        self.slot_index = slots
+            .as_ref()
+            .and_then(|schedule| schedule.current(now))
+            .map(|view| view.index);
+        info!(
+            "apply_plan: slots={}",
+            slots.as_ref().map_or(0, SlotSchedule::len)
+        );
+        self.slots = slots;
     }
 
     /// Updates the countdown against the current time.
@@ -280,11 +370,14 @@ impl AppState {
         }
     }
 
-    /// Drops the speaking slots, the seen index and the attendees warning.
+    /// Drops the speaking slots, the seen index, the warnings and the running meeting, so a plan
+    /// still being fetched is ignored when it arrives.
     fn clear_slots(&mut self) {
         self.slots = None;
         self.slot_index = None;
         self.slots_warning = false;
+        self.run = None;
+        self.plan_fallback = false;
     }
 
     /// Ends the countdown: refreshes the options, clears the target and the timer.
@@ -486,6 +579,8 @@ impl AppState {
             .and_then(|schedule| schedule.current(&Local::now()));
         window.set_has_slots(view.is_some());
         window.set_slots_warning(self.slots_warning);
+        window.set_plan_loading(self.run.as_ref().is_some_and(|run| run.plan_pending));
+        window.set_plan_warning(self.plan_fallback);
         match view {
             Some(view) => {
                 window.set_slot_name(view.name.as_str().into());
@@ -534,6 +629,16 @@ impl AppState {
         schedule.current(&Local::now()).map(|view| view.name)
     }
 
+    /// True while the slot plan of the running meeting is being fetched.
+    pub fn is_plan_pending(&self) -> bool {
+        self.run.as_ref().is_some_and(|run| run.plan_pending)
+    }
+
+    /// True when the fallback warning for a plan that could not be loaded is shown.
+    pub fn has_plan_warning(&self) -> bool {
+        self.plan_fallback
+    }
+
     /// True when the attendees warning is shown.
     pub fn has_slots_warning(&self) -> bool {
         self.slots_warning
@@ -575,7 +680,20 @@ fn visible_meetings(meetings: &[Meeting], now: &DateTime<FixedOffset>) -> Vec<Me
     shown
 }
 
-/// Builds the row of `meeting`: times in `tz` as `HH:MM–HH:MM`, the title and the attendee count.
+/// Turns plan entries into `(label, weight)` slots: entries with weight 0 are skipped, the order
+/// is kept. Empty input gives an empty list.
+fn weighted_slots(entries: &[PlanEntry]) -> Vec<(String, u64)> {
+    let mut weighted = Vec::with_capacity(entries.len());
+    for entry in entries {
+        if entry.weight > 0 {
+            weighted.push((entry.label.clone(), entry.weight));
+        }
+    }
+    weighted
+}
+
+/// Builds the row of `meeting`: times in `tz` as `HH:MM–HH:MM`, the title, the attendee count and
+/// whether the meeting has saved slots.
 ///
 /// The count is the length of `attendees`, so it can be short for an event with omitted
 /// attendees; one attendee is "1 partecipante", any other count is plural.
@@ -597,6 +715,7 @@ where
         title: meeting.title.as_str().into(),
         attendees: attendees.into(),
         in_progress: is_in_progress(meeting, now),
+        has_template: meeting.has_template,
     }
 }
 
@@ -628,7 +747,7 @@ where
 pub mod tests {
     use super::*;
     use chrono::{NaiveDate, Utc};
-    use schisaciaccole_core::api::{Attendee, ResponseStatus};
+    use schisaciaccole_core::api::{Attendee, EntryKind, PlanSource, ResponseStatus};
     use slint::Model;
 
     /// State on the selection page, as at startup without a backend.
@@ -842,9 +961,9 @@ pub mod tests {
         let mut state = state_with_meetings();
         let end = state.shown[0].end;
 
-        let sound = state.select_meeting(0);
+        let selection = state.select_meeting(0);
 
-        assert_eq!(sound, TickSound::None);
+        assert_eq!(selection.sound, TickSound::None);
         assert_eq!(state.page, Page::TimerPage);
         assert_eq!(state.target, Some(end.with_timezone(&Local)));
         assert!(state.timer_ms > 0);
@@ -854,8 +973,12 @@ pub mod tests {
     fn selecting_an_out_of_range_meeting_changes_nothing() {
         let mut state = state_with_meetings();
 
-        assert_eq!(state.select_meeting(2), TickSound::None);
-        assert_eq!(state.select_meeting(-1), TickSound::None);
+        let past_the_end = state.select_meeting(2);
+        let negative = state.select_meeting(-1);
+
+        assert_eq!(past_the_end.sound, TickSound::None);
+        assert_eq!(past_the_end.plan_event_id, None);
+        assert_eq!(negative.plan_event_id, None);
 
         assert_eq!(state.page, Page::MeetingsPage);
         assert_eq!(state.target, None);
@@ -1107,7 +1230,7 @@ pub mod tests {
     }
 
     /// State with one meeting in progress (ends in about 30 minutes), selected on the timer page.
-    fn state_on_timer(names: &[&str], attendees_omitted: bool) -> AppState {
+    pub fn state_on_timer(names: &[&str], attendees_omitted: bool) -> AppState {
         let now = Local::now().fixed_offset();
         let mut in_progress = meeting(
             "now",
@@ -1123,9 +1246,16 @@ pub mod tests {
         state
     }
 
+    /// State on the timer with the equal plan of the attendees already applied.
+    fn state_with_equal_slots(names: &[&str]) -> AppState {
+        let mut state = state_on_timer(names, false);
+        state.on_plan_loaded("now", Err(BackendError::Unreachable));
+        state
+    }
+
     #[test]
     fn meeting_with_several_attendees_gets_slots() {
-        let state = state_on_timer(&["Carl", "Ann", "Bob"], false);
+        let state = state_with_equal_slots(&["Carl", "Ann", "Bob"]);
 
         assert!(state.has_slots());
         assert_eq!(state.current_slot_name().as_deref(), Some("Ann"));
@@ -1134,7 +1264,7 @@ pub mod tests {
 
     #[test]
     fn meeting_with_one_attendee_has_no_slots() {
-        let state = state_on_timer(&["Ann"], false);
+        let state = state_with_equal_slots(&["Ann"]);
 
         assert!(!state.has_slots());
         assert_eq!(state.current_slot_name(), None);
@@ -1142,7 +1272,7 @@ pub mod tests {
 
     #[test]
     fn next_slot_without_slots_does_nothing() {
-        let mut state = state_on_timer(&["Ann"], false);
+        let mut state = state_with_equal_slots(&["Ann"]);
         let target = state.target;
 
         state.next_slot();
@@ -1155,7 +1285,7 @@ pub mod tests {
 
     #[test]
     fn next_slot_moves_to_the_second_participant() {
-        let mut state = state_on_timer(&["Carl", "Ann", "Bob"], false);
+        let mut state = state_with_equal_slots(&["Carl", "Ann", "Bob"]);
 
         state.next_slot();
 
@@ -1165,7 +1295,7 @@ pub mod tests {
 
     #[test]
     fn manual_skip_does_not_beep() {
-        let mut state = state_on_timer(&["Carl", "Ann", "Bob"], false);
+        let mut state = state_with_equal_slots(&["Carl", "Ann", "Bob"]);
 
         state.next_slot();
 
@@ -1175,7 +1305,7 @@ pub mod tests {
     // Simulates a slot that ended by itself: the stored index is behind the schedule.
     #[test]
     fn tick_reports_the_end_of_a_slot_once() {
-        let mut state = state_on_timer(&["Carl", "Ann", "Bob"], false);
+        let mut state = state_with_equal_slots(&["Carl", "Ann", "Bob"]);
         state.next_slot();
         state.slot_index = Some(0);
 
@@ -1186,6 +1316,7 @@ pub mod tests {
     #[test]
     fn stop_clears_the_slots() {
         let mut state = state_on_timer(&["Carl", "Ann", "Bob"], true);
+        state.on_plan_loaded("now", Err(BackendError::Unreachable));
 
         state.stop(StopType::UserStopped);
 
@@ -1205,6 +1336,7 @@ pub mod tests {
     #[test]
     fn selecting_a_quarter_clears_the_slots_and_the_warning() {
         let mut state = state_on_timer(&["Carl", "Ann", "Bob"], true);
+        state.on_plan_loaded("now", Err(BackendError::Unreachable));
         state.stop(StopType::UserStopped);
         state.slots_warning = true;
 
@@ -1212,5 +1344,204 @@ pub mod tests {
 
         assert!(!state.has_slots());
         assert!(!state.has_slots_warning());
+        assert!(!state.has_plan_warning());
+    }
+
+    fn plan_entry(label: &str, weight: u64) -> PlanEntry {
+        PlanEntry {
+            kind: EntryKind::Attendee,
+            email: Some(format!("{}@x.it", label.to_lowercase())),
+            label: label.to_string(),
+            weight,
+        }
+    }
+
+    fn plan_of(entries: Vec<PlanEntry>) -> SlotPlan {
+        SlotPlan {
+            source: PlanSource::Template,
+            template_id: Some("t1".to_string()),
+            entries,
+        }
+    }
+
+    /// Timer on a meeting that started 40 minutes ago (click instant) and still has its plan
+    /// pending; returns the state, the click instant and the meeting end.
+    fn pending_state() -> (AppState, DateTime<Local>, DateTime<Local>) {
+        let mut state = state_on_timer(&["Carl", "Ann", "Bob"], false);
+        let target = state.target.unwrap();
+        let started = target - chrono::Duration::minutes(40);
+        state.run.as_mut().unwrap().started_at = started;
+        (state, started, target)
+    }
+
+    #[test]
+    fn selecting_a_meeting_starts_without_slots_and_waits_for_the_plan() {
+        let mut state = state_with_meetings();
+
+        let selection = state.select_meeting(0);
+
+        assert_eq!(selection.plan_event_id.as_deref(), Some("now"));
+        assert_eq!(selection.sound, TickSound::None);
+        assert!(state.timer_ms > 0);
+        assert!(!state.has_slots());
+        assert!(state.is_plan_pending());
+    }
+
+    #[test]
+    fn plan_splits_the_time_from_the_click_by_weight() {
+        let (mut state, started, _) = pending_state();
+        let now = started + chrono::Duration::minutes(10);
+        let plan = plan_of(vec![
+            plan_entry("A", 2),
+            plan_entry("B", 1),
+            plan_entry("C", 1),
+        ]);
+
+        state.apply_plan("now", Ok(plan), &now);
+
+        let view = state.slots.as_ref().unwrap().current(&now).unwrap();
+        assert_eq!(view.name, "A");
+        // First slot is 20 of the 40 minutes, 10 of which are gone.
+        assert_eq!(view.remaining_ms, 10 * 60 * 1000);
+        assert!(!state.is_plan_pending());
+        assert!(!state.has_plan_warning());
+    }
+
+    #[test]
+    fn plan_skips_zero_weight_entries() {
+        let (mut state, started, _) = pending_state();
+        let plan = plan_of(vec![
+            plan_entry("A", 60),
+            plan_entry("B", 0),
+            plan_entry("C", 60),
+        ]);
+
+        state.apply_plan("now", Ok(plan), &started);
+
+        let schedule = state.slots.as_ref().unwrap();
+        assert_eq!(schedule.len(), 2);
+        let view = schedule.current(&started).unwrap();
+        assert_eq!(view.next_name.as_deref(), Some("C"));
+    }
+
+    #[test]
+    fn plan_with_one_positive_entry_stays_a_plain_timer() {
+        let (mut state, started, _) = pending_state();
+        let plan = plan_of(vec![plan_entry("A", 60), plan_entry("B", 0)]);
+
+        state.apply_plan("now", Ok(plan), &started);
+
+        assert!(!state.has_slots());
+        assert_eq!(state.slot_index, None);
+        assert!(!state.is_plan_pending());
+    }
+
+    // The plan arrives 15 minutes after the click, when the first slot is already over.
+    #[test]
+    fn late_plan_starts_on_the_covering_slot_without_a_beep() {
+        let (mut state, started, _) = pending_state();
+        let now = started + chrono::Duration::minutes(15);
+        let plan = plan_of(vec![
+            plan_entry("A", 1),
+            plan_entry("B", 1),
+            plan_entry("C", 2),
+        ]);
+
+        state.apply_plan("now", Ok(plan), &now);
+
+        assert_eq!(state.slot_index, Some(1));
+        assert_eq!(state.update_slot_index(&now), TickSound::None);
+    }
+
+    #[test]
+    fn plan_error_falls_back_to_equal_slots_with_a_warning() {
+        let mut state = state_on_timer(&["Carl", "Ann", "Bob"], false);
+
+        state.on_plan_loaded("now", Err(BackendError::Unreachable));
+
+        assert_eq!(state.current_slot_name().as_deref(), Some("Ann"));
+        assert_eq!(state.slots.as_ref().unwrap().len(), 3);
+        assert!(state.has_plan_warning());
+        assert!(!state.is_plan_pending());
+        assert_eq!(state.page, Page::TimerPage);
+        assert!(state.target.is_some());
+    }
+
+    #[test]
+    fn plan_auth_error_does_not_end_the_session_or_the_timer() {
+        let mut state = state_on_timer(&["Carl", "Ann", "Bob"], false);
+
+        state.on_plan_loaded("now", Err(BackendError::NotLoggedIn));
+        state.on_plan_loaded("now", Err(BackendError::ReauthRequired));
+
+        assert_eq!(state.page, Page::TimerPage);
+        assert!(state.target.is_some());
+        assert!(state.is_signed_in());
+        assert!(state.has_plan_warning());
+    }
+
+    #[test]
+    fn plan_error_with_one_attendee_leaves_a_plain_timer_with_the_warning() {
+        let mut state = state_on_timer(&["Ann"], false);
+
+        state.on_plan_loaded("now", Err(BackendError::Decode));
+
+        assert!(!state.has_slots());
+        assert!(state.has_plan_warning());
+    }
+
+    #[test]
+    fn plan_for_another_meeting_is_ignored() {
+        let mut state = state_on_timer(&["Carl", "Ann", "Bob"], false);
+        let plan = plan_of(vec![plan_entry("A", 1), plan_entry("B", 1)]);
+
+        state.on_plan_loaded("other", Ok(plan));
+
+        assert!(!state.has_slots());
+        assert!(state.is_plan_pending());
+    }
+
+    #[test]
+    fn plan_after_stop_is_ignored() {
+        let mut state = state_on_timer(&["Carl", "Ann", "Bob"], false);
+        state.stop(StopType::UserStopped);
+        let plan = plan_of(vec![plan_entry("A", 1), plan_entry("B", 1)]);
+
+        state.on_plan_loaded("now", Ok(plan));
+
+        assert!(!state.has_slots());
+        assert_eq!(state.page, Page::MeetingsPage);
+    }
+
+    #[test]
+    fn plan_applied_twice_keeps_the_first_result() {
+        let mut state = state_on_timer(&["Carl", "Ann", "Bob"], false);
+        state.on_plan_loaded("now", Err(BackendError::Unreachable));
+        let plan = plan_of(vec![plan_entry("A", 1), plan_entry("B", 1)]);
+
+        state.on_plan_loaded("now", Ok(plan));
+
+        assert_eq!(state.slots.as_ref().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn selecting_a_quarter_drops_the_pending_plan() {
+        let mut state = state_on_timer(&["Carl", "Ann", "Bob"], false);
+        state.stop(StopType::UserStopped);
+
+        let _ = state.select(0);
+
+        assert!(!state.is_plan_pending());
+        assert!(!state.has_plan_warning());
+    }
+
+    #[test]
+    fn row_shows_whether_the_meeting_has_saved_slots() {
+        let mut meeting = meeting("Retro", at(9, 0), at(10, 0));
+        assert!(!meeting_row(&meeting, &at(8, 0), &Utc).has_template);
+
+        meeting.has_template = true;
+
+        assert!(meeting_row(&meeting, &at(8, 0), &Utc).has_template);
     }
 }

@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, FixedOffset, Local, TimeZone};
 use log::{debug, info, warn};
-use schisaciaccole_core::api::{Me, Meeting};
+use schisaciaccole_core::api::{Me, Meeting, SlotPlan};
 
 use crate::backend::{BackendClient, BackendError};
 use crate::login::{self, LoginError, LoopbackServer};
@@ -49,6 +49,15 @@ pub enum AppEvent {
         request: u64,
         /// Meetings from now to the end of the day, or why they could not be fetched.
         result: Result<Vec<Meeting>, BackendError>,
+    },
+    /// The slot plan fetch `request` ended.
+    PlanLoaded {
+        /// Id given by [`Session::spawn_plan_fetch`].
+        request: u64,
+        /// Meeting the plan was asked for.
+        event_id: String,
+        /// The plan, or why it could not be fetched.
+        result: Result<SlotPlan, BackendError>,
     },
 }
 
@@ -150,6 +159,8 @@ pub struct Session {
     next_attempt: Cell<u64>,
     /// Id of the latest meetings fetch; the results of older ones are ignored.
     meetings_request: Cell<u64>,
+    /// Id of the latest slot plan fetch; the results of older ones are ignored.
+    plan_request: Cell<u64>,
 }
 
 impl Session {
@@ -175,6 +186,7 @@ impl Session {
             login: RefCell::new(None),
             next_attempt: Cell::new(0),
             meetings_request: Cell::new(0),
+            plan_request: Cell::new(0),
         })
     }
 
@@ -278,6 +290,39 @@ impl Session {
         self.meetings_request.get() == request
     }
 
+    /// Fetches the slot plan of meeting `event_id` on a worker and posts [`AppEvent::PlanLoaded`].
+    ///
+    /// Each call supersedes the previous one: see [`Session::is_current_plan_request`]. When the
+    /// worker cannot be started a generic failure is posted.
+    pub fn spawn_plan_fetch(&self, event_id: &str) {
+        let request = self.plan_request.get().wrapping_add(1);
+        self.plan_request.set(request);
+
+        let client = self.client.clone();
+        let worker_event_id = event_id.to_string();
+        let spawned = spawn("plan", move || {
+            let result = lock(&client).fetch_plan(&worker_event_id);
+            post(AppEvent::PlanLoaded {
+                request,
+                event_id: worker_event_id,
+                result,
+            });
+        });
+        if let Err(e) = spawned {
+            warn!("Cannot start the plan fetch: {e}");
+            post(AppEvent::PlanLoaded {
+                request,
+                event_id: event_id.to_string(),
+                result: Err(BackendError::Decode),
+            });
+        }
+    }
+
+    /// True when `request` is the latest plan fetch, so its result is still wanted.
+    pub fn is_current_plan_request(&self, request: u64) -> bool {
+        self.plan_request.get() == request
+    }
+
     /// Revokes the session on a worker and posts [`AppEvent::LoggedOut`].
     ///
     /// A failure to forget the local session is logged and the event is posted anyway. When the
@@ -297,8 +342,10 @@ impl Session {
     }
 }
 
-/// Applies a worker event to the UI state. Results of stale login attempts and meetings fetches
-/// are dropped, and so are meetings results when no account is signed in.
+/// Applies a worker event to the UI state. Results of stale login attempts, meetings fetches and
+/// plan fetches are dropped, and so are meetings results when no account is signed in.
+///
+/// A plan failure never ends the session: it only changes the slots of the running meeting.
 pub fn apply_event(state: &mut AppState, session: &Session, event: AppEvent) {
     match event {
         AppEvent::StartupChecked(StartupOutcome::SignedIn(me)) => state.on_signed_in(&me),
@@ -333,6 +380,17 @@ pub fn apply_event(state: &mut AppState, session: &Session, event: AppEvent) {
                     state.on_meetings_failed(meetings_error_message(&e));
                 }
             }
+        }
+        AppEvent::PlanLoaded {
+            request,
+            event_id,
+            result,
+        } => {
+            if !session.is_current_plan_request(request) {
+                debug!("Ignoring the result of plan request {request}");
+                return;
+            }
+            state.on_plan_loaded(&event_id, result);
         }
     }
 }
@@ -405,7 +463,7 @@ fn spawn(name: &str, job: impl FnOnce() + Send + 'static) -> std::io::Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::tests::sample_state;
+    use crate::state::tests::{sample_state, state_on_timer};
     use crate::ui::Page;
     use schisaciaccole_core::api::{AUTH_TOKEN_PATH, ME_PATH};
     use serde_json::json;
@@ -428,6 +486,7 @@ mod tests {
             login: RefCell::new(None),
             next_attempt: Cell::new(0),
             meetings_request: Cell::new(0),
+            plan_request: Cell::new(0),
         }
     }
 
@@ -614,6 +673,47 @@ mod tests {
 
         assert_eq!(state.page(), Page::LoginPage);
         assert_eq!(state.login_status(), login::REAUTH_MESSAGE);
+    }
+
+    fn plan_event(request: u64, result: Result<SlotPlan, BackendError>) -> AppEvent {
+        AppEvent::PlanLoaded {
+            request,
+            event_id: "now".to_string(),
+            result,
+        }
+    }
+
+    #[test]
+    fn stale_plan_result_is_ignored() {
+        let session = offline_session();
+        session.plan_request.set(2);
+        let mut state = state_on_timer(&["Carl", "Ann", "Bob"], false);
+
+        apply_event(
+            &mut state,
+            &session,
+            plan_event(1, Err(BackendError::Unreachable)),
+        );
+
+        assert!(state.is_plan_pending());
+        assert!(!state.has_plan_warning());
+    }
+
+    #[test]
+    fn current_plan_failure_keeps_the_timer_and_the_session() {
+        let session = offline_session();
+        session.plan_request.set(1);
+        let mut state = state_on_timer(&["Carl", "Ann", "Bob"], false);
+
+        apply_event(
+            &mut state,
+            &session,
+            plan_event(1, Err(BackendError::NotLoggedIn)),
+        );
+
+        assert_eq!(state.page(), Page::TimerPage);
+        assert!(state.is_signed_in());
+        assert!(state.has_plan_warning());
     }
 
     #[test]

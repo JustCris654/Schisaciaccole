@@ -15,6 +15,7 @@ export struct MeetingRow {
     title: string,
     attendees: string,
     in-progress: bool,
+    has-template: bool,
 }
 
 component SelectionButton inherits VerticalBox {
@@ -188,10 +189,21 @@ component MeetingsPage {
 			    overflow: elide;
 			}
 
-			Text {
-			    text: row.attendees;
-			    font-size: 12px * root.ui-scale;
-			    vertical-alignment: center;
+			HorizontalLayout {
+			    spacing: 4px * root.ui-scale;
+
+			    Text {
+				text: row.attendees;
+				font-size: 12px * root.ui-scale;
+				vertical-alignment: center;
+			    }
+
+			    if row.has-template : Text {
+				text: "· slot salvati";
+				color: #C682F5;
+				font-size: 12px * root.ui-scale;
+				vertical-alignment: center;
+			    }
 			}
 		    }
 		}
@@ -218,6 +230,8 @@ component TimerPage {
     in property <duration> slot-time;
     in property <string> next-slot-name;
     in property <bool> slots-warning;
+    in property <bool> plan-loading;
+    in property <bool> plan-warning;
 
     callback stop(StopType);
     callback tick();
@@ -278,6 +292,19 @@ component TimerPage {
 	    overflow: elide;
 	}
 
+	if root.plan-loading : Text {
+	    text: "Caricamento slot…";
+	    font-size: 14px * root.ui-scale;
+	    horizontal-alignment: center;
+	}
+
+	if root.plan-warning : Text {
+	    text: "Preferenza non caricata: slot uguali";
+	    color: #C682F5;
+	    font-size: 12px * root.ui-scale;
+	    horizontal-alignment: center;
+	}
+
 	if root.slots-warning : Text {
 	    text: "Lista partecipanti incompleta";
 	    color: #C682F5;
@@ -333,6 +360,8 @@ export component MainWindow inherits Window {
     in property     <duration> slot-time;
     in property     <string>   next-slot-name;
     in property     <bool>     slots-warning;
+    in property     <bool>     plan-loading;
+    in property     <bool>     plan-warning;
 
     callback select-time(int);
     callback compute-options();
@@ -563,6 +592,8 @@ export component MainWindow inherits Window {
 	slot-time: root.slot-time;
 	next-slot-name: root.next-slot-name;
 	slots-warning: root.slots-warning;
+	plan-loading: root.plan-loading;
+	plan-warning: root.plan-warning;
 	next-slot => { root.next-slot(); }
 	stop(stop-type) => { root.stop(stop-type); }
 	tick => { root.tick(); }
