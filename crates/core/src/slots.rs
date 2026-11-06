@@ -1,7 +1,9 @@
 //! Speaking slots for a meeting countdown.
 //!
 //! Splits the time left in a meeting among its participants. Slot ends are absolute instants,
-//! so a suspended laptop does not stall the schedule. Nothing here reads the clock.
+//! so a suspended laptop does not stall the schedule. Every slot end lies a whole number of
+//! seconds before the meeting end, so the slot countdown and the meeting countdown change digit
+//! together. Nothing here reads the clock.
 
 use crate::api::{Meeting, ResponseStatus};
 use crate::attendee::display_name_from_email;
@@ -85,6 +87,29 @@ pub fn allocate_ms(weights: &[u64], total_ms: i64) -> Option<Vec<i64>> {
     Some(shares)
 }
 
+/// Splits `total_ms` among `weights` in whole seconds, with the sub-second part on the first share.
+///
+/// The whole seconds of `total_ms` are split with [`allocate_ms`] (so the seconds remainder goes
+/// to the last share) and converted to milliseconds; the `total_ms % 1000` leftover is added to
+/// the first share. The shares add up to `total_ms` and, summed from the end, every partial sum
+/// is a whole number of seconds.
+///
+/// Edge cases: returns `None` for empty `weights`, a zero sum of weights or less than one whole
+/// second in `total_ms` (zero or negative included).
+fn allocate_whole_seconds(weights: &[u64], total_ms: i64) -> Option<Vec<i64>> {
+    let whole_secs = total_ms / 1000;
+    let extra_ms = total_ms % 1000;
+    let secs = allocate_ms(weights, whole_secs)?;
+
+    let mut shares = Vec::with_capacity(secs.len());
+    for sec in secs {
+        shares.push(sec.checked_mul(1000)?);
+    }
+    let first = shares.first_mut()?;
+    *first = first.checked_add(extra_ms)?;
+    Some(shares)
+}
+
 /// Builds cumulative slot ends starting at `from`; the last end is exactly `meeting_end`.
 ///
 /// Returns `None` when an instant is out of the representable range.
@@ -138,10 +163,12 @@ pub struct SlotSchedule<Tz: TimeZone> {
 impl<Tz: TimeZone> SlotSchedule<Tz> {
     /// Splits the time from `now` to `meeting_end` among `slots`, given as `(name, weight)`.
     ///
-    /// Slot ends are cumulative from `now` and the last one equals `meeting_end` exactly.
+    /// Slot ends are cumulative from `now` and the last one equals `meeting_end` exactly. The
+    /// whole seconds are split by weight; the sub-second part of `meeting_end - now` goes to the
+    /// first slot, so every slot end is a whole number of seconds before `meeting_end`.
     ///
     /// Edge cases: returns `None` (the caller should run a plain timer) with fewer than 2 slots,
-    /// when `meeting_end` is not after `now`, when all weights are zero, or when the shortest
+    /// when `meeting_end` is not at least one second after `now`, when all weights are zero, or when the shortest
     /// slot would be shorter than [`MIN_SLOT_MS`]. A zero weight gives a zero-length slot, which
     /// also makes the schedule fail the minimum check.
     pub fn new(
@@ -157,7 +184,7 @@ impl<Tz: TimeZone> SlotSchedule<Tz> {
             .signed_duration_since(now.clone())
             .num_milliseconds();
         let weights: Vec<u64> = slots.iter().map(|(_, weight)| *weight).collect();
-        let shares = allocate_ms(&weights, total_ms)?;
+        let shares = allocate_whole_seconds(&weights, total_ms)?;
         if shares.iter().any(|share| *share < MIN_SLOT_MS) {
             return None;
         }
@@ -213,12 +240,14 @@ impl<Tz: TimeZone> SlotSchedule<Tz> {
     /// Ends the current slot at `now` and shares the time left among the following slots.
     ///
     /// The following slots are split over `meeting_end - now` by their weights, with cumulative
-    /// ends from `now` and the last end equal to the meeting end. There is no minimum-length
-    /// check, so slots never disappear mid-meeting.
+    /// ends from `now` and the last end equal to the meeting end. The whole seconds are split by
+    /// weight and the sub-second part goes to the first following slot, so every end is a whole
+    /// number of seconds before the meeting end. There is no minimum-length check, so slots never
+    /// disappear mid-meeting.
     ///
     /// Edge cases: returns `false` and changes nothing when there is no current slot, when the
-    /// current slot is the last one, or when the time left cannot be split (all remaining
-    /// weights zero).
+    /// current slot is the last one, when less than one second is left, or when the time left
+    /// cannot be split (all remaining weights zero).
     pub fn skip(&mut self, now: &DateTime<Tz>) -> bool {
         let Some(index) = self.current_index(now) else {
             return false;
@@ -235,7 +264,7 @@ impl<Tz: TimeZone> SlotSchedule<Tz> {
             .clone()
             .signed_duration_since(now.clone())
             .num_milliseconds();
-        let Some(shares) = allocate_ms(&weights, total_ms) else {
+        let Some(shares) = allocate_whole_seconds(&weights, total_ms) else {
             return false;
         };
         let Some(ends) = cumulative_ends(now, &shares, &self.meeting_end) else {
@@ -490,6 +519,51 @@ mod tests {
     }
 
     #[test]
+    fn new_puts_subsecond_remainder_on_first_slot() {
+        let end = utc(10, 30, 0);
+        let now = utc(10, 0, 0) + TimeDelta::milliseconds(437);
+
+        let schedule = SlotSchedule::new(named(2), &now, &end).unwrap();
+
+        // 1799.563 s: 899 s + 563 ms for the first slot, 900 s for the second.
+        assert_eq!(ends(&schedule), vec![utc(10, 15, 0), end]);
+        assert_eq!(schedule.current(&now).unwrap().remaining_ms, 899_563);
+    }
+
+    #[test]
+    fn new_ends_are_whole_seconds_before_meeting_end() {
+        let end = utc(10, 30, 0);
+        let now = utc(10, 0, 0) + TimeDelta::milliseconds(437);
+
+        let schedule = SlotSchedule::new(named(7), &now, &end).unwrap();
+
+        for slot_end in ends(&schedule) {
+            let distance = end.signed_duration_since(slot_end).num_milliseconds();
+            assert_eq!(distance % 1000, 0);
+        }
+    }
+
+    #[test]
+    fn new_gives_seconds_remainder_to_last_slot() {
+        let now = utc(10, 0, 0);
+
+        let schedule = SlotSchedule::new(named(3), &now, &utc(10, 1, 40)).unwrap();
+
+        // 100 s over 3 equal weights: 33 s, 33 s, 34 s.
+        assert_eq!(
+            ends(&schedule),
+            vec![utc(10, 0, 33), utc(10, 1, 6), utc(10, 1, 40)]
+        );
+    }
+
+    #[test]
+    fn new_rejects_less_than_one_second_left() {
+        let now = utc(10, 0, 0) + TimeDelta::milliseconds(1);
+
+        assert!(SlotSchedule::new(named(2), &now, &utc(10, 0, 1)).is_none());
+    }
+
+    #[test]
     fn current_is_first_slot_at_start() {
         let now = utc(10, 0, 0);
         let schedule = SlotSchedule::new(named(2), &now, &utc(11, 0, 0)).unwrap();
@@ -617,5 +691,55 @@ mod tests {
         let view = schedule.current(&now).unwrap();
         assert_eq!(view.index, 3);
         assert_eq!(view.remaining_ms, 1_500_000);
+    }
+
+    #[test]
+    fn skip_at_fractional_instant_keeps_ends_on_whole_seconds() {
+        let end = utc(11, 0, 0);
+        let mut schedule = SlotSchedule::new(named(4), &utc(10, 0, 0), &end).unwrap();
+        let now = utc(10, 5, 0) + TimeDelta::milliseconds(250);
+
+        let skipped = schedule.skip(&now);
+
+        assert!(skipped);
+        let all = ends(&schedule);
+        assert_eq!(all.first(), Some(&now));
+        assert_eq!(all.last(), Some(&end));
+        for slot_end in all.iter().skip(1) {
+            let distance = end.signed_duration_since(*slot_end).num_milliseconds();
+            assert_eq!(distance % 1000, 0);
+        }
+        // 3299.75 s over 3 equal weights: 1099 s + 750 ms, 1099 s, 1101 s.
+        assert_eq!(all.get(1), Some(&utc(10, 23, 20)));
+        assert_eq!(all.get(2), Some(&utc(10, 41, 39)));
+    }
+
+    #[test]
+    fn skip_with_less_than_one_second_left_returns_false() {
+        let end = utc(11, 0, 0);
+        // A trailing zero-weight slot ends at the meeting end, so the slot before it can still be
+        // current when less than a second is left.
+        let slots = vec![
+            Slot {
+                name: "a".to_string(),
+                weight: 1,
+                end,
+            },
+            Slot {
+                name: "b".to_string(),
+                weight: 1,
+                end,
+            },
+        ];
+        let mut schedule = SlotSchedule {
+            slots,
+            meeting_end: end,
+        };
+        let before = ends(&schedule);
+
+        let skipped = schedule.skip(&(end - TimeDelta::milliseconds(500)));
+
+        assert!(!skipped);
+        assert_eq!(ends(&schedule), before);
     }
 }
