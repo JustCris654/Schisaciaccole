@@ -25,6 +25,25 @@ Example: it's 09:07 and the daily stand-up must wrap by 09:15. Open the app,
 tap =09:15=, and the timer ends precisely at 09:15 — not 15 minutes from when
 you pressed the button.
 
+** Meetings and speaking slots (with a backend)
+
+When the app is built against a backend (see
+[[*Building the app against a backend]]) and you sign in with Google, it lists
+today's remaining meetings from your calendar.
+
+- Click a meeting to count down to its end. The time left is split into
+  speaking slots, one per participant; a short beep marks the end of each
+  slot and *Avanti* (or =N=) moves to the next one.
+- The *Editor* button on a meeting opens the slot editor: change names,
+  minutes and speaking order, exclude people, add rows by hand, then *Avvia*
+  to start or *Salva come preferenza* to save it.
+- A saved preference belongs to you and to the meeting title (case and
+  spacing ignored). The next meeting with the same title reuses it, rescaled
+  to its duration and to who is invited; meetings with a preference show
+  "slot salvati" in the list.
+- If the backend cannot be reached when a meeting starts, the timer still
+  runs with equal slots.
+
 * Screenshots
 
 | Selection                                           | Timer                                           |
@@ -47,7 +66,7 @@ The repo is a Cargo workspace:
 - =crates/app= — the =schisaciaccole= binary: Slint desktop app (=ui/=), =build.rs=,
   assets (=assets/=: icons, sound, font) and the bundle metadata.
 - =crates/server= — the =schisaciaccole-server= binary: axum backend with Google
-  login, app sessions and meetings from Google Calendar.
+  login, app sessions, meetings from Google Calendar and saved slot preferences.
 - =deploy/= — =Dockerfile= for the server and =docker-compose.yml= (server and
   PostgreSQL 17).
 
