@@ -73,3 +73,19 @@ jobs:
         run: |
           sqlx migrate run --source crates/server/migrations
           cargo sqlx prepare --workspace --check
+
+  # The app has macOS-only code (the native keychain store) that the Linux job
+  # never compiles. SCHISACIACCOLE_BACKEND_URL stays unset: local-only build.
+  # Neither package uses sqlx, so no Postgres or SQLX_OFFLINE is needed.
+  macos-check:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check the app
+        run: cargo check --locked -p schisaciaccole --all-targets
+
+      - name: Test the app and core
+        run: cargo test --locked -p schisaciaccole -p schisaciaccole-core
