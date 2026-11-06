@@ -1,6 +1,7 @@
 //! `GET /api/v1/meetings`: the signed-in user's meetings in a time range,
 //! read from Google Calendar with the user's stored Google refresh token.
 
+use std::future::Future;
 use std::time::Instant;
 
 use axum::Json;
@@ -121,36 +122,66 @@ async fn fetch_calendar_events(
     user_id: Uuid,
     range: TimeRange,
 ) -> Result<Vec<Value>, ApiFailure> {
+    let result = with_google_token(state, user_id, |token| async move {
+        calendar::fetch_events(
+            state.google.http(),
+            &state.config.google_calendar_base_url,
+            &token,
+            range.from,
+            range.to,
+        )
+        .await
+    })
+    .await?;
+    result.map_err(calendar_failure)
+}
+
+/// Runs a Google Calendar request for `user_id` with the user's access
+/// token, retrying once with a fresh token when Calendar answers 401.
+///
+/// The token comes from the per-user cache, or is refreshed when absent.
+/// `request` is called with the token and may be called a second time. On a
+/// first 401 the cached token is dropped, a new one is obtained and
+/// `request` is called again.
+///
+/// The outer `Result` holds the failures the helper already maps: token,
+/// database and decryption failures, and a second 401. The inner `Result`
+/// is the outcome of the last call of `request`, other than a 401 after the
+/// retry; the caller maps its errors (for example a not-found error to 404).
+///
+/// # Errors
+///
+/// - `ApiFailure::GoogleReauthRequired` in the cases listed on
+///   [`refresh_access_token`], or when Calendar answers 401 even with a
+///   fresh token (the cached token is then dropped too);
+/// - the other `Err` cases listed on [`refresh_access_token`].
+///
+/// A `CalendarError` other than `Unauthorized` is returned in the inner
+/// `Result`, not as `Err` here.
+pub(crate) async fn with_google_token<T, F, Fut>(
+    state: &AppState,
+    user_id: Uuid,
+    request: F,
+) -> Result<Result<T, CalendarError>, ApiFailure>
+where
+    F: Fn(AccessToken) -> Fut,
+    Fut: Future<Output = Result<T, CalendarError>>,
+{
     let token = access_token(state, user_id).await?;
-    match fetch_with_token(state, &token, range).await {
+    match request(token).await {
         Err(CalendarError::Unauthorized) => {}
-        other => return other.map_err(calendar_failure),
+        other => return Ok(other),
     }
 
     state.google_tokens.remove(user_id);
     let token = refresh_access_token(state, user_id).await?;
-    match fetch_with_token(state, &token, range).await {
+    match request(token).await {
         Err(CalendarError::Unauthorized) => {
             state.google_tokens.remove(user_id);
             Err(ApiFailure::GoogleReauthRequired)
         }
-        other => other.map_err(calendar_failure),
+        other => Ok(other),
     }
-}
-
-async fn fetch_with_token(
-    state: &AppState,
-    token: &AccessToken,
-    range: TimeRange,
-) -> Result<Vec<Value>, CalendarError> {
-    calendar::fetch_events(
-        state.google.http(),
-        &state.config.google_calendar_base_url,
-        token,
-        range.from,
-        range.to,
-    )
-    .await
 }
 
 /// Returns the cached Google access token of `user_id`, or a new one.
