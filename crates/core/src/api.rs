@@ -148,6 +148,9 @@ pub struct Meeting {
     pub attendees_omitted: bool,
     /// Identifier of the recurring series this event belongs to, if any.
     pub recurring_event_id: Option<String>,
+    /// True when the signed-in user saved a slot preference for this meeting's title.
+    #[serde(default)]
+    pub has_template: bool,
 }
 
 /// Kind of an entry of a slot template or plan.
@@ -277,6 +280,7 @@ mod tests {
             attendees: vec![sample_attendee()],
             attendees_omitted: false,
             recurring_event_id: Some("series1".to_string()),
+            has_template: false,
         }
     }
 
@@ -394,6 +398,7 @@ mod tests {
             }],
             "attendees_omitted": false,
             "recurring_event_id": "series1",
+            "has_template": false,
         });
         assert_eq!(value, expected);
     }

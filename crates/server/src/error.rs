@@ -26,6 +26,11 @@ pub enum ApiFailure {
     #[error("invalid code")]
     InvalidCode,
 
+    /// The requested resource does not exist or is not the caller's: 404
+    /// `not_found`.
+    #[error("not found")]
+    NotFound,
+
     /// Missing or invalid credentials: 401 `unauthorized`.
     #[error("unauthorized")]
     Unauthorized,
@@ -75,6 +80,11 @@ impl ApiFailure {
                 StatusCode::BAD_REQUEST,
                 error_codes::INVALID_CODE,
                 "invalid or expired code".to_string(),
+            ),
+            Self::NotFound => (
+                StatusCode::NOT_FOUND,
+                error_codes::NOT_FOUND,
+                "not found".to_string(),
             ),
             Self::Unauthorized => (
                 StatusCode::UNAUTHORIZED,
@@ -147,6 +157,14 @@ mod tests {
 
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(body.code, "invalid_code");
+    }
+
+    #[tokio::test]
+    async fn not_found_is_404() {
+        let (status, body) = body_of(ApiFailure::NotFound).await;
+
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body.code, "not_found");
     }
 
     #[tokio::test]

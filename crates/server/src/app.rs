@@ -4,11 +4,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::Request;
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use schisaciaccole_core::api::{
     AUTH_CALLBACK_PATH, AUTH_LOGIN_PATH, AUTH_LOGOUT_PATH, AUTH_REFRESH_PATH, AUTH_TOKEN_PATH,
-    HEALTH_PATH, ME_PATH, MEETINGS_PATH,
+    HEALTH_PATH, ME_PATH, MEETINGS_PATH, TEMPLATE_ROUTE, TEMPLATES_PATH,
 };
 use serde::Serialize;
 use sqlx::PgPool;
@@ -24,6 +24,7 @@ use crate::google::GoogleOidc;
 use crate::google_tokens::GoogleTokenCache;
 use crate::login_store::LoginStore;
 use crate::meetings;
+use crate::templates;
 
 /// State shared by all request handlers. Cloning is cheap.
 #[derive(Clone, Debug)]
@@ -129,6 +130,8 @@ pub fn router_with_limit(state: AppState, auth_limit: Option<AuthRateLimit>) -> 
         .merge(auth_routes)
         .route(ME_PATH, get(auth::me))
         .route(MEETINGS_PATH, get(meetings::list_meetings))
+        .route(TEMPLATES_PATH, put(templates::put_template))
+        .route(TEMPLATE_ROUTE, delete(templates::delete_template))
         .layer(trace)
         .with_state(state)
 }

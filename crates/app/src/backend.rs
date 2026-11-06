@@ -383,6 +383,7 @@ mod tests {
             attendees: Vec::<Attendee>::new(),
             attendees_omitted: false,
             recurring_event_id: None,
+            has_template: false,
         }
     }
 

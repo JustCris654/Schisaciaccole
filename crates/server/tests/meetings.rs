@@ -8,7 +8,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
 use chrono::DateTime;
-use schisaciaccole_core::api::{MEETINGS_PATH, Meeting, ResponseStatus};
+use schisaciaccole_core::api::{EntryKind, MEETINGS_PATH, Meeting, ResponseStatus, TemplateEntry};
 use schisaciaccole_server::store;
 use serde_json::{Value, json};
 use sqlx::PgPool;
@@ -198,6 +198,44 @@ async fn full_flow_returns_mapped_meetings(pool: PgPool) {
     assert_eq!(carla.name, "Carla V.");
     assert_eq!(carla.response, ResponseStatus::Tentative);
     assert_eq!(meetings[1].title, "(senza titolo)");
+}
+
+// The template key ignores case and spacing; other titles stay unmarked.
+#[sqlx::test(migrations = "./migrations")]
+async fn meeting_with_matching_template_has_template_flag(pool: PgPool) {
+    let h = harness(pool.clone()).await;
+    let access_token = login(&h).await;
+    let entries = [TemplateEntry {
+        kind: EntryKind::Manual,
+        email: None,
+        label: "Demo".to_string(),
+        weight_secs: 60,
+    }];
+    store::upsert_template(
+        &pool,
+        h.user_id(&access_token),
+        "daily sync",
+        "Daily sync",
+        &entries,
+    )
+    .await
+    .unwrap();
+    mock_refresh(&h, GOOGLE_ACCESS_TOKEN, 1).await;
+    let items = json!([
+        timed_event("e1", "  DAILY   Sync "),
+        timed_event("e2", "Retro")
+    ]);
+    mock_calendar(&h, GOOGLE_ACCESS_TOKEN, events_page(items, None), 1).await;
+
+    let response = meetings(&h, &access_token, &range_query(FROM, TO)).await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let meetings: Vec<Meeting> = json_body(response).await;
+    let flags: Vec<bool> = meetings
+        .iter()
+        .map(|meeting| meeting.has_template)
+        .collect();
+    assert_eq!(flags, [true, false]);
 }
 
 #[sqlx::test(migrations = "./migrations")]

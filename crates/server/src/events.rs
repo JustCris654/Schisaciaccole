@@ -105,6 +105,7 @@ fn to_meeting(event: GoogleEvent) -> Option<Meeting> {
         attendees,
         attendees_omitted: event.attendees_omitted,
         recurring_event_id: event.recurring_event_id,
+        has_template: false,
     })
 }
 

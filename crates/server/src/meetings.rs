@@ -11,6 +11,7 @@ use axum::http::header;
 use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, FixedOffset, TimeDelta};
 use openidconnect::AccessToken;
+use schisaciaccole_core::plan::normalize_title;
 use serde::Deserialize;
 use serde_json::Value;
 use uuid::Uuid;
@@ -48,7 +49,9 @@ pub struct TimeRange {
 /// `GET /api/v1/meetings?from=<RFC3339>&to=<RFC3339>`: lists the meetings
 /// of the user's primary Google calendar overlapping the range, in start
 /// order (see [`map_events`] for the events left out). Answers 200 with a
-/// JSON array of meetings, marked as not cacheable.
+/// JSON array of meetings, marked as not cacheable. A meeting has
+/// `has_template` set when the user saved a template for its normalized
+/// title.
 ///
 /// The Google access token is cached per user. When Google Calendar
 /// answers 401, the token is refreshed and the request retried once.
@@ -73,7 +76,11 @@ pub async fn list_meetings(
         query.map_err(|rejection| ApiFailure::InvalidRequest(rejection.body_text()))?;
     let range = validate_range(&query)?;
     let items = fetch_calendar_events(&state, user.user_id, range).await?;
-    let meetings = map_events(&items);
+    let mut meetings = map_events(&items);
+    let keys = store::template_keys(&state.pool, user.user_id).await?;
+    for meeting in &mut meetings {
+        meeting.has_template = keys.contains(&normalize_title(&meeting.title));
+    }
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(meetings)).into_response())
 }
 

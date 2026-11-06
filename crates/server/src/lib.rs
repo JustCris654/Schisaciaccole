@@ -21,4 +21,5 @@ pub mod google_tokens;
 pub mod login_store;
 pub mod meetings;
 pub mod store;
+pub mod templates;
 pub mod tokens;
