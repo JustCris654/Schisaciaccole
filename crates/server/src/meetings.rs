@@ -260,7 +260,8 @@ fn has_scope(scopes: &str, wanted: &str) -> bool {
     scopes.split_whitespace().any(|scope| scope == wanted)
 }
 
-fn calendar_failure(err: CalendarError) -> ApiFailure {
+/// Maps a Calendar error the caller does not handle to a 502.
+pub(crate) fn calendar_failure(err: CalendarError) -> ApiFailure {
     ApiFailure::BadGateway(err.to_string())
 }
 

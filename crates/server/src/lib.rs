@@ -19,6 +19,7 @@ pub mod events;
 pub mod google;
 pub mod google_tokens;
 pub mod login_store;
+pub mod meeting_plan;
 pub mod meetings;
 pub mod store;
 pub mod templates;

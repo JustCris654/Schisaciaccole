@@ -51,38 +51,40 @@ struct GoogleAttendee {
 /// Turns the `items` of Google Calendar event lists into meetings, keeping
 /// their order.
 ///
-/// An event is skipped when:
+/// Each item is mapped with [`map_event`], which lists the events left out
+/// and the rules for titles and attendees. Duplicate events and events
+/// outside the requested range are not filtered.
+pub fn map_events(items: &[Value]) -> Vec<Meeting> {
+    items.iter().filter_map(map_event).collect()
+}
+
+/// Turns one Google Calendar event into a meeting.
+///
+/// Returns `None` when the event is skipped:
 /// - its `status` is `cancelled`;
 /// - its start or end has no `dateTime` (all-day events);
 /// - the attendee marked `self` has declined it;
 /// - it cannot be parsed (missing `id`, wrong types, a `dateTime` that is
 ///   not RFC 3339); a warning with the event id only is logged.
 ///
-/// In each meeting the title falls back to [`UNTITLED`] and rooms
+/// In the meeting the title falls back to [`UNTITLED`] and rooms
 /// (`resource` attendees) and attendees without email are left out. An
 /// attendee's name is its `displayName`, or one derived from the email when
 /// the display name is missing or blank. A missing or unknown
-/// `responseStatus` becomes [`ResponseStatus::NeedsAction`]. Duplicate
-/// events and events outside the requested range are not filtered.
-pub fn map_events(items: &[Value]) -> Vec<Meeting> {
-    let mut meetings = Vec::with_capacity(items.len());
-    for item in items {
-        match GoogleEvent::deserialize(item) {
-            Ok(event) => {
-                if let Some(meeting) = to_meeting(event) {
-                    meetings.push(meeting);
-                }
-            }
-            Err(_) => {
-                let event_id = item.get("id").and_then(Value::as_str);
-                warn!(?event_id, "skipping unparsable Google Calendar event");
-            }
+/// `responseStatus` becomes [`ResponseStatus::NeedsAction`]. `has_template`
+/// is always `false`: the caller sets it.
+pub fn map_event(item: &Value) -> Option<Meeting> {
+    match GoogleEvent::deserialize(item) {
+        Ok(event) => to_meeting(event),
+        Err(_) => {
+            let event_id = item.get("id").and_then(Value::as_str);
+            warn!(?event_id, "skipping unparsable Google Calendar event");
+            None
         }
     }
-    meetings
 }
 
-/// Builds the meeting of one event; `None` when [`map_events`] skips it.
+/// Builds the meeting of one event; `None` when [`map_event`] skips it.
 fn to_meeting(event: GoogleEvent) -> Option<Meeting> {
     if event.status.as_deref() == Some("cancelled") {
         return None;
@@ -171,6 +173,19 @@ mod tests {
         let meetings = map_events(&[item]);
         assert_eq!(meetings.len(), 1);
         meetings.into_iter().next().unwrap()
+    }
+
+    #[test]
+    fn map_event_skips_cancelled_event() {
+        let mut item = event("e1");
+        item["status"] = json!("cancelled");
+
+        assert!(map_event(&item).is_none());
+    }
+
+    #[test]
+    fn map_event_skips_unparsable_event() {
+        assert!(map_event(&json!({ "summary": "no id" })).is_none());
     }
 
     fn ids(meetings: &[Meeting]) -> Vec<&str> {

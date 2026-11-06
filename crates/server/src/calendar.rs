@@ -1,5 +1,5 @@
 //! Client of the Google Calendar API: lists the events of the user's
-//! primary calendar.
+//! primary calendar and reads one of them.
 
 use std::time::Duration;
 
@@ -27,6 +27,11 @@ pub enum CalendarError {
     /// Google answered 401: the access token is invalid or expired.
     #[error("Google Calendar rejected the access token")]
     Unauthorized,
+
+    /// Google answered 404 or 410: the event was deleted or the id is unknown.
+    /// Only [`fetch_event`] returns it.
+    #[error("Google Calendar event not found")]
+    NotFound,
 
     /// Google answered with another non-success status.
     #[error("Google Calendar answered with status {0}")]
@@ -109,6 +114,56 @@ pub async fn fetch_events(
     Ok(items)
 }
 
+/// Reads one event of the primary calendar as raw JSON.
+///
+/// `event_id` is added to the URL as one escaped path segment, so characters
+/// such as `/` or `?` cannot change the path. `base_url` may end with a
+/// slash. The request times out after 15 seconds. A cancelled event that
+/// Google still serves is returned like any other; the caller checks its
+/// `status`.
+///
+/// # Errors
+///
+/// Returns `Err` when:
+/// - `base_url` is not a valid absolute URL (`CalendarError::Request`);
+/// - Google answers 401 (`CalendarError::Unauthorized`);
+/// - Google answers 404 or 410 (`CalendarError::NotFound`);
+/// - Google answers another non-2xx status (`CalendarError::Status`);
+/// - the request fails or times out (`CalendarError::Request`);
+/// - the body is not JSON (`CalendarError::Parse`).
+pub async fn fetch_event(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &AccessToken,
+    event_id: &str,
+) -> Result<Value, CalendarError> {
+    let url = event_url(base_url, event_id)?;
+    let request = http.get(url).bearer_auth(access_token.secret());
+    match send(request).await {
+        Err(CalendarError::Status(404 | 410)) => Err(CalendarError::NotFound),
+        Err(err) => Err(err),
+        Ok(response) => read_json(response).await,
+    }
+}
+
+/// Builds `{base_url}/calendars/primary/events/{event_id}` with `event_id`
+/// escaped as a single path segment.
+///
+/// # Errors
+///
+/// Returns `Err(CalendarError::Request)` when `base_url` is not a valid
+/// absolute URL that can have path segments.
+fn event_url(base_url: &str, event_id: &str) -> Result<reqwest::Url, CalendarError> {
+    let invalid = || CalendarError::Request("invalid Google Calendar base URL".to_string());
+    let mut url = reqwest::Url::parse(base_url).map_err(|_| invalid())?;
+    url.path_segments_mut()
+        .map_err(|_| invalid())?
+        .pop_if_empty()
+        .extend(["calendars", "primary", "events"])
+        .push(event_id);
+    Ok(url)
+}
+
 /// Requests one page of events.
 ///
 /// # Errors
@@ -120,10 +175,24 @@ async fn fetch_page(
     access_token: &AccessToken,
     query: &[(&str, &str)],
 ) -> Result<EventsPage, CalendarError> {
-    let response = http
+    let request = http
         .get(url)
         .bearer_auth(access_token.secret())
-        .query(query)
+        .query(query);
+    let response = send(request).await?;
+    read_json(response).await
+}
+
+/// Sends `request` with the Calendar timeout and returns the response when
+/// its status is 2xx.
+///
+/// # Errors
+///
+/// Returns `Err(CalendarError::Unauthorized)` on 401,
+/// `Err(CalendarError::Status)` on any other non-2xx status and
+/// `Err(CalendarError::Request)` when the request fails or times out.
+async fn send(request: reqwest::RequestBuilder) -> Result<reqwest::Response, CalendarError> {
+    let response = request
         .timeout(REQUEST_TIMEOUT)
         .send()
         .await
@@ -135,6 +204,18 @@ async fn fetch_page(
     if !status.is_success() {
         return Err(CalendarError::Status(status.as_u16()));
     }
+    Ok(response)
+}
+
+/// Reads the body of `response` as JSON of type `T`.
+///
+/// # Errors
+///
+/// Returns `Err(CalendarError::Request)` when the body cannot be read and
+/// `Err(CalendarError::Parse)` when it is not valid JSON of type `T`.
+async fn read_json<T: serde::de::DeserializeOwned>(
+    response: reqwest::Response,
+) -> Result<T, CalendarError> {
     let body = response
         .bytes()
         .await
@@ -143,4 +224,45 @@ async fn fetch_page(
         line: err.line(),
         column: err.column(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn url_string(base_url: &str, event_id: &str) -> String {
+        event_url(base_url, event_id).unwrap().to_string()
+    }
+
+    #[test]
+    fn event_url_appends_the_event_path() {
+        assert_eq!(
+            url_string("http://localhost:1234/calendar/v3", "abc"),
+            "http://localhost:1234/calendar/v3/calendars/primary/events/abc"
+        );
+    }
+
+    #[test]
+    fn event_url_accepts_a_base_with_trailing_slash() {
+        assert_eq!(
+            url_string("http://localhost:1234/calendar/v3/", "abc"),
+            "http://localhost:1234/calendar/v3/calendars/primary/events/abc"
+        );
+    }
+
+    #[test]
+    fn event_url_escapes_the_event_id() {
+        assert_eq!(
+            url_string("http://localhost:1234/calendar/v3", "a/b?c"),
+            "http://localhost:1234/calendar/v3/calendars/primary/events/a%2Fb%3Fc"
+        );
+    }
+
+    #[test]
+    fn event_url_rejects_a_relative_base() {
+        assert!(matches!(
+            event_url("calendar/v3", "abc"),
+            Err(CalendarError::Request(_))
+        ));
+    }
 }
