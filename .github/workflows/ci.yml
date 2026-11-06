@@ -78,7 +78,7 @@ jobs:
   # never compiles. SCHISACIACCOLE_BACKEND_URL stays unset: local-only build.
   # Neither package uses sqlx, so no Postgres or SQLX_OFFLINE is needed.
   macos-check:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
