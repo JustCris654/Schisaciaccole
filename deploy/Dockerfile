@@ -2,6 +2,8 @@ FROM rust:1.99-bookworm AS builder
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
+COPY .sqlx ./.sqlx
+ENV SQLX_OFFLINE=true
 RUN cargo build --release --locked -p schisaciaccole-server
 
 FROM debian:bookworm-slim
