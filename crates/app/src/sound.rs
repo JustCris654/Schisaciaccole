@@ -1,13 +1,18 @@
 //! Playback of the sound that marks the end of a ceremony.
 
 use log::{error, info};
-use rodio::{Decoder, DeviceSinkBuilder, Player};
+use rodio::source::SineWave;
+use rodio::{Decoder, DeviceSinkBuilder, Player, Source};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::PathBuf;
 use std::thread;
+use std::time::Duration;
 
 const SOUND_ASSET_NAME: &str = "level_up_no_copyright.mp3";
+const BEEP_FREQUENCY_HZ: f32 = 880.0;
+const BEEP_DURATION: Duration = Duration::from_millis(200);
+const BEEP_AMPLITUDE: f32 = 0.2;
 
 /// Locate the audio asset, checking every place it can live across dev and the
 /// packaged bundles. cargo-bundle / the PKGBUILD copy `assets/` to a
@@ -79,5 +84,30 @@ pub fn play_sound() {
                 error!("Failed to open audio file {}: {}", audio_path.display(), e);
             }
         }
+    });
+}
+
+/// Plays a short beep that marks the end of a speaking slot, on a background thread, and returns
+/// at once.
+///
+/// Every failure (no audio device) is logged and the beep is skipped; nothing is reported to the
+/// caller. Calls made while a beep is playing overlap instead of queueing.
+pub fn play_beep() {
+    thread::spawn(|| {
+        let mut sink_handle = match DeviceSinkBuilder::open_default_sink() {
+            Ok(sink_handle) => sink_handle,
+            Err(e) => {
+                error!("Failed to open default audio stream: {e}");
+                return;
+            }
+        };
+        sink_handle.log_on_drop(false);
+        let player = Player::connect_new(sink_handle.mixer());
+
+        let source = SineWave::new(BEEP_FREQUENCY_HZ)
+            .take_duration(BEEP_DURATION)
+            .amplify(BEEP_AMPLITUDE);
+        player.append(source);
+        player.sleep_until_end();
     });
 }

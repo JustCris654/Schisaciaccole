@@ -213,9 +213,15 @@ component TimerPage {
     in property<float> ui-scale;
     in property <duration> timer-time;
     in property <bool> running-state;
+    in property <bool> has-slots;
+    in property <string> slot-name;
+    in property <duration> slot-time;
+    in property <string> next-slot-name;
+    in property <bool> slots-warning;
 
     callback stop(StopType);
     callback tick();
+    callback next-slot();
 
     timer := Timer {
 	interval  : 0.25s;
@@ -237,6 +243,15 @@ component TimerPage {
         (minutes < 10 ? "0" : "") + minutes + ":" +
         (seconds < 10 ? "0" : "") + seconds;
 
+    property <int> slot-total-seconds: Math.ceil(slot-time / 1s);
+    property <int> slot-hours  : Math.floor(slot-total-seconds / 3600);
+    property <int> slot-minutes: Math.mod(Math.floor(slot-total-seconds / 60), 60);
+    property <int> slot-seconds: Math.mod(slot-total-seconds, 60);
+    property <string> slot-display:
+        (slot-hours >= 1 ? "0" + slot-hours + ":" : "") +
+        (slot-minutes < 10 ? "0" : "") + slot-minutes + ":" +
+        (slot-seconds < 10 ? "0" : "") + slot-seconds;
+
     VerticalBox {
 	alignment: center;
 	padding: 25px * ui-scale;
@@ -249,8 +264,34 @@ component TimerPage {
 	    horizontal-alignment: center;
 	}
 
+	if root.has-slots : Text {
+	    text: root.slot-name + "  " + root.slot-display;
+	    font-size: 32px * root.ui-scale;
+	    horizontal-alignment: center;
+	    overflow: elide;
+	}
+
+	if root.has-slots && root.next-slot-name != "" : Text {
+	    text: "Poi: " + root.next-slot-name;
+	    font-size: 18px * root.ui-scale;
+	    horizontal-alignment: center;
+	    overflow: elide;
+	}
+
+	if root.slots-warning : Text {
+	    text: "Lista partecipanti incompleta";
+	    color: #C682F5;
+	    font-size: 12px * root.ui-scale;
+	    horizontal-alignment: center;
+	}
+
 	HorizontalBox {
 	    alignment: center;
+
+	    if root.has-slots : Button {
+		text: "Avanti";
+		clicked => { next-slot(); }
+	    }
 
 	    Button {
 		text: "Stop";
@@ -287,6 +328,11 @@ export component MainWindow inherits Window {
     in property     <[MeetingRow]> meetings;
     in property     <bool>     meetings-loading;
     in property     <string>   meetings-error;
+    in property     <bool>     has-slots;
+    in property     <string>   slot-name;
+    in property     <duration> slot-time;
+    in property     <string>   next-slot-name;
+    in property     <bool>     slots-warning;
 
     callback select-time(int);
     callback compute-options();
@@ -304,6 +350,7 @@ export component MainWindow inherits Window {
     callback set-meetings-page();
     callback close-finished();
     callback logout();
+    callback next-slot();
 
     if is-macos: MenuBar {
 	Menu {
@@ -347,6 +394,11 @@ export component MainWindow inherits Window {
         KeyBinding {
             keys: @keys(H);
             activated => { help(); }
+        }
+
+        KeyBinding {
+            keys: @keys(N);
+            activated => { next-slot(); }
         }
     }
 
@@ -506,6 +558,12 @@ export component MainWindow inherits Window {
 	ui-scale: root.ui-scale;
 	timer-time: root.timer-time;
 	running-state: root.running-state;
+	has-slots: root.has-slots;
+	slot-name: root.slot-name;
+	slot-time: root.slot-time;
+	next-slot-name: root.next-slot-name;
+	slots-warning: root.slots-warning;
+	next-slot => { root.next-slot(); }
 	stop(stop-type) => { root.stop(stop-type); }
 	tick => { root.tick(); }
     }
@@ -626,6 +684,19 @@ export component Help inherits Window {
 		    Text {
 			// text: "You can't start a timer with 0 seconds";
 			text: "Toggle always-on-top, showed by small circle in top right corner";
+			font-size: 15pt;
+			horizontal-alignment: left;
+		    }
+		}
+		Row {
+		    Text {
+			text: "N";
+			font-size: 15pt;
+			horizontal-alignment: left;
+		    }
+
+		    Text {
+			text: "Next speaker slot";
 			font-size: 15pt;
 			horizontal-alignment: left;
 		    }

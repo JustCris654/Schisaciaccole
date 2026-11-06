@@ -7,8 +7,8 @@ use chrono::{DateTime, FixedOffset, Local, TimeZone};
 use log::{debug, error, info, warn};
 use schisaciaccole_core::api::{Me, Meeting};
 use schisaciaccole_core::{
-    DEFAULT_OPTION_COUNT, QuarterOption, TickOutcome, TimeError, evaluate, quarter_options,
-    resolve_target,
+    DEFAULT_OPTION_COUNT, QuarterOption, SlotSchedule, TickOutcome, TimeError, evaluate,
+    participants, quarter_options, resolve_target,
 };
 use slint::{ModelRc, VecModel};
 
@@ -22,6 +22,17 @@ pub const OFFLINE_NOTICE: &str = "Server non raggiungibile: modalità locale";
 pub const LOCAL_MODE_NOTICE: &str = "Accesso non disponibile: modalità locale";
 /// Selection page notice while the logout runs.
 pub const LOGOUT_NOTICE: &str = "Disconnessione…";
+
+/// Sound the caller must play after a state update.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TickSound {
+    /// No sound.
+    None,
+    /// The current speaking slot ended and the next one started: a short beep.
+    SlotEnd,
+    /// The meeting or countdown finished: the finish sound.
+    MeetingEnd,
+}
 
 /// What the meetings page shows besides the rows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,6 +67,12 @@ pub struct AppState {
     /// True once a fetch succeeded for the current account.
     meetings_loaded: bool,
     meetings_status: MeetingsStatus,
+    /// Speaking slots of the running meeting; `None` for a plain countdown.
+    slots: Option<SlotSchedule<Local>>,
+    /// Index of the slot seen at the last update, to detect an automatic advance.
+    slot_index: Option<usize>,
+    /// True when the attendee list of the selected meeting is incomplete.
+    slots_warning: bool,
 }
 
 impl AppState {
@@ -83,6 +100,9 @@ impl AppState {
             meetings_model: Rc::new(VecModel::from(Vec::new())),
             meetings_loaded: false,
             meetings_status: MeetingsStatus::Loading,
+            slots: None,
+            slot_index: None,
+            slots_warning: false,
         })
     }
 
@@ -109,23 +129,23 @@ impl AppState {
     /// Starts the countdown to the option at `index` and moves to the timer page.
     ///
     /// The target is chosen by [`resolve_target`], so an option already in the
-    /// past moves to the next one. Returns `true` when the finish sound must be
-    /// played, which only happens if the target is reached at once (see
-    /// [`AppState::tick`]).
+    /// past moves to the next one. Any speaking slots and the attendees warning are cleared.
+    /// Returns the sound to play, which is [`TickSound::MeetingEnd`] only if the target is
+    /// reached at once (see [`AppState::tick`]).
     ///
     /// Edge cases: a negative `index` or one out of range is logged and
-    /// ignored; the state does not change and `false` is returned.
+    /// ignored; the state does not change and [`TickSound::None`] is returned.
     #[must_use]
-    pub fn select(&mut self, index: i32) -> bool {
+    pub fn select(&mut self, index: i32) -> TickSound {
         let Ok(position) = usize::try_from(index) else {
             warn!("select: ignoring negative option index {index}");
-            return false;
+            return TickSound::None;
         };
 
         let now = Local::now();
         let Some(target) = resolve_target(&self.options, position, &now) else {
             warn!("select: ignoring out of range option index {index}");
-            return false;
+            return TickSound::None;
         };
 
         info!(
@@ -134,6 +154,7 @@ impl AppState {
             target.signed_duration_since(now).num_seconds()
         );
 
+        self.clear_slots();
         self.page = Page::TimerPage;
         self.target = Some(target);
         self.tick()
@@ -141,25 +162,46 @@ impl AppState {
 
     /// Starts the countdown to the end of the meeting in row `index` and moves to the timer page.
     ///
-    /// Returns `true` when the finish sound must be played, which only happens if the end is
-    /// reached at once (see [`AppState::tick`]).
+    /// The time left is split equally among the participants of the meeting (see
+    /// [`schisaciaccole_core::participants`]); with fewer than two participants, or slots that
+    /// would be too short, the countdown stays plain. The attendees warning is set when the
+    /// calendar omitted some attendees, whether or not slots exist. Returns the sound to play,
+    /// which is [`TickSound::MeetingEnd`] only if the end is reached at once (see
+    /// [`AppState::tick`]).
     ///
     /// Edge cases: a negative `index` or one out of range is logged and ignored; the state does
-    /// not change and `false` is returned.
+    /// not change and [`TickSound::None`] is returned.
     #[must_use]
-    pub fn select_meeting(&mut self, index: i32) -> bool {
+    pub fn select_meeting(&mut self, index: i32) -> TickSound {
         let Ok(position) = usize::try_from(index) else {
             warn!("select_meeting: ignoring negative meeting index {index}");
-            return false;
+            return TickSound::None;
         };
         let Some(meeting) = self.shown.get(position) else {
             warn!("select_meeting: ignoring out of range meeting index {index}");
-            return false;
+            return TickSound::None;
         };
 
+        let now = Local::now();
         let target = meeting.end.with_timezone(&Local);
-        info!("select_meeting: target={}", target.format("%H:%M"));
+        let mut weighted = Vec::with_capacity(meeting.attendees.len());
+        for participant in participants(meeting) {
+            weighted.push((participant.name, 1));
+        }
+        let slots = SlotSchedule::new(weighted, &now, &target);
+        let slot_index = slots
+            .as_ref()
+            .and_then(|schedule| schedule.current(&now))
+            .map(|view| view.index);
+        info!(
+            "select_meeting: target={} slots={}",
+            target.format("%H:%M"),
+            slots.as_ref().map_or(0, SlotSchedule::len)
+        );
 
+        self.slots_warning = meeting.attendees_omitted;
+        self.slots = slots;
+        self.slot_index = slot_index;
         self.page = Page::TimerPage;
         self.target = Some(target);
         self.tick()
@@ -167,34 +209,82 @@ impl AppState {
 
     /// Updates the countdown against the current time.
     ///
-    /// While the target is ahead, stores the remaining milliseconds. When it
-    /// has just been reached, stops with [`StopType::TimerFinished`] and returns
-    /// `true`: the caller must play the finish sound. When it passed more than
-    /// the grace period ago (e.g. after a suspend), stops with
-    /// [`StopType::UserStopped`] without sound.
+    /// While the target is ahead, stores the remaining milliseconds; if the speaking slot
+    /// advanced since the last update it returns [`TickSound::SlotEnd`], once even when several
+    /// slots passed (e.g. after a suspend). When the target has just been reached, stops with
+    /// [`StopType::TimerFinished`] and returns [`TickSound::MeetingEnd`]: the end of the last
+    /// slot is the end of the meeting, so no slot beep is added. When it passed more than the
+    /// grace period ago (e.g. after a suspend), stops with [`StopType::UserStopped`] without
+    /// sound.
     ///
-    /// Edge cases: without a running countdown nothing changes and `false` is returned.
+    /// Edge cases: without a running countdown nothing changes and [`TickSound::None`] is
+    /// returned.
     #[must_use]
-    pub fn tick(&mut self) -> bool {
+    pub fn tick(&mut self) -> TickSound {
         let Some(target) = self.target else {
-            return false;
+            return TickSound::None;
         };
+        let now = Local::now();
 
-        match evaluate(&target, &Local::now()) {
+        match evaluate(&target, &now) {
             TickOutcome::Running { remaining_ms } => {
                 self.timer_ms = remaining_ms;
                 debug!("Remaining: {remaining_ms}");
-                false
+                self.update_slot_index(&now)
             }
             TickOutcome::Finished => {
                 self.stop(StopType::TimerFinished);
-                true
+                TickSound::MeetingEnd
             }
             TickOutcome::Expired => {
                 self.stop(StopType::UserStopped);
-                false
+                TickSound::None
             }
         }
+    }
+
+    /// Stores the index of the current slot and tells whether it moved forward.
+    fn update_slot_index(&mut self, now: &DateTime<Local>) -> TickSound {
+        let Some(view) = self
+            .slots
+            .as_ref()
+            .and_then(|schedule| schedule.current(now))
+        else {
+            return TickSound::None;
+        };
+        let advanced = self.slot_index.is_some_and(|seen| view.index > seen);
+        self.slot_index = Some(view.index);
+        if advanced {
+            TickSound::SlotEnd
+        } else {
+            TickSound::None
+        }
+    }
+
+    /// Ends the current speaking slot now and shares the time left among the next ones.
+    ///
+    /// No sound is played for a manual skip.
+    ///
+    /// Edge cases: nothing happens without slots, outside the timer page, or when the current
+    /// slot is the last one.
+    pub fn next_slot(&mut self) {
+        if self.page != Page::TimerPage {
+            return;
+        }
+        let now = Local::now();
+        let Some(schedule) = self.slots.as_mut() else {
+            return;
+        };
+        if schedule.skip(&now) {
+            self.slot_index = schedule.current(&now).map(|view| view.index);
+        }
+    }
+
+    /// Drops the speaking slots, the seen index and the attendees warning.
+    fn clear_slots(&mut self) {
+        self.slots = None;
+        self.slot_index = None;
+        self.slots_warning = false;
     }
 
     /// Ends the countdown: refreshes the options, clears the target and the timer.
@@ -208,6 +298,7 @@ impl AppState {
         self.refresh_options();
         self.target = None;
         self.timer_ms = 0;
+        self.clear_slots();
         self.page = match stop_type {
             StopType::TimerFinished => Page::TimerFinished,
             StopType::UserStopped => self.home_page(),
@@ -249,6 +340,7 @@ impl AppState {
     pub fn on_session_lost(&mut self, status: &'static str) {
         self.target = None;
         self.timer_ms = 0;
+        self.clear_slots();
         self.on_login_required(status);
     }
 
@@ -354,6 +446,7 @@ impl AppState {
     pub fn on_logged_out(&mut self) {
         self.target = None;
         self.timer_ms = 0;
+        self.clear_slots();
         self.notice = "";
         self.on_login_required("");
     }
@@ -386,6 +479,25 @@ impl AppState {
             MeetingsStatus::Loading | MeetingsStatus::Ready => "",
         };
         window.set_meetings_error(error.into());
+
+        let view = self
+            .slots
+            .as_ref()
+            .and_then(|schedule| schedule.current(&Local::now()));
+        window.set_has_slots(view.is_some());
+        window.set_slots_warning(self.slots_warning);
+        match view {
+            Some(view) => {
+                window.set_slot_name(view.name.as_str().into());
+                window.set_slot_time(view.remaining_ms);
+                window.set_next_slot_name(view.next_name.unwrap_or_default().into());
+            }
+            None => {
+                window.set_slot_name("".into());
+                window.set_slot_time(0);
+                window.set_next_slot_name("".into());
+            }
+        }
     }
 }
 
@@ -409,6 +521,22 @@ impl AppState {
     /// True when the meetings page shows an error.
     pub fn has_meetings_error(&self) -> bool {
         matches!(self.meetings_status, MeetingsStatus::Failed(_))
+    }
+
+    /// True when speaking slots are active.
+    pub fn has_slots(&self) -> bool {
+        self.slots.is_some()
+    }
+
+    /// Name of the person speaking now; `None` without slots.
+    pub fn current_slot_name(&self) -> Option<String> {
+        let schedule = self.slots.as_ref()?;
+        schedule.current(&Local::now()).map(|view| view.name)
+    }
+
+    /// True when the attendees warning is shown.
+    pub fn has_slots_warning(&self) -> bool {
+        self.slots_warning
     }
 
     /// True while the login page waits for the browser.
@@ -713,9 +841,9 @@ pub mod tests {
         let mut state = state_with_meetings();
         let end = state.shown[0].end;
 
-        let must_play = state.select_meeting(0);
+        let sound = state.select_meeting(0);
 
-        assert!(!must_play);
+        assert_eq!(sound, TickSound::None);
         assert_eq!(state.page, Page::TimerPage);
         assert_eq!(state.target, Some(end.with_timezone(&Local)));
         assert!(state.timer_ms > 0);
@@ -725,8 +853,8 @@ pub mod tests {
     fn selecting_an_out_of_range_meeting_changes_nothing() {
         let mut state = state_with_meetings();
 
-        assert!(!state.select_meeting(2));
-        assert!(!state.select_meeting(-1));
+        assert_eq!(state.select_meeting(2), TickSound::None);
+        assert_eq!(state.select_meeting(-1), TickSound::None);
 
         assert_eq!(state.page, Page::MeetingsPage);
         assert_eq!(state.target, None);
@@ -965,5 +1093,123 @@ pub mod tests {
         assert_eq!(state.account, None);
         assert_eq!(state.notice, "");
         assert_eq!(state.login_status, "");
+    }
+
+    fn named_attendee(name: &str) -> Attendee {
+        Attendee {
+            email: format!("{}@x.it", name.to_lowercase()),
+            name: name.to_string(),
+            is_self: false,
+            optional: false,
+            response: ResponseStatus::Accepted,
+        }
+    }
+
+    /// State with one meeting in progress (ends in about 30 minutes), selected on the timer page.
+    fn state_on_timer(names: &[&str], attendees_omitted: bool) -> AppState {
+        let now = Local::now().fixed_offset();
+        let mut in_progress = meeting(
+            "now",
+            now - chrono::Duration::hours(1),
+            now + chrono::Duration::minutes(30),
+        );
+        in_progress.attendees = names.iter().map(|name| named_attendee(name)).collect();
+        in_progress.attendees_omitted = attendees_omitted;
+        let mut state = sample_state();
+        state.on_signed_in(&me(None));
+        state.on_meetings_loaded(vec![in_progress]);
+        let _ = state.select_meeting(0);
+        state
+    }
+
+    #[test]
+    fn meeting_with_several_attendees_gets_slots() {
+        let state = state_on_timer(&["Carl", "Ann", "Bob"], false);
+
+        assert!(state.has_slots());
+        assert_eq!(state.current_slot_name().as_deref(), Some("Ann"));
+        assert!(!state.has_slots_warning());
+    }
+
+    #[test]
+    fn meeting_with_one_attendee_has_no_slots() {
+        let state = state_on_timer(&["Ann"], false);
+
+        assert!(!state.has_slots());
+        assert_eq!(state.current_slot_name(), None);
+    }
+
+    #[test]
+    fn next_slot_without_slots_does_nothing() {
+        let mut state = state_on_timer(&["Ann"], false);
+        let target = state.target;
+
+        state.next_slot();
+
+        assert!(!state.has_slots());
+        assert_eq!(state.slot_index, None);
+        assert_eq!(state.target, target);
+        assert_eq!(state.page, Page::TimerPage);
+    }
+
+    #[test]
+    fn next_slot_moves_to_the_second_participant() {
+        let mut state = state_on_timer(&["Carl", "Ann", "Bob"], false);
+
+        state.next_slot();
+
+        assert_eq!(state.current_slot_name().as_deref(), Some("Bob"));
+        assert_eq!(state.slot_index, Some(1));
+    }
+
+    #[test]
+    fn manual_skip_does_not_beep() {
+        let mut state = state_on_timer(&["Carl", "Ann", "Bob"], false);
+
+        state.next_slot();
+
+        assert_eq!(state.tick(), TickSound::None);
+    }
+
+    // Simulates a slot that ended by itself: the stored index is behind the schedule.
+    #[test]
+    fn tick_reports_the_end_of_a_slot_once() {
+        let mut state = state_on_timer(&["Carl", "Ann", "Bob"], false);
+        state.next_slot();
+        state.slot_index = Some(0);
+
+        assert_eq!(state.tick(), TickSound::SlotEnd);
+        assert_eq!(state.tick(), TickSound::None);
+    }
+
+    #[test]
+    fn stop_clears_the_slots() {
+        let mut state = state_on_timer(&["Carl", "Ann", "Bob"], true);
+
+        state.stop(StopType::UserStopped);
+
+        assert!(!state.has_slots());
+        assert_eq!(state.slot_index, None);
+        assert!(!state.has_slots_warning());
+    }
+
+    #[test]
+    fn omitted_attendees_set_the_warning_even_without_slots() {
+        let state = state_on_timer(&["Ann"], true);
+
+        assert!(!state.has_slots());
+        assert!(state.has_slots_warning());
+    }
+
+    #[test]
+    fn selecting_a_quarter_clears_the_slots_and_the_warning() {
+        let mut state = state_on_timer(&["Carl", "Ann", "Bob"], true);
+        state.stop(StopType::UserStopped);
+        state.slots_warning = true;
+
+        let _ = state.select(0);
+
+        assert!(!state.has_slots());
+        assert!(!state.has_slots_warning());
     }
 }

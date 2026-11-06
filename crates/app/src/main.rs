@@ -21,7 +21,7 @@ use log::{error, info, warn};
 use slint::ComponentHandle;
 
 use crate::session::Session;
-use crate::state::{AppState, LOCAL_MODE_NOTICE};
+use crate::state::{AppState, LOCAL_MODE_NOTICE, TickSound};
 use crate::ui::{Help, MainWindow};
 
 fn main() -> anyhow::Result<()> {
@@ -67,11 +67,9 @@ fn main() -> anyhow::Result<()> {
                 return;
             };
             let mut state = state.borrow_mut();
-            let must_play = state.select(index);
+            let tick_sound = state.select(index);
             state.render(&window);
-            if must_play {
-                sound::play_sound();
-            }
+            play_for(tick_sound);
         }
     });
 
@@ -84,11 +82,9 @@ fn main() -> anyhow::Result<()> {
                 return;
             };
             let mut state = state.borrow_mut();
-            let must_play = state.select_meeting(index);
+            let tick_sound = state.select_meeting(index);
             state.render(&window);
-            if must_play {
-                sound::play_sound();
-            }
+            play_for(tick_sound);
         }
     });
 
@@ -130,6 +126,20 @@ fn main() -> anyhow::Result<()> {
         }
     });
 
+    main_window.on_next_slot({
+        let window_weak = main_window.as_weak();
+        let state = app_state.clone();
+
+        move || {
+            let Some(window) = window_weak.upgrade() else {
+                return;
+            };
+            let mut state = state.borrow_mut();
+            state.next_slot();
+            state.render(&window);
+        }
+    });
+
     main_window.on_stop({
         let window_weak = main_window.as_weak();
         let state = app_state.clone();
@@ -167,11 +177,9 @@ fn main() -> anyhow::Result<()> {
                 return;
             };
             let mut state = state.borrow_mut();
-            let must_play = state.tick();
+            let tick_sound = state.tick();
             state.render(&window);
-            if must_play {
-                sound::play_sound();
-            }
+            play_for(tick_sound);
         }
     });
 
@@ -306,6 +314,16 @@ fn main() -> anyhow::Result<()> {
     result.context("the main window event loop failed")?;
 
     Ok(())
+}
+
+/// Plays the sound that goes with a tick outcome: a beep for a slot end, the finish sound for the
+/// end of the meeting, nothing otherwise.
+fn play_for(tick_sound: TickSound) {
+    match tick_sound {
+        TickSound::None => {}
+        TickSound::SlotEnd => sound::play_beep(),
+        TickSound::MeetingEnd => sound::play_sound(),
+    }
 }
 
 /// Creates the backend session when the app was built with a backend URL.
