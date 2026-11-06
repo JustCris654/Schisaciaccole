@@ -62,7 +62,15 @@ jobs:
         # against the cwd and silently drops them. The bundle still lands in the
         # workspace target/ dir.
         working-directory: crates/app
-        run: cargo bundle --release --format deb
+        env:
+          SCHISACIACCOLE_BACKEND_URL: ${{ vars.SCHISACIACCOLE_BACKEND_URL }}
+        run: |
+          if [ -n "$SCHISACIACCOLE_BACKEND_URL" ]; then
+            echo "backend URL baked into the build: $SCHISACIACCOLE_BACKEND_URL"
+          else
+            echo "SCHISACIACCOLE_BACKEND_URL not set: building the local-only app"
+          fi
+          cargo bundle --release --format deb
 
       - name: Check bundle content and name it after its target OS
         run: |
@@ -109,11 +117,20 @@ jobs:
         run: sed -i "s/^pkgver=.*/pkgver=${{ needs.version.outputs.version }}/" packaging/arch/PKGBUILD
 
       - name: Build package with makepkg
+        # sudo resets the environment, so pass the backend URL to makepkg
+        # explicitly; cargo inherits it from makepkg's build().
+        env:
+          SCHISACIACCOLE_BACKEND_URL: ${{ vars.SCHISACIACCOLE_BACKEND_URL }}
         run: |
+          if [ -n "$SCHISACIACCOLE_BACKEND_URL" ]; then
+            echo "backend URL baked into the build: $SCHISACIACCOLE_BACKEND_URL"
+          else
+            echo "SCHISACIACCOLE_BACKEND_URL not set: building the local-only app"
+          fi
           useradd -m builder
           chown -R builder: "$GITHUB_WORKSPACE"
           cd packaging/arch
-          sudo -u builder makepkg -f
+          sudo -u builder env SCHISACIACCOLE_BACKEND_URL="$SCHISACIACCOLE_BACKEND_URL" makepkg -f
 
       - name: Name the artifact after its target OS
         run: |
@@ -132,6 +149,8 @@ jobs:
   macos:
     needs: version
     runs-on: macos-14
+    outputs:
+      signed: ${{ steps.signing.outputs.enabled }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -144,12 +163,20 @@ jobs:
         # Run from the app crate so the icon/resource paths resolve (see the
         # deb job); the bundle lands in the workspace target/ dir.
         working-directory: crates/app
-        run: cargo bundle --release --format osx
+        env:
+          SCHISACIACCOLE_BACKEND_URL: ${{ vars.SCHISACIACCOLE_BACKEND_URL }}
+        run: |
+          if [ -n "$SCHISACIACCOLE_BACKEND_URL" ]; then
+            echo "backend URL baked into the build: $SCHISACIACCOLE_BACKEND_URL"
+          else
+            echo "SCHISACIACCOLE_BACKEND_URL not set: building the local-only app"
+          fi
+          cargo bundle --release --format osx
 
-      - name: Package .zip and .dmg
+      - name: Locate the .app and check its content
+        id: app
         run: |
           set -euo pipefail
-          ver="${{ needs.version.outputs.version }}"
           # cargo-bundle's osx output dir has moved between versions; locate the
           # .app instead of hard-coding target/release/bundle/osx/.
           app=$(find target/release -maxdepth 4 -name '*.app' -type d -print -quit)
@@ -165,8 +192,184 @@ jobs:
             find "$app" || true
             exit 1
           fi
-          ditto -c -k --keepParent "$app" "schisaciaccole-${ver}-macos-arm64.zip"
-          hdiutil create -volname Schisaciaccole -srcfolder "$app" -ov -format UDZO "schisaciaccole-${ver}-macos-arm64.dmg"
+          echo "path=$app" >> "$GITHUB_OUTPUT"
+
+      # Secrets cannot appear in `if:`, so this step turns their presence into
+      # an output. All or none must be set: a partial set fails the job instead
+      # of silently shipping an unsigned build.
+      - name: Check whether signing secrets are configured
+        id: signing
+        env:
+          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+        run: |
+          set -euo pipefail
+          names="APPLE_CERTIFICATE_P12_BASE64 APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY
+                 APPLE_TEAM_ID APPLE_API_KEY_ID APPLE_API_ISSUER_ID APPLE_API_KEY_P8_BASE64"
+          set_count=0
+          missing=""
+          for n in $names; do
+            if [ -n "${!n}" ]; then
+              set_count=$((set_count + 1))
+            else
+              missing="$missing $n"
+            fi
+          done
+          if [ "$set_count" -eq 0 ]; then
+            echo "no signing secrets: building an unsigned, unnotarized app"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          elif [ -n "$missing" ]; then
+            echo "::error::signing secrets partially configured, missing:$missing"
+            exit 1
+          else
+            echo "signing secrets present: the app will be signed and notarized"
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Import the signing certificate into a temporary keychain
+        if: steps.signing.outputs.enabled == 'true'
+        env:
+          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          keychain_password=$(openssl rand -base64 32)
+          echo "::add-mask::$keychain_password"
+          cert="$RUNNER_TEMP/certificate.p12"
+
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+
+          printf '%s' "$APPLE_CERTIFICATE_P12_BASE64" | base64 --decode > "$cert"
+          security import "$cert" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -f pkcs12 -T /usr/bin/codesign -T /usr/bin/security
+          rm -f "$cert"
+          # Let codesign use the key without a UI prompt.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$keychain_password" "$keychain" > /dev/null
+          # Prepend the temporary keychain to the user search list.
+          # shellcheck disable=SC2046
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | xargs)
+          security find-identity -v -p codesigning "$keychain"
+          echo "KEYCHAIN_PATH=$keychain" >> "$GITHUB_ENV"
+
+      - name: Sign the .app
+        if: steps.signing.outputs.enabled == 'true'
+        env:
+          APP: ${{ steps.app.outputs.path }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          # Inside-out: the executables in Contents/MacOS first, then the bundle.
+          signed_bins=0
+          while IFS= read -r -d '' bin; do
+            echo "signing $bin"
+            codesign --force --options runtime --timestamp \
+              --keychain "$KEYCHAIN_PATH" --sign "$APPLE_SIGNING_IDENTITY" "$bin"
+            signed_bins=$((signed_bins + 1))
+          done < <(find "$APP/Contents/MacOS" -type f -perm -u+x -print0)
+          if [ "$signed_bins" -eq 0 ]; then
+            echo "::error::no executable found in $APP/Contents/MacOS"
+            exit 1
+          fi
+          codesign --force --options runtime --timestamp \
+            --keychain "$KEYCHAIN_PATH" --sign "$APPLE_SIGNING_IDENTITY" "$APP"
+          codesign --verify --strict --deep --verbose=2 "$APP"
+          details=$(codesign --display --verbose=2 "$APP" 2>&1)
+          echo "$details"
+          if ! grep -qxF "TeamIdentifier=$APPLE_TEAM_ID" <<<"$details"; then
+            echo "::error::the signature's TeamIdentifier does not match APPLE_TEAM_ID"
+            exit 1
+          fi
+
+      - name: Notarize and staple the .app
+        if: steps.signing.outputs.enabled == 'true'
+        env:
+          APP: ${{ steps.app.outputs.path }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+        run: |
+          set -euo pipefail
+          key="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+          printf '%s' "$APPLE_API_KEY_P8_BASE64" | base64 --decode > "$key"
+          echo "NOTARY_KEY_PATH=$key" >> "$GITHUB_ENV"
+
+          upload="$RUNNER_TEMP/notarize-app.zip"
+          ditto -c -k --keepParent "$APP" "$upload"
+          xcrun notarytool submit "$upload" \
+            --key "$key" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID" \
+            --wait --timeout 30m --output-format json > "$RUNNER_TEMP/notary-app.json" || true
+          cat "$RUNNER_TEMP/notary-app.json"
+          status=$(jq -r '.status // empty' "$RUNNER_TEMP/notary-app.json")
+          if [ "$status" != "Accepted" ]; then
+            id=$(jq -r '.id // empty' "$RUNNER_TEMP/notary-app.json")
+            if [ -n "$id" ]; then
+              xcrun notarytool log "$id" \
+                --key "$key" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID" || true
+            fi
+            echo "::error::notarization of the .app failed (status: ${status:-unknown})"
+            exit 1
+          fi
+          xcrun stapler staple "$APP"
+          xcrun stapler validate "$APP"
+          spctl --assess --type execute -vv "$APP"
+
+      - name: Package .zip and .dmg
+        env:
+          APP: ${{ steps.app.outputs.path }}
+        run: |
+          set -euo pipefail
+          ver="${{ needs.version.outputs.version }}"
+          ditto -c -k --keepParent "$APP" "schisaciaccole-${ver}-macos-arm64.zip"
+          hdiutil create -volname Schisaciaccole -srcfolder "$APP" -ov -format UDZO "schisaciaccole-${ver}-macos-arm64.dmg"
+
+      - name: Sign, notarize and staple the .dmg
+        if: steps.signing.outputs.enabled == 'true'
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          ver="${{ needs.version.outputs.version }}"
+          dmg="schisaciaccole-${ver}-macos-arm64.dmg"
+          codesign --force --timestamp --keychain "$KEYCHAIN_PATH" \
+            --sign "$APPLE_SIGNING_IDENTITY" "$dmg"
+          codesign --verify --strict --verbose=2 "$dmg"
+          xcrun notarytool submit "$dmg" \
+            --key "$NOTARY_KEY_PATH" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID" \
+            --wait --timeout 30m --output-format json > "$RUNNER_TEMP/notary-dmg.json" || true
+          cat "$RUNNER_TEMP/notary-dmg.json"
+          status=$(jq -r '.status // empty' "$RUNNER_TEMP/notary-dmg.json")
+          if [ "$status" != "Accepted" ]; then
+            id=$(jq -r '.id // empty' "$RUNNER_TEMP/notary-dmg.json")
+            if [ -n "$id" ]; then
+              xcrun notarytool log "$id" \
+                --key "$NOTARY_KEY_PATH" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID" || true
+            fi
+            echo "::error::notarization of the .dmg failed (status: ${status:-unknown})"
+            exit 1
+          fi
+          xcrun stapler staple "$dmg"
+          xcrun stapler validate "$dmg"
+          spctl --assess --type open --context context:primary-signature -vv "$dmg"
+
+      - name: Remove the temporary keychain and API key
+        if: always()
+        run: |
+          if [ -n "${KEYCHAIN_PATH:-}" ]; then
+            security delete-keychain "$KEYCHAIN_PATH" || true
+          fi
+          rm -f "$RUNNER_TEMP"/certificate.p12 "$RUNNER_TEMP"/AuthKey_*.p8
 
       - uses: actions/upload-artifact@v4
         with:
@@ -175,6 +378,40 @@ jobs:
             schisaciaccole-*-macos-arm64.zip
             schisaciaccole-*-macos-arm64.dmg
           if-no-files-found: error
+
+  server-image:
+    needs: version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to the GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Tag pushes publish the image; a manual run only builds it, to validate
+      # deploy/Dockerfile without touching the registry.
+      - name: Build and push the server image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: deploy/Dockerfile
+          platforms: linux/amd64
+          push: ${{ startsWith(github.ref, 'refs/tags/v') }}
+          tags: |
+            ghcr.io/justcris654/schisaciaccole-server:${{ needs.version.outputs.version }}
+            ghcr.io/justcris654/schisaciaccole-server:latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ needs.version.outputs.version }}
 
   release:
     needs: [deb, arch, macos]
@@ -190,13 +427,21 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          MACOS_SIGNED: ${{ needs.macos.outputs.signed }}
         run: |
-          cat > release-notes.md <<'EOF'
+          if [ "$MACOS_SIGNED" = "true" ]; then
+            cat > release-notes.md <<'EOF'
+          The macOS build is signed with a Developer ID certificate and notarized
+          by Apple: it opens without Gatekeeper warnings.
+          EOF
+          else
+            cat > release-notes.md <<'EOF'
           The macOS build is unsigned and unnotarized. On first launch, either
           right-click the app and choose "Open", or clear the quarantine flag:
 
               xattr -dr com.apple.quarantine /Applications/Schisaciaccole.app
           EOF
+          fi
           gh release create "$GITHUB_REF_NAME" \
             --title "Schisaciaccole $GITHUB_REF_NAME" \
             --notes-file release-notes.md \
