@@ -7,6 +7,7 @@ pub mod attendee;
 pub mod countdown;
 pub mod error;
 pub mod quarters;
+pub mod slots;
 
 pub use api::{
     AUTH_CALLBACK_PATH, AUTH_LOGIN_PATH, AUTH_LOGOUT_PATH, AUTH_REFRESH_PATH, AUTH_TOKEN_PATH,
@@ -22,3 +23,4 @@ pub use error::TimeError;
 pub use quarters::{
     DEFAULT_OPTION_COUNT, LEAD_SECONDS, QUARTER_MINUTES, QuarterOption, quarter_options,
 };
+pub use slots::{MIN_SLOT_MS, Participant, SlotSchedule, SlotView, allocate_ms, participants};
