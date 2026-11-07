@@ -9,8 +9,8 @@ use schisaciaccole_core::api::{
     EntryKind, Me, Meeting, PlanEntry, PutTemplateRequest, SlotPlan, Template, error_codes,
 };
 use schisaciaccole_core::{
-    DEFAULT_OPTION_COUNT, EditorEntry, QuarterOption, SlotSchedule, TickOutcome, TimeError,
-    build_plan, evaluate, participants, quarter_options, resolve_target,
+    DEFAULT_OPTION_COUNT, EditorEntry, FREE_TIME_LABEL, QuarterOption, SlotSchedule, TickOutcome,
+    TimeError, build_plan, evaluate, participants, quarter_options, resolve_target,
 };
 use slint::{Model, ModelRc, VecModel};
 
@@ -144,6 +144,8 @@ pub struct AppState {
     slots: Option<SlotSchedule<Local>>,
     /// Index of the slot seen at the last update, to detect an automatic advance.
     slot_index: Option<usize>,
+    /// True after manually ending the last speaking slot.
+    free_time: bool,
     /// True when the attendee list of the selected meeting is incomplete.
     slots_warning: bool,
     /// Meeting selected from the list while its countdown runs.
@@ -182,6 +184,7 @@ impl AppState {
             meetings_status: MeetingsStatus::Loading,
             slots: None,
             slot_index: None,
+            free_time: false,
             slots_warning: false,
             run: None,
             plan_fallback: false,
@@ -765,8 +768,12 @@ impl AppState {
         }
     }
 
-    /// Stores the index of the current slot and tells whether it moved forward.
+    /// Stores the current slot index and tells whether it moved forward. Without a current
+    /// slot or during free time, returns no sound.
     fn update_slot_index(&mut self, now: &DateTime<Local>) -> TickSound {
+        if self.free_time {
+            return TickSound::None;
+        }
         let Some(view) = self
             .slots
             .as_ref()
@@ -785,28 +792,35 @@ impl AppState {
 
     /// Ends the current speaking slot now and shares the time left among the next ones.
     ///
+    /// Ending the last slot enters free time without changing the meeting countdown.
     /// No sound is played for a manual skip.
     ///
-    /// Edge cases: nothing happens without slots, outside the timer page, or when the current
-    /// slot is the last one.
+    /// Edge cases: nothing happens without a current slot, outside the timer page, or once
+    /// free time has started.
     pub fn next_slot(&mut self) {
-        if self.page != Page::TimerPage {
+        if self.page != Page::TimerPage || self.free_time {
             return;
         }
         let now = Local::now();
         let Some(schedule) = self.slots.as_mut() else {
             return;
         };
-        if schedule.skip(&now) {
+        let Some(view) = schedule.current(&now) else {
+            return;
+        };
+        if view.next_name.is_none() {
+            self.free_time = true;
+        } else if schedule.skip(&now) {
             self.slot_index = schedule.current(&now).map(|view| view.index);
         }
     }
 
-    /// Drops the speaking slots, the seen index, the warnings and the running meeting, so a plan
+    /// Drops the speaking slots, free time, the seen index, warnings and running meeting, so a plan
     /// still being fetched is ignored when it arrives.
     fn clear_slots(&mut self) {
         self.slots = None;
         self.slot_index = None;
+        self.free_time = false;
         self.slots_warning = false;
         self.run = None;
         self.plan_fallback = false;
@@ -1039,12 +1053,18 @@ impl AppState {
             .as_ref()
             .and_then(|schedule| schedule.current(&Local::now()));
         window.set_has_slots(view.is_some());
+        window.set_free_time(self.free_time);
         window.set_slots_warning(self.slots_warning);
         window.set_plan_loading(self.run.as_ref().is_some_and(|run| run.plan_pending));
         window.set_plan_warning(self.plan_fallback);
         match view {
             Some(view) => {
-                window.set_slot_name(view.name.as_str().into());
+                let name = if self.free_time {
+                    FREE_TIME_LABEL
+                } else {
+                    view.name.as_str()
+                };
+                window.set_slot_name(name.into());
                 window.set_slot_time(view.remaining_ms);
                 window.set_next_slot_name(view.next_name.unwrap_or_default().into());
                 window.set_slot_identity(i32::try_from(view.index).unwrap_or(i32::MAX));
@@ -1118,10 +1138,17 @@ impl AppState {
         self.slots.is_some()
     }
 
-    /// Name of the person speaking now; `None` without slots.
+    /// Current slot label, or [`FREE_TIME_LABEL`] after ending the last slot; `None` without
+    /// a current slot.
     pub fn current_slot_name(&self) -> Option<String> {
         let schedule = self.slots.as_ref()?;
-        schedule.current(&Local::now()).map(|view| view.name)
+        schedule.current(&Local::now()).map(|view| {
+            if self.free_time {
+                FREE_TIME_LABEL.to_string()
+            } else {
+                view.name
+            }
+        })
     }
 
     /// True while the slot plan of the running meeting is being fetched.
@@ -1924,6 +1951,109 @@ pub mod tests {
 
         assert_eq!(state.current_slot_name().as_deref(), Some("Bob"));
         assert_eq!(state.slot_index, Some(1));
+        assert!(!state.free_time);
+    }
+
+    #[test]
+    fn ending_the_last_participant_enters_free_time() {
+        let mut state = state_with_equal_slots(&["Ann", "Bob"]);
+        state.next_slot();
+        assert_eq!(state.current_slot_name().as_deref(), Some("Bob"));
+        assert!(!state.free_time);
+
+        state.next_slot();
+
+        assert!(state.free_time);
+        assert!(state.has_slots());
+        assert_eq!(state.current_slot_name().as_deref(), Some(FREE_TIME_LABEL));
+    }
+
+    #[test]
+    fn ending_a_manual_last_slot_enters_free_time() {
+        let mut state = state_on_editor(&["Ann", "Bob"]);
+        state.editor_add_row();
+        state.editor_set_label(2, "Voce");
+        state.editor_set_minutes(0, 30);
+        state.editor_set_minutes(1, 30);
+        state.editor_set_minutes(2, 30);
+        let _ = state.start_from_editor();
+        state.next_slot();
+        state.next_slot();
+        assert_eq!(state.current_slot_name().as_deref(), Some("Voce"));
+        assert!(!state.free_time);
+
+        state.next_slot();
+
+        assert!(state.free_time);
+        assert_eq!(state.current_slot_name().as_deref(), Some(FREE_TIME_LABEL));
+    }
+
+    #[test]
+    fn free_time_keeps_the_meeting_timer_running_without_a_slot_beep() {
+        let mut state = state_with_equal_slots(&["Ann", "Bob"]);
+        let target = state.target;
+        state.next_slot();
+        state.next_slot();
+        state.slot_index = Some(0);
+
+        assert_eq!(state.tick(), TickSound::None);
+        assert_eq!(state.target, target);
+        assert!(state.timer_ms > 0);
+        assert_eq!(state.page, Page::TimerPage);
+    }
+
+    #[test]
+    fn repeated_next_in_free_time_does_nothing() {
+        let mut state = state_with_equal_slots(&["Ann", "Bob"]);
+        state.next_slot();
+        state.next_slot();
+        let target = state.target;
+        let index = state.slot_index;
+
+        state.next_slot();
+        state.next_slot();
+
+        assert!(state.free_time);
+        assert_eq!(state.current_slot_name().as_deref(), Some(FREE_TIME_LABEL));
+        assert_eq!(state.target, target);
+        assert_eq!(state.slot_index, index);
+    }
+
+    #[test]
+    fn stopping_free_time_clears_it() {
+        let mut state = state_with_equal_slots(&["Ann", "Bob"]);
+        state.next_slot();
+        state.next_slot();
+
+        state.stop(StopType::UserStopped);
+
+        assert!(!state.free_time);
+        assert!(!state.has_slots());
+    }
+
+    #[test]
+    fn starting_another_meeting_clears_free_time() {
+        let mut state = state_with_equal_slots(&["Ann", "Bob"]);
+        state.next_slot();
+        state.next_slot();
+        let meeting = state.run.as_ref().unwrap().meeting.clone();
+
+        let _ = state.start_run(meeting, Local::now(), true);
+        state.on_plan_loaded("now", Err(BackendError::Unreachable));
+
+        assert!(!state.free_time);
+        assert_eq!(state.current_slot_name().as_deref(), Some("Ann"));
+    }
+
+    #[test]
+    fn a_slot_named_tempo_libero_does_not_enter_free_time() {
+        let mut state = state_with_equal_slots(&[FREE_TIME_LABEL, "Zoe"]);
+
+        assert!(!state.free_time);
+        state.next_slot();
+
+        assert!(!state.free_time);
+        assert_eq!(state.current_slot_name().as_deref(), Some("Zoe"));
     }
 
     #[test]

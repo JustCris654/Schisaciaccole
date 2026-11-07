@@ -1,6 +1,6 @@
 # Glossario — app
 
-Crate `schisaciaccole` (`crates/app`): app desktop Slint. Allineato al commit ce7f79b sul branch `v2`.
+Crate `schisaciaccole` (`crates/app`): app desktop Slint. Aggiornato sul codice basato sul commit `3fd2613` del branch `v2`.
 
 ## crates/app/src/appearance.rs
 
@@ -249,73 +249,73 @@ I tipi `MainWindow`, `Help`, `Page`, `StopType`, `TimeOption`, `MeetingRow` sono
 | `OpenEditor` | struct | 100 | Editor aperto su un meeting, con stato di caricamento, richiesta in corso e avviso |
 | `MeetingsStatus` | enum | 112 | Cosa mostra la pagina riunioni oltre alle righe |
 | `AppState` | struct | 122 | Tutto ciò che mostra la finestra principale, posseduto da Rust e inviato a Slint da `AppState::render` |
-| `AppState::new` | metodo | 165 | Crea lo stato sulla pagina di selezione, con opzioni calcolate dall'ora corrente |
-| `AppState::refresh_options` | metodo | 197 | Ricalcola gli orari di fine selezionabili dall'ora corrente |
-| `AppState::select` | metodo | 223 | Avvia il conto alla rovescia verso l'opzione `index` e passa alla pagina timer |
-| `AppState::select_meeting` | metodo | 259 | Avvia subito il conto alla rovescia verso la fine della riunione della riga `index`, senza slot, e restituisce l'evento di cui chiedere il piano |
-| `AppState::start_run` | metodo | 295 | Avvia il countdown verso la fine del meeting dall'istante del clic e passa alla pagina timer |
-| `AppState::install_slots` | metodo | 321 | Divide il tempo da `started_at` a `target` negli slot pesati e imposta lo slot corrente senza suono |
-| `AppState::on_plan_loaded` | metodo | 343 | Applica il piano arrivato per il timer; su errore usa slot uguali con avviso, senza fermare il timer |
-| `AppState::apply_plan` | metodo | 358 | Come `on_plan_loaded` con l'istante esplicito; scarta piani obsoleti |
-| `AppState::open_editor` | metodo | 395 | Apre l'editor slot sul meeting della riga e chiede il piano (scopo editor) |
-| `AppState::close_editor` | metodo | 419 | Chiude l'editor e torna alla lista meeting |
-| `AppState::on_editor_plan_loaded` | metodo | 433 | Carica nell'editor il piano arrivato; su errore slot uguali con avviso |
-| `AppState::editor_set_label` | metodo | 461 | Cambia l'etichetta di una riga dell'editor |
-| `AppState::editor_set_minutes` | metodo | 470 | Cambia i minuti di una riga dell'editor |
-| `AppState::editor_set_included` | metodo | 480 | Include o esclude una riga partecipante dell'editor |
-| `AppState::editor_move_up` | metodo | 489 | Sposta in su una riga dell'editor |
-| `AppState::editor_move_down` | metodo | 498 | Sposta in giù una riga dell'editor |
-| `AppState::editor_remove_row` | metodo | 507 | Toglie una riga manuale dell'editor |
-| `AppState::editor_add_row` | metodo | 516 | Aggiunge una riga manuale all'editor |
-| `AppState::editor_reset` | metodo | 526 | Riporta l'editor a slot uguali |
-| `AppState::start_from_editor` | metodo | 543 | Avvia il countdown con gli slot dell'editor; meeting già finito: resta sull'editor con avviso |
-| `AppState::start_template_save` | metodo | 579 | Prepara il salvataggio della preferenza e segna l'editor occupato |
-| `AppState::on_template_saved` | metodo | 599 | Applica l'esito del salvataggio; true se va ricaricata la lista meeting |
-| `AppState::start_template_delete` | metodo | 629 | Prepara la cancellazione della preferenza nota e segna l'editor occupato |
-| `AppState::on_template_deleted` | metodo | 650 | Applica l'esito della cancellazione (anche 404 not\_found); true se va ricaricata la lista meeting |
-| `AppState::on_template_failed` | metodo | 680 | Gestisce un errore di salvataggio o cancellazione: sessione persa, 400 o errore generico |
-| `AppState::editor_on` | metodo | 703 | Editor aperto sull'evento dato, se c'è |
-| `AppState::busy_editor` | metodo | 710 | Editor aperto sull'evento dato con una richiesta in corso, se c'è |
-| `AppState::idle_editor` | metodo | 715 | Editor caricato e senza richieste in corso, che può inviarne una |
-| `AppState::editable` | metodo | 722 | Editor aperto e caricato, le cui righe si possono modificare |
-| `AppState::tick` | metodo | 745 | Aggiorna il conto alla rovescia rispetto all'ora corrente |
-| `AppState::update_slot_index` | metodo | 769 | Salva l'indice dello slot corrente e segnala con SlotEnd se è avanzato da solo dall'ultimo tick |
-| `AppState::next_slot` | metodo | 792 | Chiude subito lo slot corrente e ridistribuisce il tempo rimasto sui successivi; nessun effetto senza slot, fuori dal timer o sull'ultimo slot |
-| `AppState::clear_slots` | metodo | 807 | Scarta slot, indice visto, avviso partecipanti e piano in attesa |
-| `AppState::stop` | metodo | 820 | Termina il conto alla rovescia: aggiorna le opzioni, azzera target e timer |
-| `AppState::show_selection_page` | metodo | 834 | Passa alla pagina di selezione senza toccare conto alla rovescia né opzioni |
-| `AppState::show_meetings_page` | metodo | 840 | Passa alla pagina riunioni mantenendo quelle già caricate; senza account va altrove |
-| `AppState::show_home` | metodo | 845 | Lascia la pagina di fine: riunioni se autenticato, altrimenti selezione |
-| `AppState::on_meetings_loaded` | metodo | 850 | Sostituisce le riunioni con quelle di un recupero riuscito e le mostra |
-| `AppState::on_meetings_failed` | metodo | 859 | Mostra `message` nella pagina riunioni, come avviso sopra la lista se ci sono già riunioni |
-| `AppState::on_session_lost` | metodo | 865 | Sessione persa: ferma il conto alla rovescia e passa alla pagina di login con `status` |
-| `AppState::forget_meetings` | metodo | 873 | Scarta le riunioni caricate, così la prossima visita alla pagina riunioni ricomincia il caricamento |
-| `AppState::is_signed_in` | metodo | 882 | Vero se è autenticato un account |
-| `AppState::home_page` | metodo | 888 | Pagina a cui torna un conto alla rovescia finito o fermato: riunioni se autenticato |
-| `AppState::rebuild_meeting_rows` | metodo | 900 | Ricostruisce riunioni mostrate e righe da quelle ricevute e dall'ora corrente |
-| `AppState::show_loading` | metodo | 912 | Passa alla pagina di caricamento mostrata mentre si controlla la sessione salvata |
-| `AppState::on_signed_in` | metodo | 918 | Registra l'account autenticato e passa alla pagina riunioni, in attesa di un recupero |
-| `AppState::on_login_required` | metodo | 930 | Passa alla pagina di login inattiva con `status` (vuoto per nessuno), dimenticando l'account |
-| `AppState::on_local_mode` | metodo | 941 | Passa alla pagina di selezione senza account, mostrando `notice` (vuoto per nessuno) |
-| `AppState::on_login_started` | metodo | 950 | Mostra la pagina di login in attesa del browser |
-| `AppState::on_login_failed` | metodo | 956 | Termina l'attesa nella pagina di login e mostra `message` |
-| `AppState::on_login_cancelled` | metodo | 962 | Termina l'attesa nella pagina di login senza messaggio |
-| `AppState::on_logout_started` | metodo | 969 | Nasconde account e riunioni durante il logout e segnala che è in corso |
-| `AppState::on_logged_out` | metodo | 978 | Ferma il conto alla rovescia, dimentica l'account e passa alla pagina di login inattiva |
-| `AppState::bind_options` | metodo | 989 | Collega il modello condiviso delle opzioni a `window`; da chiamare una volta dopo aver creato la finestra |
-| `AppState::bind_meetings` | metodo | 994 | Collega il modello condiviso delle righe riunione a `window`; da chiamare una volta dopo la creazione |
-| `AppState::bind_editor_rows` | metodo | 999 | Collega il modello delle righe dell'editor alla finestra (una volta) |
-| `AppState::render` | metodo | 1004 | Invia a `window` pagina, stato di esecuzione, timer, account e righe di stato |
-| `AppState::render_editor` | metodo | 1064 | Invia alla finestra intestazione, righe, piè di pagina e stato dell'editor |
-| `account_label` | fn | 1184 | Nome mostrato per l'account: il nome visualizzato, o l'email se manca o è vuoto |
-| `is_in_progress` | fn | 1192 | Vero se la riunione è iniziata e non ancora finita a now |
-| `visible_meetings` | fn | 1201 | Riunioni da mostrare a now: non finite, quella in corso in cima, le altre per inizio |
-| `row_index` | fn | 1213 | Converte un indice di riga dalla UI; negativo diventa `None` (con log) |
-| `is_not_found` | fn | 1224 | Vero se l'errore è un 404 `not_found` |
-| `editor_row` | fn | 1233 | Costruisce la riga UI (`EditorRow`) di una voce dell'editor |
-| `sync_editor_rows` | fn | 1245 | Aggiorna il modello delle righe; con lo stesso numero di righe sostituisce solo quelle cambiate, così il campo in modifica tiene il focus |
-| `weighted_slots` | fn | 1260 | Voci di piano con peso > 0 come slot `(etichetta, peso)`, in ordine |
-| `meeting_remaining_fraction` | fn | 1274 | Frazione restante sulla durata nominale del meeting, limitata a 0–1; durate non valide e timer scaduti danno zero |
-| `meeting_row` | fn | 1290 | Costruisce la riga di una riunione: orari HH:MM–HH:MM, titolo, numero di partecipanti e segno di preferenza salvata |
-| `time_range` | fn | 1311 | Inizio e fine del meeting come `HH:MM–HH:MM` nel fuso dato |
-| `split_options` | fn | 1324 | Divide le opzioni di quarto d'ora in orari di fine e righe mostrate dalla UI |
+| `AppState::new` | metodo | 167 | Crea lo stato sulla pagina di selezione, con opzioni calcolate dall'ora corrente |
+| `AppState::refresh_options` | metodo | 200 | Ricalcola gli orari di fine selezionabili dall'ora corrente |
+| `AppState::select` | metodo | 226 | Avvia il conto alla rovescia verso l'opzione `index` e passa alla pagina timer |
+| `AppState::select_meeting` | metodo | 262 | Avvia subito il conto alla rovescia verso la fine della riunione della riga `index`, senza slot, e restituisce l'evento di cui chiedere il piano |
+| `AppState::start_run` | metodo | 298 | Avvia il countdown verso la fine del meeting dall'istante del clic e passa alla pagina timer |
+| `AppState::install_slots` | metodo | 324 | Divide il tempo da `started_at` a `target` negli slot pesati e imposta lo slot corrente senza suono |
+| `AppState::on_plan_loaded` | metodo | 346 | Applica il piano arrivato per il timer; su errore usa slot uguali con avviso, senza fermare il timer |
+| `AppState::apply_plan` | metodo | 361 | Come `on_plan_loaded` con l'istante esplicito; scarta piani obsoleti |
+| `AppState::open_editor` | metodo | 398 | Apre l'editor slot sul meeting della riga e chiede il piano (scopo editor) |
+| `AppState::close_editor` | metodo | 422 | Chiude l'editor e torna alla lista meeting |
+| `AppState::on_editor_plan_loaded` | metodo | 436 | Carica nell'editor il piano arrivato; su errore slot uguali con avviso |
+| `AppState::editor_set_label` | metodo | 464 | Cambia l'etichetta di una riga dell'editor |
+| `AppState::editor_set_minutes` | metodo | 473 | Cambia i minuti di una riga dell'editor |
+| `AppState::editor_set_included` | metodo | 483 | Include o esclude una riga partecipante dell'editor |
+| `AppState::editor_move_up` | metodo | 492 | Sposta in su una riga dell'editor |
+| `AppState::editor_move_down` | metodo | 501 | Sposta in giù una riga dell'editor |
+| `AppState::editor_remove_row` | metodo | 510 | Toglie una riga manuale dell'editor |
+| `AppState::editor_add_row` | metodo | 519 | Aggiunge una riga manuale all'editor |
+| `AppState::editor_reset` | metodo | 529 | Riporta l'editor a slot uguali |
+| `AppState::start_from_editor` | metodo | 546 | Avvia il countdown con gli slot dell'editor; meeting già finito: resta sull'editor con avviso |
+| `AppState::start_template_save` | metodo | 582 | Prepara il salvataggio della preferenza e segna l'editor occupato |
+| `AppState::on_template_saved` | metodo | 602 | Applica l'esito del salvataggio; true se va ricaricata la lista meeting |
+| `AppState::start_template_delete` | metodo | 632 | Prepara la cancellazione della preferenza nota e segna l'editor occupato |
+| `AppState::on_template_deleted` | metodo | 653 | Applica l'esito della cancellazione (anche 404 not\_found); true se va ricaricata la lista meeting |
+| `AppState::on_template_failed` | metodo | 683 | Gestisce un errore di salvataggio o cancellazione: sessione persa, 400 o errore generico |
+| `AppState::editor_on` | metodo | 706 | Editor aperto sull'evento dato, se c'è |
+| `AppState::busy_editor` | metodo | 713 | Editor aperto sull'evento dato con una richiesta in corso, se c'è |
+| `AppState::idle_editor` | metodo | 718 | Editor caricato e senza richieste in corso, che può inviarne una |
+| `AppState::editable` | metodo | 725 | Editor aperto e caricato, le cui righe si possono modificare |
+| `AppState::tick` | metodo | 748 | Aggiorna il conto alla rovescia rispetto all'ora corrente |
+| `AppState::update_slot_index` | metodo | 773 | Salva l'indice dello slot corrente e segnala con SlotEnd se è avanzato da solo dall'ultimo tick |
+| `AppState::next_slot` | metodo | 800 | Chiude lo slot e ridistribuisce il tempo sui successivi; sull'ultimo avvia Tempo libero senza cambiare il timer; nessun effetto senza slot, fuori dal timer o già in Tempo libero |
+| `AppState::clear_slots` | metodo | 820 | Scarta slot, indice visto, avviso partecipanti e piano in attesa |
+| `AppState::stop` | metodo | 834 | Termina il conto alla rovescia: aggiorna le opzioni, azzera target e timer |
+| `AppState::show_selection_page` | metodo | 848 | Passa alla pagina di selezione senza toccare conto alla rovescia né opzioni |
+| `AppState::show_meetings_page` | metodo | 854 | Passa alla pagina riunioni mantenendo quelle già caricate; senza account va altrove |
+| `AppState::show_home` | metodo | 859 | Lascia la pagina di fine: riunioni se autenticato, altrimenti selezione |
+| `AppState::on_meetings_loaded` | metodo | 864 | Sostituisce le riunioni con quelle di un recupero riuscito e le mostra |
+| `AppState::on_meetings_failed` | metodo | 873 | Mostra `message` nella pagina riunioni, come avviso sopra la lista se ci sono già riunioni |
+| `AppState::on_session_lost` | metodo | 879 | Sessione persa: ferma il conto alla rovescia e passa alla pagina di login con `status` |
+| `AppState::forget_meetings` | metodo | 887 | Scarta le riunioni caricate, così la prossima visita alla pagina riunioni ricomincia il caricamento |
+| `AppState::is_signed_in` | metodo | 896 | Vero se è autenticato un account |
+| `AppState::home_page` | metodo | 902 | Pagina a cui torna un conto alla rovescia finito o fermato: riunioni se autenticato |
+| `AppState::rebuild_meeting_rows` | metodo | 914 | Ricostruisce riunioni mostrate e righe da quelle ricevute e dall'ora corrente |
+| `AppState::show_loading` | metodo | 926 | Passa alla pagina di caricamento mostrata mentre si controlla la sessione salvata |
+| `AppState::on_signed_in` | metodo | 932 | Registra l'account autenticato e passa alla pagina riunioni, in attesa di un recupero |
+| `AppState::on_login_required` | metodo | 944 | Passa alla pagina di login inattiva con `status` (vuoto per nessuno), dimenticando l'account |
+| `AppState::on_local_mode` | metodo | 955 | Passa alla pagina di selezione senza account, mostrando `notice` (vuoto per nessuno) |
+| `AppState::on_login_started` | metodo | 964 | Mostra la pagina di login in attesa del browser |
+| `AppState::on_login_failed` | metodo | 970 | Termina l'attesa nella pagina di login e mostra `message` |
+| `AppState::on_login_cancelled` | metodo | 976 | Termina l'attesa nella pagina di login senza messaggio |
+| `AppState::on_logout_started` | metodo | 983 | Nasconde account e riunioni durante il logout e segnala che è in corso |
+| `AppState::on_logged_out` | metodo | 992 | Ferma il conto alla rovescia, dimentica l'account e passa alla pagina di login inattiva |
+| `AppState::bind_options` | metodo | 1003 | Collega il modello condiviso delle opzioni a `window`; da chiamare una volta dopo aver creato la finestra |
+| `AppState::bind_meetings` | metodo | 1008 | Collega il modello condiviso delle righe riunione a `window`; da chiamare una volta dopo la creazione |
+| `AppState::bind_editor_rows` | metodo | 1013 | Collega il modello delle righe dell'editor alla finestra (una volta) |
+| `AppState::render` | metodo | 1018 | Invia a `window` pagina, stato di esecuzione, timer, account e righe di stato |
+| `AppState::render_editor` | metodo | 1084 | Invia alla finestra intestazione, righe, piè di pagina e stato dell'editor |
+| `account_label` | fn | 1211 | Nome mostrato per l'account: il nome visualizzato, o l'email se manca o è vuoto |
+| `is_in_progress` | fn | 1219 | Vero se la riunione è iniziata e non ancora finita a now |
+| `visible_meetings` | fn | 1228 | Riunioni da mostrare a now: non finite, quella in corso in cima, le altre per inizio |
+| `row_index` | fn | 1240 | Converte un indice di riga dalla UI; negativo diventa `None` (con log) |
+| `is_not_found` | fn | 1251 | Vero se l'errore è un 404 `not_found` |
+| `editor_row` | fn | 1260 | Costruisce la riga UI (`EditorRow`) di una voce dell'editor |
+| `sync_editor_rows` | fn | 1272 | Aggiorna il modello delle righe; con lo stesso numero di righe sostituisce solo quelle cambiate, così il campo in modifica tiene il focus |
+| `weighted_slots` | fn | 1287 | Voci di piano con peso > 0 come slot `(etichetta, peso)`, in ordine |
+| `meeting_remaining_fraction` | fn | 1301 | Frazione restante sulla durata nominale del meeting, limitata a 0–1; durate non valide e timer scaduti danno zero |
+| `meeting_row` | fn | 1317 | Costruisce la riga di una riunione: orari HH:MM–HH:MM, titolo, numero di partecipanti e segno di preferenza salvata |
+| `time_range` | fn | 1338 | Inizio e fine del meeting come `HH:MM–HH:MM` nel fuso dato |
+| `split_options` | fn | 1351 | Divide le opzioni di quarto d'ora in orari di fine e righe mostrate dalla UI |

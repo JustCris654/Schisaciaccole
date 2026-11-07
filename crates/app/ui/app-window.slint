@@ -412,6 +412,7 @@ component TimerPage {
     in property <string> timer-end;
     in property <float> progress;
     in property <bool> has-slots;
+    in property <bool> free-time;
     in property <string> slot-name;
     in property <int> slot-identity;
     in property <duration> slot-time;
@@ -508,10 +509,10 @@ component TimerPage {
                     VerticalLayout {
                         horizontal-stretch: 1;
                         spacing: 5px;
-                        AppText { text: "STA PARLANDO"; color: AppTheme.accent; font-size: 11px; }
+                        if !root.free-time : AppText { text: "STA PARLANDO"; color: AppTheme.accent; font-size: 11px; }
                         SpeakerName { name: root.slot-name; identity: root.slot-identity; }
                     }
-                    AppText {
+                    if !root.free-time : AppText {
                         text: root.duration-text(root.slot-time);
                         font-size: 24px;
                         font-weight: 700;
@@ -589,6 +590,7 @@ export component MainWindow inherits Window {
     in property     <bool>     meetings-loading;
     in property     <string>   meetings-error;
     in property     <bool>     has-slots;
+    in property     <bool>     free-time;
     in property     <string>   slot-name;
     in property     <duration> slot-time;
     in property     <string>   next-slot-name;
@@ -851,6 +853,7 @@ export component MainWindow inherits Window {
             timer-end: root.timer-end;
             progress: root.timer-progress;
             has-slots: root.has-slots;
+            free-time: root.free-time;
             slot-name: root.slot-name;
             slot-identity: root.slot-identity;
             slot-time: root.slot-time;
