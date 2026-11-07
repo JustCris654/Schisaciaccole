@@ -6129,7 +6129,7 @@ dependencies = [
 
 [[package]]
 name = "schisaciaccole"
-version = "0.2.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "apple-native-keyring-store",
@@ -6167,7 +6167,7 @@ dependencies = [
 
 [[package]]
 name = "schisaciaccole-core"
-version = "0.2.0"
+version = "1.0.0"
 dependencies = [
  "chrono",
  "serde",
@@ -6177,7 +6177,7 @@ dependencies = [
 
 [[package]]
 name = "schisaciaccole-server"
-version = "0.2.0"
+version = "1.0.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
