@@ -1,4 +1,6 @@
-import { Palette, Button, VerticalBox, HorizontalBox, AboutSlint, ListView, LineEdit, SpinBox, CheckBox } from "std-widgets.slint";
+import { VerticalBox, HorizontalBox, AboutSlint, ListView, LineEdit, SpinBox, CheckBox } from "std-widgets.slint";
+
+import { AppTheme, AppText, ThemedButton } from "theme.slint";
 
 import "../assets/fonts/Plus_Jakarta_Sans/static/PlusJakartaSans-Medium.ttf";
 
@@ -26,51 +28,16 @@ export struct EditorRow {
     email: string,
 }
 
-component SelectionButton inherits VerticalBox {
+component SelectionButton inherits ThemedButton {
     in property <string> time;
     in property <string> minutes;
-    in property <length> font-size;
-
-    callback clicked <=> touch.clicked;
-
-    Text {
-	font-size: root.font-size/2;
-	text: "Minutes: " + minutes;
-    }
-
-    Rectangle {
-	touch := TouchArea {}
-
-	background: touch.has-hover ? #A169C7 : #C682F5;
-	border-radius: 4px;
-
-	txt := Text {
-	    text: root.time;
-	    font-size: root.font-size;
-	    color: black;
-	}
-
-    }
+    text: root.time;
+    detail: "Minutes: " + root.minutes;
+    primary: true;
 }
 
-component AccentButton inherits Rectangle {
-    in property <string> text;
-    in property <length> font-size;
-
-    callback clicked <=> touch.clicked;
-
-    background: touch.has-hover ? #A169C7 : #C682F5;
-    border-radius: 4px;
-    min-width: label.preferred-width + 2 * root.font-size;
-    min-height: label.preferred-height + root.font-size;
-
-    touch := TouchArea {}
-
-    label := Text {
-	text: root.text;
-	font-size: root.font-size;
-	color: black;
-    }
+component AccentButton inherits ThemedButton {
+    primary: true;
 }
 
 component AccountBar inherits HorizontalLayout {
@@ -81,7 +48,7 @@ component AccountBar inherits HorizontalLayout {
 
     spacing: 10px * ui-scale;
 
-    Text {
+    AppText {
 	text: "Connesso come " + root.account-name;
 	font-size: 12px * root.ui-scale;
 	vertical-alignment: center;
@@ -89,7 +56,7 @@ component AccountBar inherits HorizontalLayout {
 	overflow: elide;
     }
 
-    Button {
+    ThemedButton {
 	text: "Esci";
 	clicked => { root.logout(); }
     }
@@ -127,35 +94,35 @@ component MeetingsPage {
 	    logout => { root.logout(); }
 	}
 
-	Text {
+	AppText {
 	    text: "I meeting di oggi";
 	    font-size: 22px * root.ui-scale;
 	    horizontal-alignment: start;
 	}
 
-	if root.loading : Text {
+	if root.loading : AppText {
 	    text: "Caricamento…";
 	    font-size: 14px * root.ui-scale;
 	    vertical-stretch: 1;
 	}
 
-	if !root.loading && root.error != "" && root.meetings.length == 0 : Text {
+	if !root.loading && root.error != "" && root.meetings.length == 0 : AppText {
 	    text: root.error;
-	    color: #C682F5;
+	    color: AppTheme.accent;
 	    font-size: 14px * root.ui-scale;
 	    wrap: word-wrap;
 	    vertical-stretch: 1;
 	}
 
-	if !root.loading && root.error == "" && root.meetings.length == 0 : Text {
+	if !root.loading && root.error == "" && root.meetings.length == 0 : AppText {
 	    text: "Nessun altro meeting oggi.";
 	    font-size: 14px * root.ui-scale;
 	    vertical-stretch: 1;
 	}
 
-	if !root.loading && root.error != "" && root.meetings.length > 0 : Text {
+	if !root.loading && root.error != "" && root.meetings.length > 0 : AppText {
 	    text: root.error;
-	    color: #C682F5;
+	    color: AppTheme.accent;
 	    font-size: 12px * root.ui-scale;
 	    wrap: word-wrap;
 	}
@@ -170,9 +137,9 @@ component MeetingsPage {
 		    height: parent.height - 6px * root.ui-scale;
 		    border-radius: 4px;
 		    border-width: row.in-progress ? 2px : 0px;
-		    border-color: #C682F5;
+		    border-color: AppTheme.accent;
 		    background: row.in-progress
-			? (touch.has-hover ? #C682F55A : #C682F533)
+			? (touch.has-hover ? AppTheme.accent.transparentize(0.65) : AppTheme.accent.transparentize(0.8))
 			: (touch.has-hover ? #80808040 : #80808022);
 
 		    touch := TouchArea {
@@ -184,13 +151,13 @@ component MeetingsPage {
 			padding-right: 12px * root.ui-scale;
 			spacing: 12px * root.ui-scale;
 
-			Text {
+			AppText {
 			    text: row.time-range;
 			    font-size: 16px * root.ui-scale;
 			    vertical-alignment: center;
 			}
 
-			Text {
+			AppText {
 			    text: row.title;
 			    font-size: 16px * root.ui-scale;
 			    vertical-alignment: center;
@@ -201,15 +168,15 @@ component MeetingsPage {
 			HorizontalLayout {
 			    spacing: 4px * root.ui-scale;
 
-			    Text {
+			    AppText {
 				text: row.attendees;
 				font-size: 12px * root.ui-scale;
 				vertical-alignment: center;
 			    }
 
-			    if row.has-template : Text {
+			    if row.has-template : AppText {
 				text: "· slot salvati";
-				color: #C682F5;
+				color: AppTheme.accent;
 				font-size: 12px * root.ui-scale;
 				vertical-alignment: center;
 			    }
@@ -232,7 +199,7 @@ component MeetingsPage {
 	HorizontalLayout {
 	    alignment: start;
 
-	    Button {
+	    ThemedButton {
 		text: "Orari liberi";
 		clicked => { root.free-slots(); }
 	    }
@@ -271,25 +238,25 @@ component EditorPage {
         padding: 15px * root.ui-scale;
         spacing: 6px * root.ui-scale;
 
-        Text {
+        AppText {
             text: root.title;
             font-size: 20px * root.ui-scale;
             overflow: elide;
         }
 
-        Text {
+        AppText {
             text: root.time-range + "  ·  " + root.duration;
             font-size: 12px * root.ui-scale;
         }
 
-        if root.attendees-warning : Text {
+        if root.attendees-warning : AppText {
             text: "Lista partecipanti incompleta: aggiungi le voci mancanti";
-            color: #C682F5;
+            color: AppTheme.accent;
             font-size: 12px * root.ui-scale;
             wrap: word-wrap;
         }
 
-        if root.loading : Text {
+        if root.loading : AppText {
             text: "Caricamento…";
             font-size: 14px * root.ui-scale;
             vertical-stretch: 1;
@@ -318,7 +285,7 @@ component EditorPage {
                             edited(text) => { root.set-label(index, text); }
                         }
 
-                        if row.attendee : Text {
+                        if row.attendee : AppText {
                             text: row.email;
                             font-size: 9px * root.ui-scale;
                             overflow: elide;
@@ -337,7 +304,7 @@ component EditorPage {
                         }
                     }
 
-                    Text {
+                    AppText {
                         text: "min";
                         font-size: 12px * root.ui-scale;
                         vertical-alignment: center;
@@ -346,7 +313,7 @@ component EditorPage {
                     VerticalLayout {
                         alignment: center;
 
-                        Button {
+                        ThemedButton {
                             text: "su";
                             enabled: index > 0;
                             clicked => { root.move-up(index); }
@@ -356,7 +323,7 @@ component EditorPage {
                     VerticalLayout {
                         alignment: center;
 
-                        Button {
+                        ThemedButton {
                             text: "giù";
                             enabled: index < root.rows.length - 1;
                             clicked => { root.move-down(index); }
@@ -376,7 +343,7 @@ component EditorPage {
                     if !row.attendee : VerticalLayout {
                         alignment: center;
 
-                        Button {
+                        ThemedButton {
                             text: "Rimuovi";
                             clicked => { root.remove-row(index); }
                         }
@@ -385,15 +352,15 @@ component EditorPage {
             }
         }
 
-        if root.notice != "" : Text {
+        if root.notice != "" : AppText {
             text: root.notice;
-            color: #C682F5;
+            color: AppTheme.accent;
             font-size: 12px * root.ui-scale;
         }
 
-        Text {
+        AppText {
             text: root.unassigned;
-            color: root.over ? #C682F5 : Palette.foreground;
+            color: root.over ? AppTheme.accent : AppTheme.text;
             font-size: 14px * root.ui-scale;
         }
 
@@ -401,25 +368,25 @@ component EditorPage {
             spacing: 6px * root.ui-scale;
             alignment: start;
 
-            Button {
+            ThemedButton {
                 text: "Aggiungi voce";
                 enabled: !root.loading;
                 clicked => { root.add-row(); }
             }
 
-            Button {
+            ThemedButton {
                 text: "Ripristina slot uguali";
                 enabled: !root.loading;
                 clicked => { root.reset(); }
             }
 
-            Button {
+            ThemedButton {
                 text: "Salva come preferenza";
                 enabled: !root.loading && !root.busy;
                 clicked => { root.save(); }
             }
 
-            if root.has-template : Button {
+            if root.has-template : ThemedButton {
                 text: "Elimina preferenza";
                 enabled: !root.loading && !root.busy;
                 clicked => { root.delete-template(); }
@@ -436,7 +403,7 @@ component EditorPage {
                 clicked => { if (!root.loading) { root.start-meeting(); } }
             }
 
-            Button {
+            ThemedButton {
                 text: "Indietro";
                 clicked => { root.back(); }
             }
@@ -494,43 +461,43 @@ component TimerPage {
 	padding: 25px * ui-scale;
 
 
-	Text {
+	AppText {
 	    text: displayTimer;
-	    color: #C682F5;
+	    color: AppTheme.accent;
 	    font-size: 100px * root.ui-scale;
 	    horizontal-alignment: center;
 	}
 
-	if root.has-slots : Text {
+	if root.has-slots : AppText {
 	    text: root.slot-name + "  " + root.slot-display;
 	    font-size: 32px * root.ui-scale;
 	    horizontal-alignment: center;
 	    overflow: elide;
 	}
 
-	if root.has-slots && root.next-slot-name != "" : Text {
+	if root.has-slots && root.next-slot-name != "" : AppText {
 	    text: "Poi: " + root.next-slot-name;
 	    font-size: 18px * root.ui-scale;
 	    horizontal-alignment: center;
 	    overflow: elide;
 	}
 
-	if root.plan-loading : Text {
+	if root.plan-loading : AppText {
 	    text: "Caricamento slot…";
 	    font-size: 14px * root.ui-scale;
 	    horizontal-alignment: center;
 	}
 
-	if root.plan-warning : Text {
+	if root.plan-warning : AppText {
 	    text: "Preferenza non caricata: slot uguali";
-	    color: #C682F5;
+	    color: AppTheme.accent;
 	    font-size: 12px * root.ui-scale;
 	    horizontal-alignment: center;
 	}
 
-	if root.slots-warning : Text {
+	if root.slots-warning : AppText {
 	    text: "Lista partecipanti incompleta";
-	    color: #C682F5;
+	    color: AppTheme.accent;
 	    font-size: 12px * root.ui-scale;
 	    horizontal-alignment: center;
 	}
@@ -538,12 +505,12 @@ component TimerPage {
 	HorizontalBox {
 	    alignment: center;
 
-	    if root.has-slots : Button {
+	    if root.has-slots : ThemedButton {
 		text: "Avanti";
 		clicked => { next-slot(); }
 	    }
 
-	    Button {
+	    ThemedButton {
 		text: "Stop";
 		clicked => { stop(StopType.UserStopped); }
 	    }
@@ -553,6 +520,7 @@ component TimerPage {
 
 export component MainWindow inherits Window {
     title: "Schisaciaccole";
+    background: AppTheme.panel;
     icon: @image-url("../assets/icon_256.png");
     preferred-width: 800px;
     preferred-height: 600px;
@@ -716,7 +684,7 @@ export component MainWindow inherits Window {
         height: 10px;
         x: root.width - self.width - 2px; // Aligns to the right
         y: 2px; // Aligns to the top
-        background: #C682F5;
+        background: AppTheme.accent;
         border-radius: self.width / 2; // Makes the rectangle a circle
     }
 
@@ -737,19 +705,19 @@ export component MainWindow inherits Window {
 	if root.signed-in : HorizontalLayout {
 	    alignment: start;
 
-	    Button {
+	    ThemedButton {
 		text: "I miei meeting";
 		clicked => { set-meetings-page(); }
 	    }
 	}
 
-	if root.notice != "" : Text {
+	if root.notice != "" : AppText {
 	    text: root.notice;
-	    color: #C682F5;
+	    color: AppTheme.accent;
 	    font-size: 12px * root.ui-scale;
 	}
 
-	Text {
+	AppText {
 	    text: "Quando deve finire questa cerimonia?";
 	    font-size: 22px * root.ui-scale;
 	    horizontal-alignment: start;
@@ -818,7 +786,7 @@ export component MainWindow inherits Window {
 	alignment: center;
 	padding: 25px * ui-scale;
 
-	Text {
+	AppText {
 	    text: "Connessione…";
 	    font-size: 22px * root.ui-scale;
 	    horizontal-alignment: center;
@@ -830,14 +798,14 @@ export component MainWindow inherits Window {
 	padding: 25px * ui-scale;
 	spacing: 15px * ui-scale;
 
-	Text {
+	AppText {
 	    text: "Accedi con Google";
-	    color: #C682F5;
+	    color: AppTheme.accent;
 	    font-size: 36px * root.ui-scale;
 	    horizontal-alignment: center;
 	}
 
-	Text {
+	AppText {
 	    text: "Vedrai i tuoi meeting di oggi e potrai avviare il countdown sulla fine del meeting.";
 	    font-size: 14px * root.ui-scale;
 	    horizontal-alignment: center;
@@ -854,18 +822,18 @@ export component MainWindow inherits Window {
 		clicked => { login(); }
 	    }
 
-	    if !root.login-waiting : Button {
+	    if !root.login-waiting : ThemedButton {
 		text: "Usa senza accesso";
 		clicked => { skip-login(); }
 	    }
 
-	    if root.login-waiting : Button {
+	    if root.login-waiting : ThemedButton {
 		text: "Annulla";
 		clicked => { cancel-login(); }
 	    }
 	}
 
-	Text {
+	AppText {
 	    text: root.login-status;
 	    font-size: 14px * root.ui-scale;
 	    horizontal-alignment: center;
@@ -896,16 +864,16 @@ export component MainWindow inherits Window {
 	padding: 25px * ui-scale;
 
 
-	Text {
+	AppText {
 	    text: "Congrats!\nScrum ceremony finished";
-	    color: #C682F5;
+	    color: AppTheme.accent;
 	    font-size: 36px * root.ui-scale;
 	    horizontal-alignment: center;
 	}
 
-	Text {
+	AppText {
 	    text: "Now get the fuck outta here";
-	    color: #ffffff;
+	    color: AppTheme.text;
 	    font-size: 24px * root.ui-scale;
 	    horizontal-alignment: center;
 	}
@@ -914,7 +882,7 @@ export component MainWindow inherits Window {
 	HorizontalBox {
 	    alignment: center;
 
-	    Button {
+	    ThemedButton {
 		text: "Selection page";
 		clicked => { close-finished(); }
 	    }
@@ -927,6 +895,7 @@ export component MainWindow inherits Window {
 
 export component Help inherits Window {
     title: "Schisaciaccole";
+    background: AppTheme.panel;
     preferred-width: 526px;
     preferred-height: 320px;
     always-on-top: true;
@@ -939,9 +908,9 @@ export component Help inherits Window {
 	height: root.height;
 	alignment: center;
 
-	Text {
+	AppText {
 	    text: "Keybindings:";
-	    color: white;
+	    color: AppTheme.text;
 	    font-size: 24px;
 	    horizontal-alignment: center;
 	}
@@ -951,14 +920,14 @@ export component Help inherits Window {
 	    GridLayout {
 		spacing-horizontal: 50px;
 		Row {
-		    Text {
+		    AppText {
 			// text: "You can't start a timer with 0 seconds";
 			text: "Q";
 			font-size: 15pt;
 			horizontal-alignment: left;
 		    }
 
-		    Text {
+		    AppText {
 			// text: "You can't start a timer with 0 seconds";
 			text: "Quit";
 			font-size: 15pt;
@@ -966,14 +935,14 @@ export component Help inherits Window {
 		    }
 		}
 		Row {
-		    Text {
+		    AppText {
 			// text: "You can't start a timer with 0 seconds";
 			text: "M";
 			font-size: 15pt;
 			horizontal-alignment: left;
 		    }
 
-		    Text {
+		    AppText {
 			// text: "You can't start a timer with 0 seconds";
 			text: "Toggle fullscreen";
 			font-size: 15pt;
@@ -981,14 +950,14 @@ export component Help inherits Window {
 		    }
 		}
 		Row {
-		    Text {
+		    AppText {
 			// text: "You can't start a timer with 0 seconds";
 			text: "Esc";
 			font-size: 15pt;
 			horizontal-alignment: left;
 		    }
 
-		    Text {
+		    AppText {
 			// text: "You can't start a timer with 0 seconds";
 			text: "Exit fullscreen";
 			font-size: 15pt;
@@ -996,14 +965,14 @@ export component Help inherits Window {
 		    }
 		}
 		Row {
-		    Text {
+		    AppText {
 			// text: "You can't start a timer with 0 seconds";
 			text: "T";
 			font-size: 15pt;
 			horizontal-alignment: left;
 		    }
 
-		    Text {
+		    AppText {
 			// text: "You can't start a timer with 0 seconds";
 			text: "Toggle always-on-top, showed by small circle in top right corner";
 			font-size: 15pt;
@@ -1011,13 +980,13 @@ export component Help inherits Window {
 		    }
 		}
 		Row {
-		    Text {
+		    AppText {
 			text: "N";
 			font-size: 15pt;
 			horizontal-alignment: left;
 		    }
 
-		    Text {
+		    AppText {
 			text: "Next speaker slot";
 			font-size: 15pt;
 			horizontal-alignment: left;

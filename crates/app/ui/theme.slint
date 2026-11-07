@@ -1,0 +1,99 @@
+import { Palette } from "std-widgets.slint";
+
+export global AppTheme {
+    out property <bool> dark: Palette.color-scheme == ColorScheme.dark;
+    out property <color> background: dark ? #17171b : #f4f1ec;
+    out property <color> panel: dark ? #222228 : #fcfaf7;
+    out property <color> text: dark ? #f5f3f7 : #211b29;
+    out property <color> muted: dark ? #aaa5b2 : #686071;
+    out property <color> line: dark ? #414149 : #d7d0df;
+    out property <color> accent: dark ? #c682f5 : #7734ad;
+    out property <color> on-accent: dark ? #17171b : #ffffff;
+    out property <length> corner-radius: 8px;
+    out property <length> control-height: 44px;
+    out property <length> spacing: 8px;
+}
+
+export component AppText inherits Text {
+    color: AppTheme.text;
+    font-size: 14px;
+}
+
+export component ThemedButton inherits Rectangle {
+    in property <string> text;
+    in property <string> detail;
+    in property <length> font-size: 14px;
+    in property <bool> primary;
+    in property <bool> enabled: true;
+    out property <bool> has-focus: focus.has-focus;
+    out property <bool> hovered: touch.has-hover;
+    callback clicked();
+
+    forward-focus: focus;
+    min-width: content.min-width;
+    min-height: content.min-height;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+    border-radius: AppTheme.corner-radius;
+    border-width: focus.has-focus ? 2px : 1px;
+    border-color: focus.has-focus
+        ? (root.primary ? AppTheme.text : AppTheme.accent)
+        : (root.primary ? transparent : AppTheme.line);
+    opacity: root.enabled ? 1 : 0.45;
+    background: root.primary
+        ? (touch.pressed ? AppTheme.accent.darker(0.16) : (touch.has-hover ? AppTheme.accent.darker(0.08) : AppTheme.accent))
+        : (touch.pressed ? AppTheme.line : (touch.has-hover ? AppTheme.background : AppTheme.panel));
+
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-description: root.detail;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if (root.enabled) { root.clicked(); } }
+
+    content := VerticalLayout {
+        padding-left: 16px;
+        padding-right: 16px;
+        padding-top: 8px;
+        padding-bottom: 8px;
+        spacing: AppTheme.spacing;
+        alignment: center;
+
+        AppText {
+            text: root.text;
+            font-size: root.font-size;
+            font-weight: 700;
+            color: root.primary ? AppTheme.on-accent : AppTheme.text;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+
+        if root.detail != "" : AppText {
+            text: root.detail;
+            font-size: 13px;
+            color: root.primary ? AppTheme.on-accent : AppTheme.muted;
+            horizontal-alignment: center;
+            accessible-role: none;
+        }
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            focus.focus();
+            root.clicked();
+        }
+    }
+
+    focus := FocusScope {
+        width: 0px;
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if (event.text == Key.Space || event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+}
