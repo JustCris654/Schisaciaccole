@@ -1,5 +1,6 @@
 //! Schisaciaccole: countdown timer for time-boxed Scrum ceremonies.
 
+mod appearance;
 mod backend;
 mod config;
 mod editor;
@@ -32,6 +33,12 @@ fn main() -> anyhow::Result<()> {
     info!("Starting schisaciaccole");
 
     let main_window = MainWindow::new().context("failed to create the main window")?;
+    let window_weak = main_window.as_weak();
+    let _reduced_motion_observer = appearance::observe_reduced_motion(move |reduce_motion| {
+        let _ = window_weak.upgrade_in_event_loop(move |window| {
+            window.set_reduce_motion(reduce_motion);
+        });
+    });
 
     let mut app_state = AppState::new().context("failed to compute the initial time options")?;
     app_state.bind_options(&main_window);

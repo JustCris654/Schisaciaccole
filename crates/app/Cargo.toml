@@ -29,8 +29,16 @@ webbrowser = "1.2.6"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 apple-native-keyring-store = { version = "1.0.2", features = ["keychain"] }
+block2 = "0.6.2"
+objc2 = "0.6.4"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSAccessibility", "NSWorkspace"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSNotification", "NSOperation", "block2"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+async-channel = "2.5.0"
+async-io = "2.6.0"
+futures-lite = "2.6.1"
+zbus = "5.15.0"
 zbus-secret-service-keyring-store = { version = "1.0.1", default-features = false, features = ["crypto-rust"] }
 
 [dev-dependencies]

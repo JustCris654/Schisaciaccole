@@ -15,6 +15,37 @@ export global AppTheme {
     out property <length> spacing: 8px;
 }
 
+export global AppMotion {
+    in-out property <bool> reduced: true;
+}
+
+export component MotionProgress {
+    in property <duration> duration: 1ms;
+    in property <bool> reduced: AppMotion.reduced;
+    out property <bool> active;
+    private property <duration> started;
+    // Settled transitions stop reading the animation clock and requesting frames.
+    out property <float> value: !root.active || root.reduced ? 1
+        : clamp((animation-tick() - root.started) / max(root.duration, 1ms), 0, 1);
+
+    public function restart() {
+        if (root.reduced) {
+            root.active = false;
+        } else {
+            root.started = animation-tick();
+            root.active = true;
+        }
+    }
+    public function finish() { root.active = false; }
+
+    changed value => {
+        if (root.value >= 1) { root.active = false; }
+    }
+    changed reduced => {
+        if (root.reduced) { root.finish(); }
+    }
+}
+
 export component AppText inherits Text {
     color: AppTheme.text;
     font-size: 14px;
@@ -35,6 +66,27 @@ export component ThemedButton inherits Rectangle {
     out property <bool> has-focus: focus.has-focus;
     out property <bool> hovered: touch.has-hover;
     callback clicked();
+    in property <color> base-background: root.primary ? AppTheme.accent : (root.bare ? transparent : AppTheme.panel);
+    in property <color> hover-background: root.primary ? AppTheme.accent.darker(0.08) : AppTheme.background;
+    private property <color> target-fill: touch.pressed
+        ? (root.primary ? AppTheme.accent.darker(0.16) : AppTheme.line)
+        : (touch.has-hover ? root.hover-background : root.base-background);
+    private property <color> from-fill;
+    private property <color> to-fill;
+    private property <color> displayed-fill: root.to-fill.mix(root.from-fill, hover-fade.value);
+
+    init => {
+        root.from-fill = root.target-fill;
+        root.to-fill = root.target-fill;
+    }
+    changed target-fill => {
+        let previous = root.displayed-fill;
+        root.from-fill = previous;
+        root.to-fill = root.target-fill;
+        if (previous != root.to-fill) { hover-fade.restart(); }
+    }
+
+    hover-fade := MotionProgress { duration: 120ms; }
 
     forward-focus: focus;
     min-width: content.min-width;
@@ -47,9 +99,7 @@ export component ThemedButton inherits Rectangle {
         ? (root.primary ? AppTheme.text : AppTheme.accent)
         : (root.primary || root.bare ? transparent : AppTheme.line);
     opacity: root.enabled ? 1 : 0.45;
-    background: root.primary
-        ? (touch.pressed ? AppTheme.accent.darker(0.16) : (touch.has-hover ? AppTheme.accent.darker(0.08) : AppTheme.accent))
-        : (touch.pressed ? AppTheme.line : (touch.has-hover ? AppTheme.background : (root.bare ? transparent : AppTheme.panel)));
+    background: root.displayed-fill;
 
     accessible-role: button;
     accessible-label: root.accessible-name == "" ? root.text : root.accessible-name;
@@ -98,6 +148,7 @@ export component ThemedButton inherits Rectangle {
         width: 0px;
         enabled: root.enabled;
         key-pressed(event) => {
+            if (!root.enabled) { return reject; }
             if (event.text == Key.Space || event.text == Key.Return) {
                 root.clicked();
                 return accept;

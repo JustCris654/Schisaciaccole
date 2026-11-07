@@ -6133,13 +6133,20 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "apple-native-keyring-store",
+ "async-channel",
+ "async-io",
  "base64 0.23.1",
+ "block2 0.6.2",
  "chrono",
  "env_logger",
+ "futures-lite",
  "getrandom 0.4.3",
  "i-slint-core",
  "keyring-core",
  "log",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
  "reqwest 0.13.5",
  "rodio",
  "schisaciaccole-core",
@@ -6154,6 +6161,7 @@ dependencies = [
  "url",
  "webbrowser",
  "wiremock",
+ "zbus",
  "zbus-secret-service-keyring-store",
 ]
 

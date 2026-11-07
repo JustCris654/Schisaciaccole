@@ -1,5 +1,5 @@
 import { ListView, AboutSlint } from "std-widgets.slint";
-import { AppTheme, AppText, ThemedButton, CompactButton, ThemedField, ScrollList } from "theme.slint";
+import { AppTheme, AppText, ThemedButton, CompactButton, ThemedField, ScrollList, AppMotion, MotionProgress } from "theme.slint";
 
 import "../assets/fonts/Plus_Jakarta_Sans/static/PlusJakartaSans-Regular.ttf";
 import "../assets/fonts/Plus_Jakarta_Sans/static/PlusJakartaSans-Medium.ttf";
@@ -349,6 +349,62 @@ component EditorPage {
     }
 }
 
+component SpeakerName inherits Rectangle {
+    in property <string> name;
+    in property <int> identity: -1;
+    private property <string> remembered-name;
+    private property <string> previous-name;
+    private property <int> previous-identity: -1;
+    min-height: speaker-content.preferred-height;
+    horizontal-stretch: 1;
+
+    init => {
+        root.remembered-name = root.name;
+        root.previous-identity = root.identity;
+    }
+    changed name => {
+        if (root.identity == root.previous-identity) {
+            root.remembered-name = root.name;
+        }
+    }
+    changed identity => {
+        if (root.identity != root.previous-identity) {
+            root.previous-name = root.remembered-name;
+            root.remembered-name = root.name;
+            if (root.previous-identity >= 0 && root.identity >= 0) {
+                speaker-fade.restart();
+            } else {
+                speaker-fade.finish();
+            }
+            root.previous-identity = root.identity;
+        }
+    }
+    speaker-fade := MotionProgress { duration: 220ms; }
+    speaker-previous := AppText {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        text: root.previous-name;
+        font-size: 24px;
+        font-weight: 700;
+        overflow: elide;
+        opacity: 1 - speaker-fade.value;
+        accessible-role: none;
+    }
+    speaker-content := AppText {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        text: root.name;
+        font-size: 24px;
+        font-weight: 700;
+        overflow: elide;
+        opacity: speaker-fade.value;
+    }
+}
+
 component TimerPage {
     in property <duration> timer-time;
     in property <bool> running-state;
@@ -429,7 +485,7 @@ component TimerPage {
                 height: 6px;
                 border-radius: 3px;
                 background: AppTheme.line;
-                Rectangle {
+                progress-fill := Rectangle {
                     x: 0px;
                     y: 0px;
                     width: parent.width * clamp(root.progress, 0, 1);
@@ -453,7 +509,7 @@ component TimerPage {
                         horizontal-stretch: 1;
                         spacing: 5px;
                         AppText { text: "STA PARLANDO"; color: AppTheme.accent; font-size: 11px; }
-                        AppText { text: root.slot-name; font-size: 24px; font-weight: 700; overflow: elide; }
+                        SpeakerName { name: root.slot-name; identity: root.slot-identity; }
                     }
                     AppText {
                         text: root.duration-text(root.slot-time);
@@ -508,6 +564,10 @@ export component MainWindow inherits Window {
     property <bool> letter-keys-enabled: page != Page.EditorPage;
 
     always-on-top: on-top;
+
+    in-out property <bool> reduce-motion <=> AppMotion.reduced;
+    page-fade := MotionProgress { duration: 180ms; }
+    finish-pulse := MotionProgress { duration: 600ms; }
 
     in property <string> current-time;
     in property <string> meeting-title;
@@ -580,6 +640,8 @@ export component MainWindow inherits Window {
 
     // Leaving the editor drops its focused text field: give the focus back to the shortcuts.
     changed page => {
+        page-fade.restart();
+        if (page == Page.TimerFinished) { finish-pulse.restart(); }
         if (page != Page.EditorPage) {
             scope.focus();
         }
@@ -652,163 +714,169 @@ export component MainWindow inherits Window {
     }
 
 
-    if page == Page.SelectionPage : VerticalLayout {
-        padding: 32px;
-        spacing: 24px;
-        Navigation {
-            signed-in: root.signed-in;
-            free-slots => { root.set-selection-page(); }
-            meetings => { root.set-meetings-page(); }
+    page-body := Rectangle {
+        width: root.width;
+        height: root.height;
+        opacity: page-fade.value;
+        if page == Page.SelectionPage : VerticalLayout {
+            padding: 32px;
+            spacing: 24px;
+            Navigation {
+                signed-in: root.signed-in;
+                free-slots => { root.set-selection-page(); }
+                meetings => { root.set-meetings-page(); }
+                logout => { root.logout(); }
+                help => { root.help(); }
+            }
+            Heading { text: "Quando finisce la cerimonia?"; }
+            MutedText {
+                text: "Sono le " + root.current-time + ". Scegli l’orario di fine.";
+                font-size: 16px;
+            }
+            GridLayout {
+                height: 204px;
+                spacing-horizontal: 16px;
+                spacing-vertical: 24px;
+                for option[index] in root.options : ThemedButton {
+                    row: floor(index / 4);
+                    col: mod(index, 4);
+                    height: 90px;
+                    horizontal-stretch: 1;
+                    text: option.time;
+                    detail: "tra " + option.minutes + " min";
+                    font-size: 24px;
+                    primary: index == 0;
+                    base-background: index == 0 ? AppTheme.accent : AppTheme.background;
+                    hover-background: index == 0 ? AppTheme.accent.darker(0.08) : AppTheme.tint;
+                    border-width: self.has-focus ? 2px : 0px;
+                    border-radius: 10px;
+                    clicked => { root.select-time(index); }
+                }
+            }
+            if root.notice != "" : AppText {
+                text: root.notice;
+                color: AppTheme.accent;
+                font-size: 12px;
+                wrap: word-wrap;
+            }
+            Rectangle { vertical-stretch: 1; }
+        }
+
+        if page == Page.MeetingsPage : MeetingsPage {
+            width: root.width;
+            height: root.height;
+            account-name: root.account-name;
+            meetings: root.meetings;
+            loading: root.meetings-loading;
+            error: root.meetings-error;
+            select(index) => { root.select-meeting(index); }
+            open-editor(index) => { root.open-editor(index); }
+            refresh => { root.refresh-meetings(); }
             logout => { root.logout(); }
+            free-slots => { root.set-selection-page(); }
             help => { root.help(); }
         }
-        Heading { text: "Quando finisce la cerimonia?"; }
-        MutedText {
-            text: "Sono le " + root.current-time + ". Scegli l’orario di fine.";
-            font-size: 16px;
+        if page == Page.EditorPage : EditorPage {
+            width: root.width;
+            height: root.height;
+            title: root.editor-title;
+            time-range: root.editor-time-range;
+            duration: root.editor-duration;
+            attendees-warning: root.editor-attendees-warning;
+            loading: root.editor-loading;
+            busy: root.editor-busy;
+            notice: root.editor-notice;
+            unassigned: root.editor-unassigned;
+            over: root.editor-over;
+            has-template: root.editor-has-template;
+            rows: root.editor-rows;
+            set-label(index, text) => { root.editor-set-label(index, text); }
+            set-minutes(index, value) => { root.editor-set-minutes(index, value); }
+            set-included(index, included) => { root.editor-set-included(index, included); }
+            move-up(index) => { root.editor-move-up(index); }
+            move-down(index) => { root.editor-move-down(index); }
+            remove-row(index) => { root.editor-remove-row(index); }
+            add-row => { root.editor-add-row(); }
+            reset => { root.editor-reset(); }
+            save => { root.editor-save(); }
+            delete-template => { root.editor-delete(); }
+            start-meeting => { root.editor-start(); }
+            back => { root.editor-back(); }
         }
-        GridLayout {
-            height: 204px;
-            spacing-horizontal: 16px;
-            spacing-vertical: 24px;
-            for option[index] in root.options : ThemedButton {
-                row: floor(index / 4);
-                col: mod(index, 4);
-                height: 90px;
-                horizontal-stretch: 1;
-                text: option.time;
-                detail: "tra " + option.minutes + " min";
-                font-size: 24px;
-                primary: index == 0;
-                background: index == 0 ? (self.hovered ? AppTheme.accent.darker(0.08) : AppTheme.accent)
-                    : (self.hovered ? AppTheme.tint : AppTheme.background);
-                border-width: self.has-focus ? 2px : 0px;
-                border-radius: 10px;
-                clicked => { root.select-time(index); }
-            }
-        }
-        if root.notice != "" : AppText {
-            text: root.notice;
-            color: AppTheme.accent;
-            font-size: 12px;
-            wrap: word-wrap;
-        }
-        Rectangle { vertical-stretch: 1; }
-    }
-
-    if page == Page.MeetingsPage : MeetingsPage {
-        width: root.width;
-        height: root.height;
-        account-name: root.account-name;
-        meetings: root.meetings;
-        loading: root.meetings-loading;
-        error: root.meetings-error;
-        select(index) => { root.select-meeting(index); }
-        open-editor(index) => { root.open-editor(index); }
-        refresh => { root.refresh-meetings(); }
-        logout => { root.logout(); }
-        free-slots => { root.set-selection-page(); }
-        help => { root.help(); }
-    }
-    if page == Page.EditorPage : EditorPage {
-        width: root.width;
-        height: root.height;
-        title: root.editor-title;
-        time-range: root.editor-time-range;
-        duration: root.editor-duration;
-        attendees-warning: root.editor-attendees-warning;
-        loading: root.editor-loading;
-        busy: root.editor-busy;
-        notice: root.editor-notice;
-        unassigned: root.editor-unassigned;
-        over: root.editor-over;
-        has-template: root.editor-has-template;
-        rows: root.editor-rows;
-        set-label(index, text) => { root.editor-set-label(index, text); }
-        set-minutes(index, value) => { root.editor-set-minutes(index, value); }
-        set-included(index, included) => { root.editor-set-included(index, included); }
-        move-up(index) => { root.editor-move-up(index); }
-        move-down(index) => { root.editor-move-down(index); }
-        remove-row(index) => { root.editor-remove-row(index); }
-        add-row => { root.editor-add-row(); }
-        reset => { root.editor-reset(); }
-        save => { root.editor-save(); }
-        delete-template => { root.editor-delete(); }
-        start-meeting => { root.editor-start(); }
-        back => { root.editor-back(); }
-    }
-    if page == Page.LoadingPage : VerticalLayout {
-        padding: 32px;
-        alignment: center;
-        spacing: 16px;
-        Heading { text: "Connessione…"; horizontal-alignment: center; }
-        MutedText { text: "Prepariamo i tuoi meeting."; horizontal-alignment: center; }
-    }
-    if page == Page.LoginPage : VerticalLayout {
-        padding: 48px;
-        spacing: 24px;
-        alignment: center;
-        Heading { text: "Accedi con Google"; horizontal-alignment: center; color: AppTheme.accent; }
-        MutedText {
-            text: "I tuoi meeting di oggi, con un tempo per ogni voce.";
-            font-size: 16px;
-            horizontal-alignment: center;
-            wrap: word-wrap;
-        }
-        HorizontalLayout {
+        if page == Page.LoadingPage : VerticalLayout {
+            padding: 32px;
             alignment: center;
             spacing: 16px;
-            if !root.login-waiting : ThemedButton {
-                text: "Accedi con Google";
-                primary: true;
-                clicked => { root.login(); }
-            }
-            if !root.login-waiting : ThemedButton {
-                text: "Usa senza accesso";
-                clicked => { root.skip-login(); }
-            }
-            if root.login-waiting : ThemedButton { text: "Annulla"; clicked => { root.cancel-login(); } }
+            Heading { text: "Connessione…"; horizontal-alignment: center; }
+            MutedText { text: "Prepariamo i tuoi meeting."; horizontal-alignment: center; }
         }
-        AppText {
-            text: root.login-status;
-            color: AppTheme.accent;
-            horizontal-alignment: center;
-            wrap: word-wrap;
-        }
-    }
-    if page == Page.TimerPage : TimerPage {
-        width: root.width;
-        height: root.height;
-        timer-time: root.timer-time;
-        running-state: root.running-state;
-        meeting-title: root.meeting-title;
-        timer-end: root.timer-end;
-        progress: root.timer-progress;
-        has-slots: root.has-slots;
-        slot-name: root.slot-name;
-        slot-identity: root.slot-identity;
-        slot-time: root.slot-time;
-        next-slot-name: root.next-slot-name;
-        slots-warning: root.slots-warning;
-        plan-loading: root.plan-loading;
-        plan-warning: root.plan-warning;
-        next-slot => { root.next-slot(); }
-        stop(stop-type) => { root.stop(stop-type); }
-        tick => { root.tick(); }
-    }
-    if page == Page.TimerFinished : VerticalLayout {
-        padding: 32px;
-        spacing: 24px;
-        alignment: center;
-        Heading {
-            text: "Congrats!\nScrum ceremony finished";
-            color: AppTheme.accent;
-            horizontal-alignment: center;
-        }
-        AppText { text: "Now get the fuck outta here"; font-size: 24px; horizontal-alignment: center; }
-        HorizontalLayout {
+        if page == Page.LoginPage : VerticalLayout {
+            padding: 48px;
+            spacing: 24px;
             alignment: center;
-            ThemedButton { text: root.signed-in ? "Torna ai meeting" : "Torna agli orari"; clicked => { root.close-finished(); } }
+            Heading { text: "Accedi con Google"; horizontal-alignment: center; color: AppTheme.accent; }
+            MutedText {
+                text: "I tuoi meeting di oggi, con un tempo per ogni voce.";
+                font-size: 16px;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+            HorizontalLayout {
+                alignment: center;
+                spacing: 16px;
+                if !root.login-waiting : ThemedButton {
+                    text: "Accedi con Google";
+                    primary: true;
+                    clicked => { root.login(); }
+                }
+                if !root.login-waiting : ThemedButton {
+                    text: "Usa senza accesso";
+                    clicked => { root.skip-login(); }
+                }
+                if root.login-waiting : ThemedButton { text: "Annulla"; clicked => { root.cancel-login(); } }
+            }
+            AppText {
+                text: root.login-status;
+                color: AppTheme.accent;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+        }
+        if page == Page.TimerPage : TimerPage {
+            width: root.width;
+            height: root.height;
+            timer-time: root.timer-time;
+            running-state: root.running-state;
+            meeting-title: root.meeting-title;
+            timer-end: root.timer-end;
+            progress: root.timer-progress;
+            has-slots: root.has-slots;
+            slot-name: root.slot-name;
+            slot-identity: root.slot-identity;
+            slot-time: root.slot-time;
+            next-slot-name: root.next-slot-name;
+            slots-warning: root.slots-warning;
+            plan-loading: root.plan-loading;
+            plan-warning: root.plan-warning;
+            next-slot => { root.next-slot(); }
+            stop(stop-type) => { root.stop(stop-type); }
+            tick => { root.tick(); }
+        }
+        if page == Page.TimerFinished : VerticalLayout {
+            padding: 32px;
+            spacing: 24px;
+            alignment: center;
+            finish-message := Heading {
+                opacity: finish-pulse.active ? 1 - 0.08 * sin(180deg * finish-pulse.value) : 1;
+                text: "Congrats!\nScrum ceremony finished";
+                color: AppTheme.accent;
+                horizontal-alignment: center;
+            }
+            AppText { text: "Now get the fuck outta here"; font-size: 24px; horizontal-alignment: center; }
+            HorizontalLayout {
+                alignment: center;
+                ThemedButton { text: root.signed-in ? "Torna ai meeting" : "Torna agli orari"; clicked => { root.close-finished(); } }
+            }
         }
     }
     if on-top : Rectangle {

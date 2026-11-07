@@ -1044,10 +1044,10 @@ impl AppState {
         window.set_plan_warning(self.plan_fallback);
         match view {
             Some(view) => {
-                window.set_slot_identity(i32::try_from(view.index).unwrap_or(i32::MAX));
                 window.set_slot_name(view.name.as_str().into());
                 window.set_slot_time(view.remaining_ms);
                 window.set_next_slot_name(view.next_name.unwrap_or_default().into());
+                window.set_slot_identity(i32::try_from(view.index).unwrap_or(i32::MAX));
             }
             None => {
                 window.set_slot_identity(-1);
