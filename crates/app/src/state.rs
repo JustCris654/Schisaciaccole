@@ -1005,6 +1005,23 @@ impl AppState {
         window.set_page(self.page);
         window.set_running_state(self.target.is_some());
         window.set_timer_time(self.timer_ms);
+        window.set_current_time(Local::now().format("%H:%M").to_string().into());
+        let title = self.run.as_ref().map_or("", |run| {
+            if run.meeting.title.is_empty() {
+                "Meeting"
+            } else {
+                run.meeting.title.as_str()
+            }
+        });
+        window.set_meeting_title(title.into());
+        let end = self
+            .target
+            .map_or_else(String::new, |target| target.format("%H:%M").to_string());
+        window.set_timer_end(end.into());
+        let progress = self.run.as_ref().map_or(0.0, |run| {
+            meeting_remaining_fraction(&run.meeting, self.timer_ms)
+        });
+        window.set_timer_progress(progress);
         window.set_signed_in(self.account.is_some());
         window.set_account_name(self.account.as_deref().unwrap_or_default().into());
         window.set_notice(self.notice.into());
@@ -1027,11 +1044,13 @@ impl AppState {
         window.set_plan_warning(self.plan_fallback);
         match view {
             Some(view) => {
+                window.set_slot_identity(i32::try_from(view.index).unwrap_or(i32::MAX));
                 window.set_slot_name(view.name.as_str().into());
                 window.set_slot_time(view.remaining_ms);
                 window.set_next_slot_name(view.next_name.unwrap_or_default().into());
             }
             None => {
+                window.set_slot_identity(-1);
                 window.set_slot_name("".into());
                 window.set_slot_time(0);
                 window.set_next_slot_name("".into());
@@ -1059,8 +1078,12 @@ impl AppState {
         window.set_editor_notice(open.notice.into());
         let unassigned = if open.loading {
             String::new()
-        } else {
+        } else if editor.is_over() {
             editor.unassigned_text()
+        } else {
+            let duration = editor.duration_minutes();
+            let assigned = duration - editor.unassigned_minutes();
+            format!("{assigned} di {duration} minuti assegnati")
         };
         window.set_editor_unassigned(unassigned.into());
         window.set_editor_over(editor.is_over());
@@ -1244,6 +1267,21 @@ pub(crate) fn weighted_slots(entries: &[PlanEntry]) -> Vec<(String, u64)> {
     weighted
 }
 
+/// Fraction of the nominal meeting duration that remains, clamped to zero through one.
+///
+/// Invalid or sub-millisecond durations and expired countdowns give zero. A remaining time
+/// longer than the nominal duration gives one; starting late never resets the bar to full.
+fn meeting_remaining_fraction(meeting: &Meeting, remaining_ms: i64) -> f32 {
+    let total_ms = meeting
+        .end
+        .signed_duration_since(meeting.start)
+        .num_milliseconds();
+    if total_ms <= 0 || remaining_ms <= 0 {
+        return 0.0;
+    }
+    (remaining_ms as f64 / total_ms as f64).clamp(0.0, 1.0) as f32
+}
+
 /// Builds the row of `meeting`: times in `tz` as `HH:MM–HH:MM`, the title, the attendee count and
 /// whether the meeting has saved slots.
 ///
@@ -1327,6 +1365,42 @@ pub mod tests {
             .and_hms_opt(hour, minute, 0)
             .unwrap()
             .and_utc()
+    }
+
+    #[test]
+    fn late_meeting_start_keeps_the_nominal_progress() {
+        let now = Local::now().fixed_offset();
+        let meeting = meeting(
+            "daily",
+            now - chrono::Duration::minutes(10),
+            now + chrono::Duration::minutes(5),
+        );
+
+        let fraction = meeting_remaining_fraction(&meeting, 5 * 60 * 1000);
+
+        assert!((fraction - 1.0 / 3.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn meeting_progress_clamps_clock_changes_and_expiry() {
+        let now = Local::now().fixed_offset();
+        let meeting = meeting("daily", now, now + chrono::Duration::minutes(15));
+
+        assert_eq!(meeting_remaining_fraction(&meeting, 30 * 60 * 1000), 1.0);
+        assert_eq!(meeting_remaining_fraction(&meeting, -1), 0.0);
+        assert_eq!(meeting_remaining_fraction(&meeting, 0), 0.0);
+    }
+
+    #[test]
+    fn invalid_meeting_duration_has_no_progress() {
+        let now = Local::now().fixed_offset();
+        let empty = meeting("empty", now, now);
+        let reversed = meeting("reversed", now, now - chrono::Duration::minutes(1));
+        let sub_millisecond = meeting("short", now, now + chrono::Duration::microseconds(1));
+
+        assert_eq!(meeting_remaining_fraction(&empty, 60_000), 0.0);
+        assert_eq!(meeting_remaining_fraction(&reversed, 60_000), 0.0);
+        assert_eq!(meeting_remaining_fraction(&sub_millisecond, 1), 0.0);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-import { Palette } from "std-widgets.slint";
+import { Palette, ScrollView } from "std-widgets.slint";
 
 export global AppTheme {
     out property <bool> dark: Palette.color-scheme == ColorScheme.dark;
@@ -6,6 +6,7 @@ export global AppTheme {
     out property <color> panel: dark ? #222228 : #fcfaf7;
     out property <color> text: dark ? #f5f3f7 : #211b29;
     out property <color> muted: dark ? #aaa5b2 : #686071;
+    out property <color> tint: dark ? #352a40 : #f0e5fa;
     out property <color> line: dark ? #414149 : #d7d0df;
     out property <color> accent: dark ? #c682f5 : #7734ad;
     out property <color> on-accent: dark ? #17171b : #ffffff;
@@ -24,6 +25,12 @@ export component ThemedButton inherits Rectangle {
     in property <string> detail;
     in property <length> font-size: 14px;
     in property <bool> primary;
+    in property <color> foreground: root.primary ? AppTheme.on-accent : AppTheme.text;
+    in property <bool> compact;
+    in property <bool> bare;
+    in property <bool> checkable;
+    in property <bool> checked;
+    in property <string> accessible-name;
     in property <bool> enabled: true;
     out property <bool> has-focus: focus.has-focus;
     out property <bool> hovered: touch.has-hover;
@@ -31,30 +38,32 @@ export component ThemedButton inherits Rectangle {
 
     forward-focus: focus;
     min-width: content.min-width;
-    min-height: content.min-height;
+    height: max(content.min-height, root.compact ? 28px : AppTheme.control-height);
     horizontal-stretch: 0;
     vertical-stretch: 0;
     border-radius: AppTheme.corner-radius;
     border-width: focus.has-focus ? 2px : 1px;
     border-color: focus.has-focus
         ? (root.primary ? AppTheme.text : AppTheme.accent)
-        : (root.primary ? transparent : AppTheme.line);
+        : (root.primary || root.bare ? transparent : AppTheme.line);
     opacity: root.enabled ? 1 : 0.45;
     background: root.primary
         ? (touch.pressed ? AppTheme.accent.darker(0.16) : (touch.has-hover ? AppTheme.accent.darker(0.08) : AppTheme.accent))
-        : (touch.pressed ? AppTheme.line : (touch.has-hover ? AppTheme.background : AppTheme.panel));
+        : (touch.pressed ? AppTheme.line : (touch.has-hover ? AppTheme.background : (root.bare ? transparent : AppTheme.panel)));
 
     accessible-role: button;
-    accessible-label: root.text;
+    accessible-label: root.accessible-name == "" ? root.text : root.accessible-name;
+    accessible-checkable: root.checkable;
+    accessible-checked: root.checked;
     accessible-description: root.detail;
     accessible-enabled: root.enabled;
     accessible-action-default => { if (root.enabled) { root.clicked(); } }
 
     content := VerticalLayout {
-        padding-left: 16px;
-        padding-right: 16px;
-        padding-top: 8px;
-        padding-bottom: 8px;
+        padding-left: root.compact ? 6px : 16px;
+        padding-right: root.compact ? 6px : 16px;
+        padding-top: root.compact ? 2px : 8px;
+        padding-bottom: root.compact ? 2px : 8px;
         spacing: AppTheme.spacing;
         alignment: center;
 
@@ -62,7 +71,7 @@ export component ThemedButton inherits Rectangle {
             text: root.text;
             font-size: root.font-size;
             font-weight: 700;
-            color: root.primary ? AppTheme.on-accent : AppTheme.text;
+            color: root.foreground;
             horizontal-alignment: center;
             vertical-alignment: center;
             accessible-role: none;
@@ -95,5 +104,88 @@ export component ThemedButton inherits Rectangle {
             }
             return reject;
         }
+    }
+}
+
+export component CompactButton inherits VerticalLayout {
+    in property <string> text <=> control.text;
+    in property <string> accessible-name <=> control.accessible-name;
+    in property <bool> enabled <=> control.enabled;
+    in property <bool> bare <=> control.bare;
+    in property <bool> primary <=> control.primary;
+    in property <color> foreground <=> control.foreground;
+    callback clicked <=> control.clicked;
+    forward-focus: control;
+    alignment: center;
+    horizontal-stretch: 0;
+
+    control := ThemedButton { compact: true; }
+}
+
+export component ThemedField inherits Rectangle {
+    in-out property <string> text <=> input.text;
+    in property <string> accessible-name;
+    in property <bool> numeric;
+    in property <string> committed-text;
+    out property <bool> has-focus: input.has-focus;
+    in property <int> font-weight: 700;
+    in property <TextHorizontalAlignment> horizontal-alignment: left;
+    callback edited(string);
+    forward-focus: input;
+    min-width: 32px;
+    min-height: 28px;
+    border-radius: 4px;
+    border-width: input.has-focus ? 1px : 0px;
+    border-color: AppTheme.accent;
+    background: input.has-focus ? AppTheme.panel : transparent;
+    clip: true;
+
+    changed has-focus => {
+        if (root.numeric && !root.has-focus) { input.text = root.committed-text; }
+    }
+    changed committed-text => {
+        if (root.numeric) { input.text = root.committed-text; }
+    }
+
+    input := TextInput {
+        property <length> offset;
+        x: min(4px, max(parent.width - self.width - self.text-cursor-width - 4px, self.offset));
+        width: max(parent.width - 8px, self.preferred-width);
+        height: parent.height;
+        single-line: true;
+        font-size: 16px;
+        font-weight: root.font-weight;
+        color: AppTheme.text;
+        selection-background-color: AppTheme.accent;
+        selection-foreground-color: AppTheme.on-accent;
+        vertical-alignment: center;
+        horizontal-alignment: root.horizontal-alignment;
+        input-type: root.numeric ? InputType.number : InputType.text;
+        accessible-label: root.accessible-name;
+        edited => { root.edited(self.text); }
+        accepted => {
+            if (root.numeric) { input.text = root.committed-text; }
+        }
+        cursor-position-changed(position) => {
+            if (position.x + self.offset < 4px) {
+                self.offset = 4px - position.x;
+            } else if (position.x + self.offset > parent.width - 4px - self.text-cursor-width) {
+                self.offset = parent.width - position.x - self.text-cursor-width - 4px;
+            }
+        }
+    }
+}
+
+export component ScrollList inherits ScrollView {
+    horizontal-scrollbar-policy: always-off;
+    content-width: self.visible-width;
+    content-height: column.min-height;
+    accessible-role: list;
+
+    column := VerticalLayout {
+        width: root.visible-width;
+        height: root.content-height;
+        spacing: 0px;
+        @children
     }
 }
