@@ -251,6 +251,12 @@ component EditorPage {
                                 overflow: elide;
                             }
                         }
+                        if !row.attendee : CompactButton {
+                            text: "×";
+                            accessible-name: "Rimuovi " + row.label;
+                            bare: true;
+                            clicked => { root.remove-row(index); }
+                        }
                         CompactButton {
                             text: "−";
                             accessible-name: "Riduci minuti di " + row.label;
@@ -278,12 +284,6 @@ component EditorPage {
                             primary: true;
                             enabled: row.minutes < 600;
                             clicked => { root.set-minutes(index, row.minutes + 1); }
-                        }
-                        if !row.attendee : CompactButton {
-                            text: "×";
-                            accessible-name: "Rimuovi " + row.label;
-                            bare: true;
-                            clicked => { root.remove-row(index); }
                         }
                     }
                 }
