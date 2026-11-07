@@ -14,14 +14,10 @@ During planning:
 `reasoning_effort` parameters). The planning model picks the model and reasoning effort per task,
 based on the task's complexity, and states the choice and reason in the plan. The model names below
 are this repository's workflow mapping, not universal model equivalences:
-- `opus` maps to `gpt-6-astra` for particularly complex work: cross-crate or architectural changes,
-  subtle concurrency/async or error-handling logic, delicate CI/release or Docker Compose deploy
-  flows where a mistake ships, anything where the risk of a wrong result is high. Use high or xhigh
-  reasoning effort, especially for the most complex work.
-- `sonnet` maps to `gpt-6.1-sol` for complex or risky work: multi-file changes, Rust code, router/CI/
+- `gpt-6.1-sol` for complex or risky work: multi-file changes, Rust code, router/CI/
   Docker Compose logic, anything needing judgment. Use medium or high reasoning effort; use high for
   complex or risky work.
-- `haiku` maps to `gpt-6-luna` for simple, mechanical, low-risk work: single-file edits, renames,
+- `gpt-6-luna` for simple, mechanical, low-risk work: single-file edits, renames,
   typo fixes, boilerplate, text changes with a precise spec. Use low reasoning effort.
 - when unsure, use `gpt-6.1-sol` with medium reasoning effort
 - the developer can override the choice at any time
