@@ -420,6 +420,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
+          pattern: "!*.dockerbuild"
           path: dist
           merge-multiple: true
 
