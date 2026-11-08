@@ -216,7 +216,7 @@ I tipi `MainWindow`, `Help`, `Page`, `StopType`, `TimeOption`, `MeetingRow` sono
 
 | Nome | Tipo | Riga | Descrizione |
 | --- | --- | --- | --- |
-| `SOUND_ASSET_NAME` | const | 12 | Nome del file audio `level_up_no_copyright.mp3` riprodotto a fine timer |
+| `SOUND_ASSET_NAME` | const | 12 | Nome del file audio `arcade_victory.mp3` riprodotto a fine timer |
 | `BEEP_FREQUENCY_HZ` | const | 13 | Frequenza del beep di fine slot: 880 Hz |
 | `BEEP_DURATION` | const | 14 | Durata del beep di fine slot: 200 ms |
 | `BEEP_AMPLITUDE` | const | 15 | Volume del beep di fine slot: 0,2 |

@@ -85,7 +85,7 @@ jobs:
           dpkg-deb -c "$src"
           contents=$(dpkg-deb -c "$src" | awk '{print $NF}' | sed 's|^\./||')
           for f in usr/bin/schisaciaccole \
-                   usr/lib/schisaciaccole/assets/level_up_no_copyright.mp3 \
+                   usr/lib/schisaciaccole/assets/arcade_victory.mp3 \
                    usr/share/icons/hicolor/256x256/apps/schisaciaccole.png; do
             if ! grep -qxF "$f" <<<"$contents"; then
               echo "::error::$f missing from $src"
@@ -186,7 +186,7 @@ jobs:
             exit 1
           fi
           echo "bundled app: $app"
-          sound="$app/Contents/Resources/assets/level_up_no_copyright.mp3"
+          sound="$app/Contents/Resources/assets/arcade_victory.mp3"
           if [ ! -f "$sound" ]; then
             echo "::error::$sound missing from the bundle"
             find "$app" || true

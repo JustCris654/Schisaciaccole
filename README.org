@@ -100,7 +100,7 @@ cargo fmt --all --check
 * Packaging
 
 The app icons live at =crates/app/assets/icon_{128,256,512}.png= and the
-=crates/app/assets/level_up_no_copyright.mp3= sound ships as a resource. At
+=crates/app/assets/arcade_victory.mp3= sound ships as a resource. At
 runtime the sound is located relative to the executable, so it works from
 every package layout (dev, deb, macOS app, Arch pkg).
 

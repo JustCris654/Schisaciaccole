@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
 
-const SOUND_ASSET_NAME: &str = "level_up_no_copyright.mp3";
+const SOUND_ASSET_NAME: &str = "arcade_victory.mp3";
 const BEEP_FREQUENCY_HZ: f32 = 880.0;
 const BEEP_DURATION: Duration = Duration::from_millis(200);
 const BEEP_AMPLITUDE: f32 = 0.2;

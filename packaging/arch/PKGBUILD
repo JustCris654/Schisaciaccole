@@ -45,7 +45,7 @@ build() {
 
 package() {
   local assets="$srcdir/$pkgname/crates/app/assets"
-  local sound=level_up_no_copyright.mp3
+  local sound=arcade_victory.mp3
 
   install -Dm755 "$srcdir/target/release/$pkgname"  "$pkgdir/usr/bin/$pkgname"
   install -Dm644 "$assets/$sound"              "$pkgdir/usr/lib/$pkgname/assets/$sound"
