@@ -28,8 +28,9 @@ you pressed the button.
 ** Meetings and speaking slots (with a backend)
 
 When the app is built against a backend (see
-[[*Building the app against a backend]]) and you sign in with Google, it lists
-today's remaining meetings from your calendar.
+[[#building-the-app-against-a-backend][Building the app against a backend]])
+and you sign in with Google, it lists today's remaining meetings from your
+calendar.
 
 - Click a meeting to count down to its end. The time left is split into
   speaking slots, one per participant; a short beep marks the end of each
@@ -88,7 +89,7 @@ cargo run -p schisaciaccole --release
 #+end_src
 
 Checks CI runs on every push and pull request (the server tests need PostgreSQL,
-see [[*Tests]]):
+see [[#tests][Tests]]):
 
 #+begin_src sh
 cargo test --workspace
@@ -195,8 +196,9 @@ run artifacts without cutting a release.
 Two repository settings affect the release:
 
 - The repository variable =SCHISACIACCOLE_BACKEND_URL= is the backend URL baked
-  into the desktop builds (see [[*Building the app against a backend]]). Unset
-  means local-only builds.
+  into the desktop builds (see
+  [[#building-the-app-against-a-backend][Building the app against a backend]]).
+  Unset means local-only builds.
 - The optional macOS signing secrets. Set all seven or none: a partial set fails
   the run instead of producing an unsigned build. Without them the macOS build
   is unsigned. The names are:
@@ -270,6 +272,9 @@ Google Cloud organization, then:
   =GOOGLE_CLIENT_SECRET=, and set =ALLOWED_HD= to the company domain.
 
 * Tests
+:PROPERTIES:
+:CUSTOM_ID: tests
+:END:
 
 The server tests need a running PostgreSQL. =#[sqlx::test]= creates a throwaway
 database per test, so the user in =DATABASE_URL= must be allowed to create
@@ -293,6 +298,9 @@ Commit the =.sqlx/= directory. Builds without a database use =.sqlx/=
 automatically; =SQLX_OFFLINE=true= forces that.
 
 * Building the app against a backend
+:PROPERTIES:
+:CUSTOM_ID: building-the-app-against-a-backend
+:END:
 
 The desktop app talks to the backend through a URL fixed at compile time:
 
