@@ -46,9 +46,13 @@ today's remaining meetings from your calendar.
 
 * Screenshots
 
-| Selection                                           | Timer                                           |
-|-----------------------------------------------------+-------------------------------------------------|
-| [[crates/app/assets/screenshot_selection_page.png]] | [[crates/app/assets/screenshot_timer_page.png]] |
+| End time                               | Today's meetings                       | Speaking slots                                 |
+|----------------------------------------+----------------------------------------+------------------------------------------------|
+| [[assets/screenshot_end_time.png]]     | [[assets/screenshot_meetings.png]]     | [[assets/screenshot_speaking_slots.png]]       |
+
+| Meeting timer                           | Timer                               |
+|-----------------------------------------+-------------------------------------|
+| [[assets/screenshot_meeting_timer.png]] | [[assets/screenshot_timer.png]]     |
 
 * Requirements
 
@@ -69,6 +73,7 @@ The repo is a Cargo workspace:
   login, app sessions, meetings from Google Calendar and saved slot preferences.
 - =deploy/= — =Dockerfile= for the server and =docker-compose.yml= (server and
   PostgreSQL 17).
+- =assets/= — screenshots used by this README.
 
 * Build & run
 
