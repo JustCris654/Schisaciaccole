@@ -3,7 +3,6 @@
 mod appearance;
 mod backend;
 mod config;
-mod editor;
 mod login;
 mod pkce;
 mod session;
@@ -20,10 +19,9 @@ use std::rc::Rc;
 
 use anyhow::Context;
 use log::{error, info, warn};
-use slint::{ComponentHandle, Weak};
+use slint::ComponentHandle;
 
-use crate::backend::BackendError;
-use crate::session::{PlanPurpose, Session};
+use crate::session::Session;
 use crate::state::{AppState, LOCAL_MODE_NOTICE, TickSound};
 use crate::ui::{Help, MainWindow};
 
@@ -43,7 +41,6 @@ fn main() -> anyhow::Result<()> {
     let mut app_state = AppState::new().context("failed to compute the initial time options")?;
     app_state.bind_options(&main_window);
     app_state.bind_meetings(&main_window);
-    app_state.bind_editor_rows(&main_window);
     let session = connect_session(&mut app_state);
     app_state.render(&main_window);
     let app_state = Rc::new(RefCell::new(app_state));
@@ -86,151 +83,16 @@ fn main() -> anyhow::Result<()> {
     main_window.on_select_meeting({
         let window_weak = main_window.as_weak();
         let state = app_state.clone();
-        let session = session.clone();
 
         move |index| {
             let Some(window) = window_weak.upgrade() else {
                 return;
             };
             let mut state = state.borrow_mut();
-            let selection = state.select_meeting(index);
+            let tick_sound = state.select_meeting(index);
             state.render(&window);
-            if let (Some(session), Some(event_id)) = (&session, &selection.plan_event_id) {
-                session.spawn_plan_fetch(event_id, PlanPurpose::Timer);
-            }
-            play_for(selection.sound);
+            play_for(tick_sound);
         }
-    });
-
-    main_window.on_open_editor({
-        let window_weak = main_window.as_weak();
-        let state = app_state.clone();
-        let session = session.clone();
-
-        move |index| {
-            update_state(&window_weak, &state, |state| {
-                let Some(event_id) = state.open_editor(index) else {
-                    return;
-                };
-                match &session {
-                    Some(session) => session.spawn_plan_fetch(&event_id, PlanPurpose::Editor),
-                    None => state.on_editor_plan_loaded(&event_id, Err(BackendError::Unreachable)),
-                }
-            });
-        }
-    });
-
-    main_window.on_editor_set_label({
-        let window_weak = main_window.as_weak();
-        let state = app_state.clone();
-        move |index, label| {
-            update_state(&window_weak, &state, |state| {
-                state.editor_set_label(index, &label);
-            });
-        }
-    });
-
-    main_window.on_editor_set_minutes({
-        let window_weak = main_window.as_weak();
-        let state = app_state.clone();
-        move |index, minutes| {
-            update_state(&window_weak, &state, |state| {
-                state.editor_set_minutes(index, minutes);
-            });
-        }
-    });
-
-    main_window.on_editor_set_included({
-        let window_weak = main_window.as_weak();
-        let state = app_state.clone();
-        move |index, included| {
-            update_state(&window_weak, &state, |state| {
-                state.editor_set_included(index, included);
-            });
-        }
-    });
-
-    main_window.on_editor_move_up({
-        let window_weak = main_window.as_weak();
-        let state = app_state.clone();
-        move |index| update_state(&window_weak, &state, |state| state.editor_move_up(index))
-    });
-
-    main_window.on_editor_move_down({
-        let window_weak = main_window.as_weak();
-        let state = app_state.clone();
-        move |index| update_state(&window_weak, &state, |state| state.editor_move_down(index))
-    });
-
-    main_window.on_editor_remove_row({
-        let window_weak = main_window.as_weak();
-        let state = app_state.clone();
-        move |index| update_state(&window_weak, &state, |state| state.editor_remove_row(index))
-    });
-
-    main_window.on_editor_add_row({
-        let window_weak = main_window.as_weak();
-        let state = app_state.clone();
-        move || update_state(&window_weak, &state, AppState::editor_add_row)
-    });
-
-    main_window.on_editor_reset({
-        let window_weak = main_window.as_weak();
-        let state = app_state.clone();
-        move || update_state(&window_weak, &state, AppState::editor_reset)
-    });
-
-    main_window.on_editor_save({
-        let window_weak = main_window.as_weak();
-        let state = app_state.clone();
-        let session = session.clone();
-
-        move || {
-            let Some(session) = &session else {
-                return;
-            };
-            update_state(&window_weak, &state, |state| {
-                if let Some(save) = state.start_template_save() {
-                    session.spawn_template_save(save);
-                }
-            });
-        }
-    });
-
-    main_window.on_editor_delete({
-        let window_weak = main_window.as_weak();
-        let state = app_state.clone();
-        let session = session.clone();
-
-        move || {
-            let Some(session) = &session else {
-                return;
-            };
-            update_state(&window_weak, &state, |state| {
-                if let Some(delete) = state.start_template_delete() {
-                    session.spawn_template_delete(delete);
-                }
-            });
-        }
-    });
-
-    main_window.on_editor_start({
-        let window_weak = main_window.as_weak();
-        let state = app_state.clone();
-
-        move || {
-            let mut sound = TickSound::None;
-            update_state(&window_weak, &state, |state| {
-                sound = state.start_from_editor();
-            });
-            play_for(sound);
-        }
-    });
-
-    main_window.on_editor_back({
-        let window_weak = main_window.as_weak();
-        let state = app_state.clone();
-        move || update_state(&window_weak, &state, AppState::close_editor)
     });
 
     main_window.on_refresh_meetings({
@@ -267,20 +129,6 @@ fn main() -> anyhow::Result<()> {
             };
             let mut state = state.borrow_mut();
             state.show_home();
-            state.render(&window);
-        }
-    });
-
-    main_window.on_next_slot({
-        let window_weak = main_window.as_weak();
-        let state = app_state.clone();
-
-        move || {
-            let Some(window) = window_weak.upgrade() else {
-                return;
-            };
-            let mut state = state.borrow_mut();
-            state.next_slot();
             state.render(&window);
         }
     });
@@ -461,26 +309,11 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Runs `action` on the state and renders the result, when the window still exists.
-fn update_state(
-    window_weak: &Weak<MainWindow>,
-    state: &RefCell<AppState>,
-    action: impl FnOnce(&mut AppState),
-) {
-    let Some(window) = window_weak.upgrade() else {
-        return;
-    };
-    let mut state = state.borrow_mut();
-    action(&mut state);
-    state.render(&window);
-}
-
-/// Plays the sound that goes with a tick outcome: a beep for a slot end, the finish sound for the
-/// end of the meeting, nothing otherwise.
+/// Plays the sound that goes with a tick outcome: the finish sound for the end of the meeting,
+/// nothing otherwise.
 fn play_for(tick_sound: TickSound) {
     match tick_sound {
         TickSound::None => {}
-        TickSound::SlotEnd => sound::play_beep(),
         TickSound::MeetingEnd => sound::play_sound(),
     }
 }

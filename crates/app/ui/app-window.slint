@@ -1,5 +1,5 @@
 import { ListView, AboutSlint } from "std-widgets.slint";
-import { AppTheme, AppText, ThemedButton, CompactButton, ThemedField, ScrollList, AppMotion, MotionProgress } from "theme.slint";
+import { AppTheme, AppText, ThemedButton, CompactButton, AppMotion, MotionProgress } from "theme.slint";
 
 import "../assets/fonts/Manrope/static/Manrope-Regular.ttf";
 import "../assets/fonts/Manrope/static/Manrope-Medium.ttf";
@@ -7,7 +7,7 @@ import "../assets/fonts/Manrope/static/Manrope-SemiBold.ttf";
 import "../assets/fonts/Manrope/static/Manrope-Bold.ttf";
 import "../assets/fonts/Manrope/static/Manrope-ExtraBold.ttf";
 
-export enum Page { SelectionPage, TimerPage, TimerFinished, LoadingPage, LoginPage, MeetingsPage, EditorPage }
+export enum Page { SelectionPage, TimerPage, TimerFinished, LoadingPage, LoginPage, MeetingsPage }
 export enum StopType { TimerFinished, UserStopped }
 
 export struct TimeOption { time: string, minutes: string }
@@ -16,14 +16,6 @@ export struct MeetingRow {
     title: string,
     attendees: string,
     in-progress: bool,
-    has-template: bool,
-}
-export struct EditorRow {
-    label: string,
-    minutes: int,
-    included: bool,
-    attendee: bool,
-    email: string,
 }
 
 component Heading inherits AppText {
@@ -77,7 +69,6 @@ component MeetingsPage {
     in property <bool> loading;
     in property <string> error;
     callback select(int);
-    callback open-editor(int);
     callback refresh();
     callback logout();
     callback free-slots();
@@ -137,14 +128,10 @@ component MeetingsPage {
                                 overflow: elide;
                             }
                             MutedText {
-                                text: (row.in-progress ? "In corso · " : "") + row.attendees + (row.has-template ? " · slot salvati" : "");
+                                text: (row.in-progress ? "In corso · " : "") + row.attendees;
                                 font-size: 12px;
                                 overflow: elide;
                             }
-                        }
-                        ThemedButton {
-                            text: "Editor";
-                            clicked => { root.open-editor(index); }
                         }
                         if row.in-progress : ThemedButton {
                             text: "Avvia";
@@ -158,273 +145,14 @@ component MeetingsPage {
     }
 }
 
-component EditorPage {
-    in property <string> title;
-    in property <string> time-range;
-    in property <string> duration;
-    in property <bool> attendees-warning;
-    in property <bool> loading;
-    in property <bool> busy;
-    in property <string> notice;
-    in property <string> unassigned;
-    in property <bool> over;
-    in property <bool> has-template;
-    in property <[EditorRow]> rows;
-    callback set-label(int, string);
-    callback set-minutes(int, int);
-    callback set-included(int, bool);
-    callback move-up(int);
-    callback move-down(int);
-    callback remove-row(int);
-    callback add-row();
-    callback reset();
-    callback save();
-    callback delete-template();
-    callback start-meeting();
-    callback back();
-
-    VerticalLayout {
-        padding: 24px;
-        spacing: 8px;
-        Heading { text: "Organizza i turni"; }
-        MutedText {
-            text: root.title + " · " + root.time-range + " · " + root.duration;
-            overflow: elide;
-        }
-        if root.attendees-warning : AppText {
-            text: "Lista partecipanti incompleta: aggiungi le voci mancanti";
-            color: AppTheme.accent;
-            font-size: 12px;
-            wrap: word-wrap;
-        }
-        if root.loading : MutedText { text: "Caricamento…"; vertical-stretch: 1; }
-        if !root.loading : ScrollList {
-            vertical-stretch: 1;
-            for row[index] in root.rows : Rectangle {
-                height: 56px;
-                Rectangle {
-                    height: 52px;
-                    border-radius: 8px;
-                    background: AppTheme.background;
-                    HorizontalLayout {
-                        padding-left: 8px;
-                        padding-right: 8px;
-                        spacing: 4px;
-                        CompactButton {
-                            text: "↑";
-                            accessible-name: "Sposta su " + row.label;
-                            bare: true;
-                            enabled: index > 0;
-                            clicked => { root.move-up(index); }
-                        }
-                        CompactButton {
-                            text: "↓";
-                            accessible-name: "Sposta giù " + row.label;
-                            bare: true;
-                            enabled: index < root.rows.length - 1;
-                            clicked => { root.move-down(index); }
-                        }
-                        if row.attendee : VerticalLayout {
-                            alignment: center;
-                            horizontal-stretch: 0;
-                            ThemedButton {
-                                compact: true;
-                                accessible-role: checkbox;
-                                text: row.included ? "☑" : "☐";
-                                accessible-name: "Includi " + row.label;
-                                bare: true;
-                                checkable: true;
-                                checked: row.included;
-                                clicked => { root.set-included(index, !row.included); }
-                            }
-                        }
-                        VerticalLayout {
-                            alignment: center;
-                            horizontal-stretch: 1;
-                            ThemedField {
-                                text <=> row.label;
-                                accessible-name: "Nome del turno " + (index + 1);
-                                opacity: row.included ? 1 : 0.6;
-                                edited(text) => { root.set-label(index, text); }
-                            }
-                            if row.attendee && row.email != "" : MutedText {
-                                text: row.email;
-                                font-size: 9px;
-                                overflow: elide;
-                            }
-                        }
-                        if !row.attendee : CompactButton {
-                            text: "×";
-                            accessible-name: "Rimuovi " + row.label;
-                            bare: true;
-                            clicked => { root.remove-row(index); }
-                        }
-                        CompactButton {
-                            text: "−";
-                            accessible-name: "Riduci minuti di " + row.label;
-                            bare: true;
-                            enabled: row.minutes > 0;
-                            clicked => { root.set-minutes(index, row.minutes - 1); }
-                        }
-                        ThemedField {
-                            width: 44px;
-                            text: row.minutes;
-                            committed-text: row.minutes;
-                            accessible-name: "Minuti di " + row.label;
-                            numeric: true;
-                            font-weight: 400;
-                            horizontal-alignment: center;
-                            edited(text) => {
-                                if (text.is-float()) { root.set-minutes(index, round(text.to-float())); }
-                            }
-                        }
-                        AppText { text: "min"; vertical-alignment: center; }
-                        CompactButton {
-                            text: "+";
-                            foreground: #ffffff;
-                            accessible-name: "Aumenta minuti di " + row.label;
-                            primary: true;
-                            enabled: row.minutes < 600;
-                            clicked => { root.set-minutes(index, row.minutes + 1); }
-                        }
-                    }
-                }
-            }
-        }
-        if root.notice != "" : AppText {
-            text: root.notice;
-            color: AppTheme.accent;
-            font-size: 12px;
-            wrap: word-wrap;
-        }
-        HorizontalLayout {
-            AppText {
-                text: root.unassigned;
-                color: root.over ? AppTheme.accent : AppTheme.muted;
-                vertical-alignment: center;
-                horizontal-stretch: 1;
-                overflow: elide;
-            }
-            CompactButton {
-                text: "+ Aggiungi voce";
-                bare: true;
-                enabled: !root.loading;
-                clicked => { root.add-row(); }
-            }
-        }
-        HorizontalLayout {
-            spacing: 8px;
-            CompactButton {
-                text: "←";
-                accessible-name: "Indietro";
-                bare: true;
-                clicked => { root.back(); }
-            }
-            CompactButton {
-                text: "Slot uguali";
-                accessible-name: "Ripristina slot uguali";
-                bare: true;
-                enabled: !root.loading;
-                clicked => { root.reset(); }
-            }
-            if root.has-template : CompactButton {
-                text: "Elimina preferenza";
-                bare: true;
-                enabled: !root.loading && !root.busy;
-                clicked => { root.delete-template(); }
-            }
-            Rectangle { horizontal-stretch: 1; }
-            ThemedButton {
-                text: "Salva preferenza";
-                width: 180px;
-                enabled: !root.loading && !root.busy;
-                clicked => { root.save(); }
-            }
-            ThemedButton {
-                text: "Avvia";
-                width: 96px;
-                primary: true;
-                enabled: !root.loading;
-                clicked => { root.start-meeting(); }
-            }
-        }
-    }
-}
-
-component SpeakerName inherits Rectangle {
-    in property <string> name;
-    in property <int> identity: -1;
-    private property <string> remembered-name;
-    private property <string> previous-name;
-    private property <int> previous-identity: -1;
-    min-height: speaker-content.preferred-height;
-    horizontal-stretch: 1;
-
-    init => {
-        root.remembered-name = root.name;
-        root.previous-identity = root.identity;
-    }
-    changed name => {
-        if (root.identity == root.previous-identity) {
-            root.remembered-name = root.name;
-        }
-    }
-    changed identity => {
-        if (root.identity != root.previous-identity) {
-            root.previous-name = root.remembered-name;
-            root.remembered-name = root.name;
-            if (root.previous-identity >= 0 && root.identity >= 0) {
-                speaker-fade.restart();
-            } else {
-                speaker-fade.finish();
-            }
-            root.previous-identity = root.identity;
-        }
-    }
-    speaker-fade := MotionProgress { duration: 220ms; }
-    speaker-previous := AppText {
-        x: 0px;
-        y: 0px;
-        width: root.width;
-        height: root.height;
-        text: root.previous-name;
-        font-size: 24px;
-        font-weight: 700;
-        overflow: elide;
-        opacity: 1 - speaker-fade.value;
-        accessible-role: none;
-    }
-    speaker-content := AppText {
-        x: 0px;
-        y: 0px;
-        width: root.width;
-        height: root.height;
-        text: root.name;
-        font-size: 24px;
-        font-weight: 700;
-        overflow: elide;
-        opacity: speaker-fade.value;
-    }
-}
-
 component TimerPage {
     in property <duration> timer-time;
     in property <bool> running-state;
     in property <string> meeting-title;
     in property <string> timer-end;
     in property <float> progress;
-    in property <bool> has-slots;
-    in property <bool> free-time;
-    in property <string> slot-name;
-    in property <int> slot-identity;
-    in property <duration> slot-time;
-    in property <string> next-slot-name;
-    in property <bool> slots-warning;
-    in property <bool> plan-loading;
-    in property <bool> plan-warning;
     callback stop(StopType);
     callback tick();
-    callback next-slot();
 
     Timer {
         interval: 0.25s;
@@ -464,7 +192,7 @@ component TimerPage {
 
     if root.meeting-title != "" : VerticalLayout {
         padding: 32px;
-        spacing: root.plan-loading || root.plan-warning || root.slots-warning ? 8px : 16px;
+        spacing: 16px;
         alignment: center;
         AppText {
             text: root.meeting-title;
@@ -498,56 +226,10 @@ component TimerPage {
                 }
             }
         }
-        if root.has-slots : HorizontalLayout {
-            alignment: center;
-            Rectangle {
-                width: min(680px, root.width - 64px);
-                height: 88px;
-                border-radius: 12px;
-                background: AppTheme.tint;
-                HorizontalLayout {
-                    padding: 16px;
-                    spacing: 32px;
-                    VerticalLayout {
-                        horizontal-stretch: 1;
-                        spacing: 5px;
-                        if !root.free-time : AppText { text: "STA PARLANDO"; color: AppTheme.accent; font-size: 11px; }
-                        SpeakerName { name: root.slot-name; identity: root.slot-identity; }
-                    }
-                    if !root.free-time : AppText {
-                        text: root.duration-text(root.slot-time);
-                        font-size: 24px;
-                        font-weight: 700;
-                        vertical-alignment: center;
-                    }
-                }
-            }
-        }
-        if root.has-slots && root.next-slot-name != "" : MutedText {
-            text: "Poi: " + root.next-slot-name;
-            horizontal-alignment: center;
-            overflow: elide;
-        }
-        if root.plan-loading : MutedText { text: "Caricamento slot…"; horizontal-alignment: center; }
-        if root.plan-warning || root.slots-warning : AppText {
-            text: (root.plan-warning ? "Preferenza non caricata: slot uguali" : "")
-                + (root.plan-warning && root.slots-warning ? " · " : "")
-                + (root.slots-warning ? "Lista partecipanti incompleta" : "");
-            font-size: 12px;
-            color: AppTheme.accent;
-            horizontal-alignment: center;
-            wrap: word-wrap;
-        }
         HorizontalLayout {
             alignment: center;
             spacing: 20px;
             ThemedButton { text: "Stop"; width: 200px; clicked => { root.stop(StopType.UserStopped); } }
-            if root.has-slots : ThemedButton {
-                text: "Avanti →   N";
-                width: 200px;
-                primary: true;
-                clicked => { root.next-slot(); }
-            }
         }
     }
 }
@@ -563,9 +245,6 @@ export component MainWindow inherits Window {
     forward-focus: scope;
 
     property <bool> on-top: false;
-    // Single-letter shortcuts are off on the editor page, where names are typed.
-    property <bool> letter-keys-enabled: page != Page.EditorPage;
-
     always-on-top: on-top;
 
     in-out property <bool> reduce-motion <=> AppMotion.reduced;
@@ -576,7 +255,6 @@ export component MainWindow inherits Window {
     in property <string> meeting-title;
     in property <string> timer-end;
     in property <float> timer-progress;
-    in property <int> slot-identity: -1;
 
     in property     <duration> timer-time: 3s;
     in property     <bool>     running-state: false;
@@ -591,25 +269,6 @@ export component MainWindow inherits Window {
     in property     <[MeetingRow]> meetings;
     in property     <bool>     meetings-loading;
     in property     <string>   meetings-error;
-    in property     <bool>     has-slots;
-    in property     <bool>     free-time;
-    in property     <string>   slot-name;
-    in property     <duration> slot-time;
-    in property     <string>   next-slot-name;
-    in property     <bool>     slots-warning;
-    in property     <bool>     plan-loading;
-    in property     <bool>     plan-warning;
-    in property     <[EditorRow]> editor-rows;
-    in property     <string>   editor-title;
-    in property     <string>   editor-time-range;
-    in property     <string>   editor-duration;
-    in property     <bool>     editor-attendees-warning;
-    in property     <bool>     editor-loading;
-    in property     <bool>     editor-busy;
-    in property     <string>   editor-notice;
-    in property     <string>   editor-unassigned;
-    in property     <bool>     editor-over;
-    in property     <bool>     editor-has-template;
 
     callback select-time(int);
     callback compute-options();
@@ -627,28 +286,10 @@ export component MainWindow inherits Window {
     callback set-meetings-page();
     callback close-finished();
     callback logout();
-    callback next-slot();
-    callback open-editor(int);
-    callback editor-set-label(int, string);
-    callback editor-set-minutes(int, int);
-    callback editor-set-included(int, bool);
-    callback editor-move-up(int);
-    callback editor-move-down(int);
-    callback editor-remove-row(int);
-    callback editor-add-row();
-    callback editor-reset();
-    callback editor-save();
-    callback editor-delete();
-    callback editor-start();
-    callback editor-back();
 
-    // Leaving the editor drops its focused text field: give the focus back to the shortcuts.
     changed page => {
         page-fade.restart();
         if (page == Page.TimerFinished) { finish-pulse.restart(); }
-        if (page != Page.EditorPage) {
-            scope.focus();
-        }
     }
 
     if is-macos: MenuBar {
@@ -672,13 +313,11 @@ export component MainWindow inherits Window {
     scope := FocusScope {
         KeyBinding {
             keys: @keys(Q);
-            enabled: root.letter-keys-enabled;
             activated => { quit(); }
         }
 
         KeyBinding {
             keys: @keys(M);
-            enabled: root.letter-keys-enabled;
             activated => { fullscreen(false); }
         }
 
@@ -689,20 +328,12 @@ export component MainWindow inherits Window {
 
         KeyBinding {
             keys: @keys(T);
-            enabled: root.letter-keys-enabled;
             activated => { on-top = !on-top; }
         }
 
         KeyBinding {
             keys: @keys(H);
-            enabled: root.letter-keys-enabled;
             activated => { help(); }
-        }
-
-        KeyBinding {
-            keys: @keys(N);
-            enabled: root.letter-keys-enabled;
-            activated => { next-slot(); }
         }
     }
 
@@ -774,38 +405,10 @@ export component MainWindow inherits Window {
             loading: root.meetings-loading;
             error: root.meetings-error;
             select(index) => { root.select-meeting(index); }
-            open-editor(index) => { root.open-editor(index); }
             refresh => { root.refresh-meetings(); }
             logout => { root.logout(); }
             free-slots => { root.set-selection-page(); }
             help => { root.help(); }
-        }
-        if page == Page.EditorPage : EditorPage {
-            width: root.width;
-            height: root.height;
-            title: root.editor-title;
-            time-range: root.editor-time-range;
-            duration: root.editor-duration;
-            attendees-warning: root.editor-attendees-warning;
-            loading: root.editor-loading;
-            busy: root.editor-busy;
-            notice: root.editor-notice;
-            unassigned: root.editor-unassigned;
-            over: root.editor-over;
-            has-template: root.editor-has-template;
-            rows: root.editor-rows;
-            set-label(index, text) => { root.editor-set-label(index, text); }
-            set-minutes(index, value) => { root.editor-set-minutes(index, value); }
-            set-included(index, included) => { root.editor-set-included(index, included); }
-            move-up(index) => { root.editor-move-up(index); }
-            move-down(index) => { root.editor-move-down(index); }
-            remove-row(index) => { root.editor-remove-row(index); }
-            add-row => { root.editor-add-row(); }
-            reset => { root.editor-reset(); }
-            save => { root.editor-save(); }
-            delete-template => { root.editor-delete(); }
-            start-meeting => { root.editor-start(); }
-            back => { root.editor-back(); }
         }
         if page == Page.LoadingPage : VerticalLayout {
             padding: 32px;
@@ -854,16 +457,6 @@ export component MainWindow inherits Window {
             meeting-title: root.meeting-title;
             timer-end: root.timer-end;
             progress: root.timer-progress;
-            has-slots: root.has-slots;
-            free-time: root.free-time;
-            slot-name: root.slot-name;
-            slot-identity: root.slot-identity;
-            slot-time: root.slot-time;
-            next-slot-name: root.next-slot-name;
-            slots-warning: root.slots-warning;
-            plan-loading: root.plan-loading;
-            plan-warning: root.plan-warning;
-            next-slot => { root.next-slot(); }
             stop(stop-type) => { root.stop(stop-type); }
             tick => { root.tick(); }
         }
@@ -916,9 +509,7 @@ export component Help inherits Window {
             Row { AppText { text: "Esc"; color: AppTheme.accent; } AppText { text: "Esci dallo schermo intero"; } }
             Row { AppText { text: "T"; color: AppTheme.accent; } AppText { text: "Mantieni la finestra in primo piano"; } }
             Row { AppText { text: "H"; color: AppTheme.accent; } AppText { text: "Mostra le scorciatoie"; } }
-            Row { AppText { text: "N"; color: AppTheme.accent; } AppText { text: "Passa al turno successivo"; } }
         }
-        MutedText { text: "Le scorciatoie con lettere sono sospese nell’editor."; font-size: 12px; }
         AboutSlint { height: 50px; }
     }
 }
