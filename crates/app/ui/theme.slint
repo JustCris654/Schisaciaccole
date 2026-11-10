@@ -1,18 +1,29 @@
-import { Palette, ScrollView } from "std-widgets.slint";
+import { Palette } from "std-widgets.slint";
 
 export global AppTheme {
     out property <bool> dark: Palette.color-scheme == ColorScheme.dark;
-    out property <color> background: dark ? #17171b : #f4f1ec;
-    out property <color> panel: dark ? #222228 : #fcfaf7;
-    out property <color> text: dark ? #f5f3f7 : #211b29;
-    out property <color> muted: dark ? #aaa5b2 : #686071;
-    out property <color> tint: dark ? #352a40 : #f0e5fa;
-    out property <color> line: dark ? #414149 : #d7d0df;
-    out property <color> accent: dark ? #c682f5 : #7734ad;
-    out property <color> on-accent: dark ? #17171b : #ffffff;
-    out property <length> corner-radius: 8px;
-    out property <length> control-height: 44px;
-    out property <length> spacing: 8px;
+    out property <color> page: dark ? #17141D : #FFFFFF;
+    out property <color> surface: dark ? #262033 : #F1ECFA;
+    out property <color> brand: #6B2FBF;
+    out property <color> on-brand: #FFFFFF;
+    out property <color> text: dark ? #F3EFF9 : #1E1A26;
+    out property <color> text-secondary: dark ? #A79FB8 : #6A6378;
+    out property <color> text-brand: dark ? #B892F5 : #6B2FBF;
+    out property <color> border-subtle: dark ? #3D3350 : #DCD0F2;
+    out property <color> orange: dark ? #F29A2E : #E07B00;
+    out property <color> orange-soft: dark ? #33250F : #FDF1E1;
+    out property <color> orange-tint: dark ? #5C3F14 : #F8D7A8;
+    // Orange dark enough to read as text on the page background.
+    out property <color> notice: dark ? #F29A2E : #A85A00;
+    out property <color> danger: dark ? #3D3350 : #1E1A26;
+    out property <color> on-danger: #FFFFFF;
+    out property <color> nav-tab-text: #FFFFFFCC;
+    out property <color> nav-tab-hover: #FFFFFF29;
+    out property <color> nav-icon-hover: #FFFFFF24;
+    out property <color> nav-selected: #FFFFFF;
+    out property <color> nav-selected-hover: #F1ECFA;
+    out property <length> radius-card: 18px;
+    out property <length> radius-item: 12px;
 }
 
 export global AppMotion {
@@ -46,91 +57,295 @@ export component MotionProgress {
     }
 }
 
+// Background that fades to `target` whenever it changes, unless motion is reduced.
+export component FadeFill inherits Rectangle {
+    in property <color> target;
+    private property <color> from-fill;
+    private property <color> to-fill;
+    private property <color> displayed-fill: root.to-fill.mix(root.from-fill, fade.value);
+
+    init => {
+        root.from-fill = root.target;
+        root.to-fill = root.target;
+    }
+    changed target => {
+        let previous = root.displayed-fill;
+        root.from-fill = previous;
+        root.to-fill = root.target;
+        if (previous != root.to-fill) { fade.restart(); }
+    }
+
+    fade := MotionProgress { duration: 120ms; }
+    background: root.displayed-fill;
+}
+
+// Keyboard focus ring: 3px orange, 2px away from the parent.
+export component FocusRing inherits Rectangle {
+    in property <length> host-width;
+    in property <length> host-height;
+    in property <length> corner-radius;
+    x: -5px;
+    y: -5px;
+    width: root.host-width + 10px;
+    height: root.host-height + 10px;
+    border-radius: root.corner-radius + 5px;
+    border-width: 3px;
+    border-color: AppTheme.orange;
+}
+
 export component AppText inherits Text {
     color: AppTheme.text;
     font-size: 14px;
 }
 
-export component ThemedButton inherits Rectangle {
+export component PageTitle inherits Text {
+    color: AppTheme.text;
+    font-size: 34px;
+    font-weight: 800;
+    letter-spacing: -0.68px;
+    overflow: elide;
+}
+
+export component PageSub inherits Text {
+    color: AppTheme.text-secondary;
+    font-size: 19px;
+}
+
+export component PlayIcon inherits Path {
+    in property <color> tint: AppTheme.on-brand;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    fill: root.tint;
+    commands: "M7 4.5v15a1 1 0 0 0 1.52 0.86l12-7.5a1 1 0 0 0 0-1.72l-12-7.5A1 1 0 0 0 7 4.5z";
+}
+
+export component HelpIcon inherits Rectangle {
+    in property <color> tint: #FFFFFF;
+    Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-width: 24;
+        viewbox-height: 24;
+        stroke: root.tint;
+        stroke-width: 2.4 * self.width / 24;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+        commands: "M2 12a10 10 0 1 0 20 0a10 10 0 1 0-20 0z M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3";
+    }
+    Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-width: 24;
+        viewbox-height: 24;
+        fill: root.tint;
+        commands: "M11.4 17a0.6 0.6 0 1 0 1.2 0a0.6 0.6 0 1 0-1.2 0z";
+    }
+}
+
+export component DotsIcon inherits Path {
+    in property <color> tint: #FFFFFF;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    fill: root.tint;
+    commands: "M1.9 12a2.6 2.6 0 1 0 5.2 0a2.6 2.6 0 1 0-5.2 0z M9.4 12a2.6 2.6 0 1 0 5.2 0a2.6 2.6 0 1 0-5.2 0z M16.9 12a2.6 2.6 0 1 0 5.2 0a2.6 2.6 0 1 0-5.2 0z";
+}
+
+export component StopIcon inherits Path {
+    in property <color> tint: AppTheme.text-brand;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    fill: root.tint;
+    commands: "M7 5H17A2 2 0 0 1 19 7V17A2 2 0 0 1 17 19H7A2 2 0 0 1 5 17V7A2 2 0 0 1 7 5z";
+}
+
+export component HomeIcon inherits Path {
+    in property <color> tint: AppTheme.text-brand;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.tint;
+    stroke-width: 2.2 * self.width / 24;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    commands: "M3 11.5L12 4l9 7.5 M5 10v10h5v-6h4v6h5V10";
+}
+
+export component PeopleIcon inherits Path {
+    in property <color> tint: AppTheme.text-brand;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.tint;
+    stroke-width: 2.2 * self.width / 24;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    commands: "M17 20h5v-2a3 3 0 0 0-5.36-1.86 M17 20H7 M17 20v-2c0-0.65-0.12-1.27-0.36-1.86 M7 20H2v-2a3 3 0 0 1 5.36-1.86 M7 20v-2c0-0.65 0.12-1.27 0.36-1.86 M7.36 16.14a5 5 0 0 1 9.28 0 M15 7a3 3 0 1 1-6 0 3 3 0 0 1 6 0z";
+}
+
+export component EyeOffIcon inherits Path {
+    in property <color> tint: AppTheme.text-brand;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.tint;
+    stroke-width: 2.2 * self.width / 24;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    commands: "M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94 M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19 M14.12 14.12a3 3 0 1 1-4.24-4.24 M1 1L23 23";
+}
+
+export component ChevronIcon inherits Path {
+    in property <color> tint: AppTheme.orange;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.tint;
+    stroke-width: 2.4 * self.width / 24;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    commands: "M6 9l6 6 6-6";
+}
+
+export component StepIcon inherits Path {
+    in property <bool> plus;
+    in property <color> tint: AppTheme.orange;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    fill: root.tint;
+    commands: root.plus ? "M4 10h6V4h4v6h6v4h-6v6h-4v-6H4z" : "M4 10h16v4H4z";
+}
+
+export component PauseIcon inherits Path {
+    in property <color> tint: AppTheme.orange;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    fill: root.tint;
+    commands: "M6.5 4H8.5A1.5 1.5 0 0 1 10 5.5V18.5A1.5 1.5 0 0 1 8.5 20H6.5A1.5 1.5 0 0 1 5 18.5V5.5A1.5 1.5 0 0 1 6.5 4z M15.5 4H17.5A1.5 1.5 0 0 1 19 5.5V18.5A1.5 1.5 0 0 1 17.5 20H15.5A1.5 1.5 0 0 1 14 18.5V5.5A1.5 1.5 0 0 1 15.5 4z";
+}
+
+export component SkipIcon inherits Path {
+    in property <color> tint: AppTheme.orange;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    fill: root.tint;
+    commands: "M5 4.5v15a1 1 0 0 0 1.52 0.86L15 13.3v6.2a1 1 0 0 0 1.6 0.8l0.4-0.3V4a1 1 0 0 0-2-0.1v6.8L6.52 3.64A1 1 0 0 0 5 4.5z";
+}
+
+export component LogoutIcon inherits Path {
+    in property <color> tint: AppTheme.text;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.tint;
+    stroke-width: 2.25 * self.width / 24;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    commands: "M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4 M16 17l5-5-5-5 M21 12H9";
+}
+
+// Speech bubble with a clock. `bubble` and `hands` swap for light and brand backgrounds.
+export component LogoMark inherits Rectangle {
+    in property <color> bubble: #FFFFFF;
+    in property <color> hands: AppTheme.brand;
+    Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-width: 40;
+        viewbox-height: 40;
+        fill: AppTheme.orange;
+        commands: "M17.5 3H22.5A1.5 1.5 0 0 1 24 4.5V6.5A1.5 1.5 0 0 1 22.5 8H17.5A1.5 1.5 0 0 1 16 6.5V4.5A1.5 1.5 0 0 1 17.5 3z";
+    }
+    Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-width: 40;
+        viewbox-height: 40;
+        fill: root.bubble;
+        commands: "M14 8.5h12a11 11 0 0 1 0 22h-9.5l-6.2 5.3c-0.7 0.6-1.7 0-1.5-0.9l1.2-5.6A11 11 0 0 1 14 8.5z";
+    }
+    Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-width: 40;
+        viewbox-height: 40;
+        stroke: root.hands;
+        stroke-width: 2.6 * self.width / 40;
+        stroke-line-cap: round;
+        commands: "M20 19.5V13.5M20 19.5l4.5 2.6";
+    }
+    Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-width: 40;
+        viewbox-height: 40;
+        fill: root.hands;
+        commands: "M18 19.5a2 2 0 1 0 4 0a2 2 0 1 0-4 0z";
+    }
+}
+
+export enum PillKind { primary, ghost, outline, link }
+
+// Fully rounded button. Children (an icon) are placed before the label.
+export component PillButton inherits Rectangle {
     in property <string> text;
-    in property <string> detail;
-    in property <length> font-size: 14px;
-    in property <bool> primary;
-    in property <color> foreground: root.primary ? AppTheme.on-accent : AppTheme.text;
-    in property <bool> compact;
-    in property <bool> bare;
-    in property <bool> checkable;
-    in property <bool> checked;
-    in property <string> accessible-name;
+    in property <PillKind> kind: PillKind.primary;
     in property <bool> enabled: true;
+    // Small variant of the outline kind used by the countdown screens.
+    in property <bool> compact;
+    in property <string> accessible-name;
     out property <bool> has-focus: focus.has-focus;
-    out property <bool> hovered: touch.has-hover;
+    out property <color> foreground: root.kind == PillKind.primary ? AppTheme.on-brand
+        : (root.kind == PillKind.outline ? AppTheme.text-brand
+            : (root.kind == PillKind.link && !touch.has-hover ? AppTheme.text-secondary : AppTheme.text));
     callback clicked();
-    in property <color> base-background: root.primary ? AppTheme.accent : (root.bare ? transparent : AppTheme.panel);
-    in property <color> hover-background: root.primary ? AppTheme.accent.darker(0.08) : AppTheme.background;
-    private property <color> target-fill: touch.pressed
-        ? (root.primary ? AppTheme.accent.darker(0.16) : AppTheme.line)
-        : (touch.has-hover ? root.hover-background : root.base-background);
-    private property <color> from-fill;
-    private property <color> to-fill;
-    private property <color> displayed-fill: root.to-fill.mix(root.from-fill, hover-fade.value);
-
-    init => {
-        root.from-fill = root.target-fill;
-        root.to-fill = root.target-fill;
-    }
-    changed target-fill => {
-        let previous = root.displayed-fill;
-        root.from-fill = previous;
-        root.to-fill = root.target-fill;
-        if (previous != root.to-fill) { hover-fade.restart(); }
-    }
-
-    hover-fade := MotionProgress { duration: 120ms; }
+    private property <bool> link: root.kind == PillKind.link;
+    private property <color> fill-color: root.kind == PillKind.primary
+        ? (touch.pressed ? AppTheme.brand.darker(0.12) : (touch.has-hover ? AppTheme.brand.brighter(0.08) : AppTheme.brand))
+        : (touch.pressed ? AppTheme.border-subtle
+            : (touch.has-hover ? AppTheme.surface
+                : (root.link ? AppTheme.surface.transparentize(1) : AppTheme.page)));
 
     forward-focus: focus;
+    preferred-width: content.preferred-width;
+    preferred-height: root.outline && root.compact ? 28px : content.preferred-height;
     min-width: content.min-width;
-    height: max(content.min-height, root.compact ? 28px : AppTheme.control-height);
+    min-height: root.outline && root.compact ? 28px : content.min-height;
     horizontal-stretch: 0;
     vertical-stretch: 0;
-    border-radius: AppTheme.corner-radius;
-    border-width: focus.has-focus ? 2px : 1px;
-    border-color: focus.has-focus
-        ? (root.primary ? AppTheme.text : AppTheme.accent)
-        : (root.primary || root.bare ? transparent : AppTheme.line);
-    opacity: root.enabled ? 1 : 0.45;
-    background: root.displayed-fill;
+    opacity: root.enabled ? 1 : 0.4;
 
     accessible-role: button;
     accessible-label: root.accessible-name == "" ? root.text : root.accessible-name;
-    accessible-checkable: root.checkable;
-    accessible-checked: root.checked;
-    accessible-description: root.detail;
     accessible-enabled: root.enabled;
     accessible-action-default => { if (root.enabled) { root.clicked(); } }
 
-    content := VerticalLayout {
-        padding-left: root.compact ? 6px : 16px;
-        padding-right: root.compact ? 6px : 16px;
-        padding-top: root.compact ? 2px : 8px;
-        padding-bottom: root.compact ? 2px : 8px;
-        spacing: AppTheme.spacing;
+    FadeFill {
+        width: parent.width;
+        height: parent.height;
+        border-radius: self.height / 2;
+        target: root.fill-color;
+    }
+    if root.kind == PillKind.ghost || root.kind == PillKind.outline : Rectangle {
+        width: parent.width;
+        height: parent.height;
+        border-radius: self.height / 2;
+        border-width: 2px;
+        border-color: AppTheme.border-subtle;
+    }
+
+    private property <bool> outline: root.kind == PillKind.outline;
+    content := HorizontalLayout {
+        padding-left: root.link ? 14px : (root.outline ? (root.compact ? 10px : 18px) : 28px);
+        padding-right: root.link ? 14px : (root.outline ? (root.compact ? 10px : 18px) : 28px);
+        padding-top: root.link ? 10px : (root.outline ? (root.compact ? 0px : 8px) : 14px);
+        padding-bottom: root.link ? 10px : (root.outline ? (root.compact ? 0px : 8px) : 14px);
+        spacing: root.outline && root.compact ? 5px : (root.outline ? 8px : 10px);
         alignment: center;
-
-        AppText {
-            text: root.text;
-            font-size: root.font-size;
-            font-weight: 700;
-            color: root.foreground;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-            accessible-role: none;
+        VerticalLayout {
+            alignment: center;
+            @children
         }
-
-        if root.detail != "" : AppText {
-            text: root.detail;
-            font-size: 13px;
-            color: root.primary ? AppTheme.on-accent : AppTheme.muted;
+        Text {
+            text: root.text;
+            font-size: root.link ? 15px : (root.outline ? (root.compact ? 11px : 14px) : 17px);
+            font-weight: root.link ? 600 : 700;
+            color: root.foreground;
+            vertical-alignment: center;
             horizontal-alignment: center;
             accessible-role: none;
         }
@@ -138,10 +353,7 @@ export component ThemedButton inherits Rectangle {
 
     touch := TouchArea {
         enabled: root.enabled;
-        clicked => {
-            focus.focus();
-            root.clicked();
-        }
+        clicked => { root.clicked(); }
     }
 
     focus := FocusScope {
@@ -156,87 +368,6 @@ export component ThemedButton inherits Rectangle {
             return reject;
         }
     }
-}
 
-export component CompactButton inherits VerticalLayout {
-    in property <string> text <=> control.text;
-    in property <string> accessible-name <=> control.accessible-name;
-    in property <bool> enabled <=> control.enabled;
-    in property <bool> bare <=> control.bare;
-    in property <bool> primary <=> control.primary;
-    in property <color> foreground <=> control.foreground;
-    callback clicked <=> control.clicked;
-    forward-focus: control;
-    alignment: center;
-    horizontal-stretch: 0;
-
-    control := ThemedButton { compact: true; }
-}
-
-export component ThemedField inherits Rectangle {
-    in-out property <string> text <=> input.text;
-    in property <string> accessible-name;
-    in property <bool> numeric;
-    in property <string> committed-text;
-    out property <bool> has-focus: input.has-focus;
-    in property <int> font-weight: 700;
-    in property <TextHorizontalAlignment> horizontal-alignment: left;
-    callback edited(string);
-    forward-focus: input;
-    min-width: 32px;
-    min-height: 28px;
-    border-radius: 4px;
-    border-width: input.has-focus ? 1px : 0px;
-    border-color: AppTheme.accent;
-    background: input.has-focus ? AppTheme.panel : transparent;
-    clip: true;
-
-    changed has-focus => {
-        if (root.numeric && !root.has-focus) { input.text = root.committed-text; }
-    }
-    changed committed-text => {
-        if (root.numeric) { input.text = root.committed-text; }
-    }
-
-    input := TextInput {
-        property <length> offset;
-        x: min(4px, max(parent.width - self.width - self.text-cursor-width - 4px, self.offset));
-        width: max(parent.width - 8px, self.preferred-width);
-        height: parent.height;
-        single-line: true;
-        font-size: 16px;
-        font-weight: root.font-weight;
-        color: AppTheme.text;
-        selection-background-color: AppTheme.accent;
-        selection-foreground-color: AppTheme.on-accent;
-        vertical-alignment: center;
-        horizontal-alignment: root.horizontal-alignment;
-        input-type: root.numeric ? InputType.number : InputType.text;
-        accessible-label: root.accessible-name;
-        edited => { root.edited(self.text); }
-        accepted => {
-            if (root.numeric) { input.text = root.committed-text; }
-        }
-        cursor-position-changed(position) => {
-            if (position.x + self.offset < 4px) {
-                self.offset = 4px - position.x;
-            } else if (position.x + self.offset > parent.width - 4px - self.text-cursor-width) {
-                self.offset = parent.width - position.x - self.text-cursor-width - 4px;
-            }
-        }
-    }
-}
-
-export component ScrollList inherits ScrollView {
-    horizontal-scrollbar-policy: always-off;
-    content-width: self.visible-width;
-    content-height: column.min-height;
-    accessible-role: list;
-
-    column := VerticalLayout {
-        width: root.visible-width;
-        height: root.content-height;
-        spacing: 0px;
-        @children
-    }
+    if focus.has-focus : FocusRing { host-width: root.width; host-height: root.height; corner-radius: root.height / 2; }
 }

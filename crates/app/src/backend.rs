@@ -8,11 +8,10 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, FixedOffset};
 use log::warn;
 use reqwest::blocking::{Client, Response};
-use reqwest::{Method, StatusCode, Url};
+use reqwest::{Method, StatusCode};
 use schisaciaccole_core::api::{
     AUTH_LOGIN_PATH, AUTH_LOGOUT_PATH, AUTH_REFRESH_PATH, AUTH_TOKEN_PATH, ApiError, HEALTH_PATH,
-    ME_PATH, MEETINGS_PATH, Me, Meeting, PutTemplateRequest, RefreshRequest, SlotPlan,
-    TEMPLATES_PATH, Template, TokenRequest, TokenResponse, error_codes,
+    ME_PATH, MEETINGS_PATH, Me, Meeting, RefreshRequest, TokenRequest, TokenResponse, error_codes,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -187,54 +186,6 @@ impl BackendClient {
         self.get_json(MEETINGS_PATH, &[("from", &from), ("to", &to)])
     }
 
-    /// Fetches the slot plan of the meeting `event_id` (`GET /api/v1/meetings/{event_id}/plan`).
-    ///
-    /// The id is escaped as a path segment; an empty id is left to the backend to reject.
-    /// Token handling is the same as [`BackendClient::fetch_me`].
-    ///
-    /// # Errors
-    ///
-    /// Returns [`BackendError::Server`] with status 404 and code `not_found` when the meeting
-    /// does not exist and with status 400 when the request is invalid. Otherwise see
-    /// [`BackendClient::fetch_me`]; [`BackendError::Unreachable`] is also returned when the
-    /// base URL cannot be extended with a path.
-    pub fn fetch_plan(&mut self, event_id: &str) -> Result<SlotPlan, BackendError> {
-        let url = self.segments_url(&["api", "v1", "meetings", event_id, "plan"])?;
-        self.json_request(Method::GET, &url, &[], None::<&()>)
-    }
-
-    /// Creates or replaces the slot template of a meeting title (`PUT /api/v1/templates`).
-    ///
-    /// The request is sent as given: validation is left to the backend. Token handling is the
-    /// same as [`BackendClient::fetch_me`].
-    ///
-    /// # Errors
-    ///
-    /// Returns [`BackendError::Server`] with status 400 when the backend rejects the request.
-    /// Otherwise see [`BackendClient::fetch_me`].
-    pub fn save_template(
-        &mut self,
-        request: &PutTemplateRequest,
-    ) -> Result<Template, BackendError> {
-        let url = self.url(TEMPLATES_PATH);
-        self.json_request(Method::PUT, &url, &[], Some(request))
-    }
-
-    /// Deletes the slot template `id` (`DELETE /api/v1/templates/{id}`).
-    ///
-    /// The id is escaped as a path segment; the answer has no body. Token handling is the same
-    /// as [`BackendClient::fetch_me`].
-    ///
-    /// # Errors
-    ///
-    /// Returns [`BackendError::Server`] with status 404 and code `not_found` when the template
-    /// does not exist. Otherwise see [`BackendClient::fetch_me`] (no decode error can occur).
-    pub fn delete_template(&mut self, id: &str) -> Result<(), BackendError> {
-        let url = self.segments_url(&["api", "v1", "templates", id])?;
-        self.send_authenticated(Method::DELETE, &url, &[], None::<&()>)?;
-        Ok(())
-    }
-
     /// Revokes the session on the backend and forgets it locally.
     ///
     /// The backend call is best effort: any failure of it is ignored, and the local session
@@ -326,19 +277,6 @@ impl BackendClient {
             return BackendError::ReauthRequired;
         }
         error
-    }
-
-    /// Builds the URL of `segments` appended to the base URL, escaping every segment.
-    ///
-    /// A base URL path prefix is kept. Segments `.` and `..` are resolved by the URL parser
-    /// instead of being escaped, so callers must not pass them.
-    fn segments_url(&self, segments: &[&str]) -> Result<String, BackendError> {
-        let mut url = Url::parse(&self.base_url).map_err(|_| BackendError::Unreachable)?;
-        url.path_segments_mut()
-            .map_err(|_| BackendError::Unreachable)?
-            .pop_if_empty()
-            .extend(segments);
-        Ok(url.to_string())
     }
 
     fn request_once<B: Serialize>(
@@ -446,7 +384,7 @@ fn decode<T: DeserializeOwned>(response: Response) -> Result<T, BackendError> {
 mod tests {
     use super::*;
     use crate::session_store::MemoryStore;
-    use schisaciaccole_core::api::{Attendee, EntryKind, PlanEntry, PlanSource, TemplateEntry};
+    use schisaciaccole_core::api::Attendee;
     use serde_json::json;
     use wiremock::matchers::{body_json, header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -901,257 +839,6 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(store.load_refresh_token().unwrap(), None);
     }
-
-    fn sample_plan() -> SlotPlan {
-        SlotPlan {
-            source: PlanSource::Equal,
-            template_id: None,
-            entries: vec![PlanEntry {
-                kind: EntryKind::Attendee,
-                email: Some("a@x.it".to_string()),
-                label: "Ada".to_string(),
-                weight: 1,
-            }],
-        }
-    }
-
-    fn sample_template_request() -> PutTemplateRequest {
-        PutTemplateRequest {
-            meeting_title: "Daily".to_string(),
-            entries: vec![TemplateEntry {
-                kind: EntryKind::Manual,
-                email: None,
-                label: "Demo".to_string(),
-                weight_secs: 120,
-            }],
-        }
-    }
-
-    fn sample_template() -> Template {
-        Template {
-            id: "t1".to_string(),
-            meeting_title: "Daily".to_string(),
-            entries: sample_template_request().entries,
-        }
-    }
-
-    /// Mounts a refresh answering `access`/`refresh` for any refresh token.
-    async fn mount_refresh(server: &MockServer, access: &str, refresh: &str, times: u64) {
-        Mock::given(method("POST"))
-            .and(path(AUTH_REFRESH_PATH))
-            .respond_with(tokens(access, refresh, 900))
-            .expect(times)
-            .mount(server)
-            .await;
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn fetch_plan_sends_bearer_to_the_plan_path_and_decodes() {
-        let server = MockServer::start().await;
-        mount_refresh(&server, "a1", "r2", 1).await;
-        Mock::given(method("GET"))
-            .and(path("/api/v1/meetings/evt1/plan"))
-            .and(header("authorization", "Bearer a1"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(sample_plan()))
-            .expect(1)
-            .mount(&server)
-            .await;
-
-        let plan = run(&server, &store_with("r1"), |mut client| {
-            client.fetch_plan("evt1")
-        })
-        .await
-        .unwrap();
-
-        assert_eq!(plan, sample_plan());
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn fetch_plan_escapes_the_event_id() {
-        let server = MockServer::start().await;
-        mount_refresh(&server, "a1", "r2", 1).await;
-        Mock::given(method("GET"))
-            .and(path("/api/v1/meetings/a%20b%2Fc/plan"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(sample_plan()))
-            .expect(1)
-            .mount(&server)
-            .await;
-
-        let result = run(&server, &store_with("r1"), |mut client| {
-            client.fetch_plan("a b/c")
-        })
-        .await;
-
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn fetch_plan_not_found_is_a_server_error() {
-        let server = MockServer::start().await;
-        mount_refresh(&server, "a1", "r2", 1).await;
-        Mock::given(method("GET"))
-            .and(path("/api/v1/meetings/evt1/plan"))
-            .respond_with(api_error(404, error_codes::NOT_FOUND))
-            .mount(&server)
-            .await;
-
-        let result = run(&server, &store_with("r1"), |mut client| {
-            client.fetch_plan("evt1")
-        })
-        .await;
-
-        match result {
-            Err(BackendError::Server { status, code, .. }) => {
-                assert_eq!(status, 404);
-                assert_eq!(code, error_codes::NOT_FOUND);
-            }
-            other => panic!("unexpected result: {other:?}"),
-        }
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn save_template_sends_put_with_the_body_and_decodes() {
-        let server = MockServer::start().await;
-        mount_refresh(&server, "a1", "r2", 1).await;
-        Mock::given(method("PUT"))
-            .and(path(TEMPLATES_PATH))
-            .and(header("authorization", "Bearer a1"))
-            .and(body_json(sample_template_request()))
-            .respond_with(ResponseTemplate::new(200).set_body_json(sample_template()))
-            .expect(1)
-            .mount(&server)
-            .await;
-
-        let template = run(&server, &store_with("r1"), |mut client| {
-            client.save_template(&sample_template_request())
-        })
-        .await
-        .unwrap();
-
-        assert_eq!(template, sample_template());
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn put_is_retried_once_after_unauthorized_with_the_refreshed_token() {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path(AUTH_REFRESH_PATH))
-            .and(body_json(json!({"refresh_token": "r1"})))
-            .respond_with(tokens("a1", "r2", 900))
-            .expect(1)
-            .mount(&server)
-            .await;
-        Mock::given(method("POST"))
-            .and(path(AUTH_REFRESH_PATH))
-            .and(body_json(json!({"refresh_token": "r2"})))
-            .respond_with(tokens("a2", "r3", 900))
-            .expect(1)
-            .mount(&server)
-            .await;
-        Mock::given(method("PUT"))
-            .and(path(TEMPLATES_PATH))
-            .and(header("authorization", "Bearer a1"))
-            .respond_with(api_error(401, error_codes::UNAUTHORIZED))
-            .expect(1)
-            .mount(&server)
-            .await;
-        Mock::given(method("PUT"))
-            .and(path(TEMPLATES_PATH))
-            .and(header("authorization", "Bearer a2"))
-            .and(body_json(sample_template_request()))
-            .respond_with(ResponseTemplate::new(200).set_body_json(sample_template()))
-            .expect(1)
-            .mount(&server)
-            .await;
-        let store = store_with("r1");
-
-        let template = run(&server, &store, |mut client| {
-            client.save_template(&sample_template_request())
-        })
-        .await
-        .unwrap();
-
-        assert_eq!(template, sample_template());
-        assert_eq!(store.load_refresh_token().unwrap().as_deref(), Some("r3"));
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn google_reauth_on_put_clears_the_store() {
-        let server = MockServer::start().await;
-        mount_refresh(&server, "a1", "r2", 1).await;
-        Mock::given(method("PUT"))
-            .and(path(TEMPLATES_PATH))
-            .respond_with(api_error(401, error_codes::GOOGLE_REAUTH_REQUIRED))
-            .expect(1)
-            .mount(&server)
-            .await;
-        let store = store_with("r1");
-
-        let result = run(&server, &store, |mut client| {
-            client.save_template(&sample_template_request())
-        })
-        .await;
-
-        assert!(matches!(result, Err(BackendError::ReauthRequired)));
-        assert_eq!(store.load_refresh_token().unwrap(), None);
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn delete_template_accepts_204_without_body() {
-        let server = MockServer::start().await;
-        mount_refresh(&server, "a1", "r2", 1).await;
-        Mock::given(method("DELETE"))
-            .and(path("/api/v1/templates/t%201"))
-            .and(header("authorization", "Bearer a1"))
-            .respond_with(ResponseTemplate::new(204))
-            .expect(1)
-            .mount(&server)
-            .await;
-
-        let result = run(&server, &store_with("r1"), |mut client| {
-            client.delete_template("t 1")
-        })
-        .await;
-
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn delete_template_not_found_is_a_server_error() {
-        let server = MockServer::start().await;
-        mount_refresh(&server, "a1", "r2", 1).await;
-        Mock::given(method("DELETE"))
-            .and(path("/api/v1/templates/t1"))
-            .respond_with(api_error(404, error_codes::NOT_FOUND))
-            .mount(&server)
-            .await;
-
-        let result = run(&server, &store_with("r1"), |mut client| {
-            client.delete_template("t1")
-        })
-        .await;
-
-        match result {
-            Err(BackendError::Server { status, code, .. }) => {
-                assert_eq!(status, 404);
-                assert_eq!(code, error_codes::NOT_FOUND);
-            }
-            other => panic!("unexpected result: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn segments_url_keeps_the_base_path_prefix() {
-        let client =
-            BackendClient::new("http://host/prefix/", Box::new(MemoryStore::new())).unwrap();
-
-        let url = client
-            .segments_url(&["api", "v1", "templates", "x"])
-            .unwrap();
-
-        assert_eq!(url, "http://host/prefix/api/v1/templates/x");
-    }
-
     #[test]
     fn logout_clears_the_store_even_if_the_backend_is_unreachable() {
         let mut client = offline_client();

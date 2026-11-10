@@ -1,585 +1,1548 @@
 import { ListView, AboutSlint } from "std-widgets.slint";
-import { AppTheme, AppText, ThemedButton, CompactButton, ThemedField, ScrollList, AppMotion, MotionProgress } from "theme.slint";
+import { AppTheme, AppText, PageTitle, PageSub, PillButton, PillKind, PlayIcon, StopIcon, PauseIcon, SkipIcon, HomeIcon, PeopleIcon, EyeOffIcon, ChevronIcon, StepIcon, HelpIcon, DotsIcon, LogoutIcon, LogoMark, FadeFill, FocusRing, AppMotion, MotionProgress } from "theme.slint";
 
-import "../assets/fonts/Plus_Jakarta_Sans/static/PlusJakartaSans-Regular.ttf";
-import "../assets/fonts/Plus_Jakarta_Sans/static/PlusJakartaSans-Medium.ttf";
-import "../assets/fonts/Plus_Jakarta_Sans/static/PlusJakartaSans-Bold.ttf";
+import "../assets/fonts/Manrope/static/Manrope-Regular.ttf";
+import "../assets/fonts/Manrope/static/Manrope-Medium.ttf";
+import "../assets/fonts/Manrope/static/Manrope-SemiBold.ttf";
+import "../assets/fonts/Manrope/static/Manrope-Bold.ttf";
+import "../assets/fonts/Manrope/static/Manrope-ExtraBold.ttf";
 
-export enum Page { SelectionPage, TimerPage, TimerFinished, LoadingPage, LoginPage, MeetingsPage, EditorPage }
+export enum Page { ManualPage, TimerPage, TimerFinished, LoadingPage, LoginPage, MeetingsPage }
 export enum StopType { TimerFinished, UserStopped }
+export enum TurnView { Plain, Settings, Running, Daily }
 
 export struct TimeOption { time: string, minutes: string }
 export struct MeetingRow {
     time-range: string,
     title: string,
-    attendees: string,
+    meta: string,
     in-progress: bool,
-    has-template: bool,
-}
-export struct EditorRow {
-    label: string,
-    minutes: int,
-    included: bool,
-    attendee: bool,
-    email: string,
+    daily-on: bool,
+    daily-auto: bool,
 }
 
-component Heading inherits AppText {
-    font-size: 28px;
-    font-weight: 700;
-    overflow: elide;
+component BrandMark inherits LogoMark {
+    bubble: AppTheme.dark ? AppTheme.text-brand : AppTheme.brand;
+    hands: AppTheme.dark ? AppTheme.page : #FFFFFF;
 }
 
-component MutedText inherits AppText { color: AppTheme.muted; }
+component NavTab inherits Rectangle {
+    in property <string> text;
+    in property <bool> selected;
+    in property <bool> enabled: true;
+    callback clicked();
+    forward-focus: focus;
+    preferred-width: content.preferred-width;
+    preferred-height: content.preferred-height;
+    min-width: content.min-width;
+    min-height: content.min-height;
+    horizontal-stretch: 0;
+    opacity: root.enabled ? 1 : 0.4;
 
-component Navigation inherits HorizontalLayout {
+    accessible-role: tab;
+    accessible-label: root.text;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if (root.enabled) { root.clicked(); } }
+
+    FadeFill {
+        width: parent.width;
+        height: parent.height;
+        border-radius: self.height / 2;
+        target: root.selected
+            ? (touch.has-hover ? AppTheme.nav-selected-hover : AppTheme.nav-selected)
+            : (touch.has-hover ? AppTheme.nav-tab-hover : #FFFFFF00);
+    }
+    content := HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 16px;
+        padding-top: 8px;
+        padding-bottom: 8px;
+        Text {
+            text: root.text;
+            font-size: 17px;
+            font-weight: 700;
+            letter-spacing: 0.51px;
+            vertical-alignment: center;
+            color: root.selected ? AppTheme.brand : (touch.has-hover ? #FFFFFF : AppTheme.nav-tab-text);
+            accessible-role: none;
+        }
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+    focus := FocusScope {
+        width: 0px;
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if (!root.enabled) { return reject; }
+            if (event.text == Key.Space || event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    if focus.has-focus : FocusRing { host-width: root.width; host-height: root.height; corner-radius: root.height / 2; }
+}
+
+component NavIconButton inherits Rectangle {
+    in property <string> accessible-name;
+    callback clicked();
+    forward-focus: focus;
+    width: 40px;
+    height: 40px;
+    accessible-role: button;
+    accessible-label: root.accessible-name;
+    accessible-action-default => { root.clicked(); }
+
+    FadeFill {
+        width: parent.width;
+        height: parent.height;
+        border-radius: self.height / 2;
+        target: touch.has-hover ? AppTheme.nav-icon-hover : #FFFFFF00;
+    }
+    Rectangle {
+        width: 26px;
+        height: 26px;
+        @children
+    }
+    touch := TouchArea { clicked => { root.clicked(); } }
+    focus := FocusScope {
+        width: 0px;
+        key-pressed(event) => {
+            if (event.text == Key.Space || event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    if focus.has-focus : FocusRing { host-width: root.width; host-height: root.height; corner-radius: 20px; }
+}
+
+component Navigation inherits Rectangle {
     in property <bool> meetings-page;
     in property <bool> signed-in;
-    callback free-slots();
+    callback manual();
     callback meetings();
     callback logout();
     callback help();
-    spacing: 8px;
-    height: 44px;
+    background: AppTheme.brand;
+    height: 64px;
 
-    ThemedButton {
-        width: 150px;
-        text: "Orari liberi";
-        primary: !root.meetings-page;
-        clicked => { root.free-slots(); }
+    HorizontalLayout {
+        padding-left: 32px;
+        padding-right: 32px;
+        padding-top: 12px;
+        padding-bottom: 12px;
+        spacing: 24px;
+
+        HorizontalLayout {
+            horizontal-stretch: 1;
+            alignment: start;
+            spacing: 32px;
+            HorizontalLayout {
+                spacing: 10px;
+                VerticalLayout {
+                    alignment: center;
+                    LogoMark { width: 38px; height: 38px; }
+                }
+                Text {
+                    text: "Schisaciaccole";
+                    color: #FFFFFF;
+                    font-size: 22px;
+                    font-weight: 800;
+                    letter-spacing: -0.66px;
+                    vertical-alignment: center;
+                }
+            }
+            HorizontalLayout {
+                spacing: 8px;
+                NavTab {
+                    text: "MANUALE";
+                    selected: !root.meetings-page;
+                    clicked => { root.manual(); }
+                }
+                NavTab {
+                    text: "I MIEI MEETING";
+                    selected: root.meetings-page;
+                    enabled: root.signed-in;
+                    clicked => { root.meetings(); }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+            NavIconButton {
+                accessible-name: "Aiuto";
+                clicked => { root.help(); }
+                HelpIcon { width: parent.width; height: parent.height; }
+            }
+            if root.signed-in : NavIconButton {
+                accessible-name: "Altre azioni";
+                clicked => { menu.show(); }
+                DotsIcon { width: parent.width; height: parent.height; }
+            }
+        }
     }
-    ThemedButton {
-        width: 150px;
-        text: "I miei meeting";
-        primary: root.meetings-page;
-        enabled: root.signed-in;
-        clicked => { root.meetings(); }
-    }
-    Rectangle { horizontal-stretch: 1; }
-    if root.signed-in : CompactButton {
-        text: "Esci";
-        bare: true;
-        clicked => { root.logout(); }
-    }
-    CompactButton {
-        text: "?";
-        accessible-name: "Scorciatoie da tastiera";
-        bare: true;
-        clicked => { root.help(); }
+
+    menu := PopupWindow {
+        x: root.width - 32px - 200px;
+        y: root.height - 6px;
+        width: 200px;
+        height: 65px;
+        Rectangle {
+            background: AppTheme.page;
+            border-radius: AppTheme.radius-card;
+            border-width: 1px;
+            border-color: AppTheme.border-subtle;
+            drop-shadow-blur: 24px;
+            drop-shadow-offset-y: 8px;
+            drop-shadow-color: #1E1A2629;
+            VerticalLayout {
+                padding: 8px;
+                Rectangle {
+                    border-radius: AppTheme.radius-item;
+                    accessible-role: button;
+                    accessible-label: "Logout";
+                    accessible-action-default => { root.logout(); }
+                    FadeFill {
+                        width: parent.width;
+                        height: parent.height;
+                        border-radius: AppTheme.radius-item;
+                        target: item-touch.has-hover ? AppTheme.surface : AppTheme.surface.transparentize(1);
+                    }
+                    HorizontalLayout {
+                        padding: 12px;
+                        spacing: 12px;
+                        VerticalLayout {
+                            alignment: center;
+                            LogoutIcon { width: 20px; height: 20px; }
+                        }
+                        Text {
+                            text: "Logout";
+                            color: AppTheme.text;
+                            font-size: 15px;
+                            font-weight: 500;
+                            vertical-alignment: center;
+                            accessible-role: none;
+                        }
+                    }
+                    item-touch := TouchArea { clicked => { root.logout(); } }
+                }
+            }
+        }
     }
 }
 
-component MeetingsPage {
+component SlotCard inherits Rectangle {
+    in property <string> time;
+    in property <string> minutes;
+    in property <bool> selected;
+    callback clicked();
+    forward-focus: focus;
+    min-width: 100px;
+    preferred-width: 100px;
+    height: 112px;
+    border-radius: AppTheme.radius-card;
+
+    accessible-role: button;
+    accessible-checkable: true;
+    accessible-checked: root.selected;
+    accessible-label: root.time + ", tra " + root.minutes + " min";
+    accessible-action-default => { root.clicked(); }
+
+    FadeFill {
+        width: parent.width;
+        height: parent.height;
+        border-radius: AppTheme.radius-card;
+        target: root.selected ? AppTheme.brand : AppTheme.surface;
+    }
+    Rectangle {
+        width: parent.width;
+        height: parent.height;
+        border-radius: AppTheme.radius-card;
+        border-width: 2px;
+        border-color: touch.has-hover ? AppTheme.border-subtle : #FFFFFF00;
+    }
+    VerticalLayout {
+        alignment: center;
+        spacing: 4px;
+        Text {
+            text: root.time;
+            font-size: 30px;
+            font-weight: 800;
+            letter-spacing: -0.6px;
+            horizontal-alignment: center;
+            color: root.selected ? AppTheme.on-brand : AppTheme.text;
+            accessible-role: none;
+        }
+        Text {
+            text: "tra " + root.minutes + " min";
+            font-size: 15px;
+            font-weight: 500;
+            horizontal-alignment: center;
+            color: root.selected ? #FFFFFFD9 : AppTheme.text-secondary;
+            accessible-role: none;
+        }
+    }
+    touch := TouchArea { clicked => { root.clicked(); } }
+    focus := FocusScope {
+        width: 0px;
+        key-pressed(event) => {
+            if (event.text == Key.Space || event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    if focus.has-focus : FocusRing { host-width: root.width; host-height: root.height; corner-radius: AppTheme.radius-card; }
+}
+
+component ManualPage inherits VerticalLayout {
+    in property <string> current-time;
+    in property <[TimeOption]> options;
+    in property <int> selected-slot;
+    in property <string> notice;
+    callback select-slot(int);
+    callback start-timer();
+    padding-left: 32px;
+    padding-right: 32px;
+    padding-top: 32px;
+    padding-bottom: 40px;
+
+    VerticalLayout {
+        spacing: 12px;
+        PageTitle { text: "Quando finisce il meeting?"; }
+        HorizontalLayout {
+            alignment: start;
+            spacing: 5px;
+            PageSub { text: "Sono le"; }
+            HorizontalLayout {
+                PageSub { text: root.current-time; color: AppTheme.text; font-weight: 700; }
+                PageSub { text: ". Scegli l’orario di fine."; }
+            }
+        }
+    }
+    Rectangle { height: 32px; }
+    GridLayout {
+        height: 244px;
+        spacing: 20px;
+        for option[index] in root.options : SlotCard {
+            row: floor(index / 4);
+            col: mod(index, 4);
+            horizontal-stretch: 1;
+            time: option.time;
+            minutes: option.minutes;
+            selected: index == root.selected-slot;
+            clicked => { root.select-slot(index); }
+        }
+    }
+    if root.notice != "" : VerticalLayout {
+        padding-top: 16px;
+        AppText {
+            text: root.notice;
+            color: AppTheme.notice;
+            font-size: 15px;
+            wrap: word-wrap;
+        }
+    }
+    Rectangle { vertical-stretch: 1; }
+    HorizontalLayout {
+        padding-top: 32px;
+        alignment: end;
+        PillButton {
+            text: "Avvia timer";
+            enabled: root.selected-slot >= 0;
+            clicked => { root.start-timer(); }
+            PlayIcon { width: 20px; height: 20px; tint: parent.foreground; }
+        }
+    }
+}
+
+// Daily switch of a meeting row, with the AUTO badge and a tooltip above it.
+component DailySwitch inherits Rectangle {
+    in property <bool> on;
+    in property <bool> auto;
+    callback toggled();
+    private property <length> tip-height: root.auto ? 128px : 92px;
+    private property <string> tip: "Modalità Daily: il timer parte subito e il tempo del meeting viene ripartito in parti uguali tra i partecipanti accettati, chiamati a parlare in ordine casuale."
+        + (root.auto ? " Riconosciuto in automatico dal titolo: puoi comunque cambiarlo." : "");
+    forward-focus: focus;
+    preferred-width: content.preferred-width;
+    min-width: content.min-width;
+    horizontal-stretch: 0;
+
+    accessible-role: switch;
+    accessible-checkable: true;
+    accessible-checked: root.on;
+    accessible-label: "Daily";
+    accessible-description: root.tip;
+    accessible-action-default => { root.toggled(); }
+
+    content := HorizontalLayout {
+        spacing: 10px;
+        alignment: center;
+        if root.on && root.auto : VerticalLayout {
+            alignment: center;
+            Rectangle {
+                height: 20px;
+                width: auto-text.preferred-width + 16px;
+                border-radius: 10px;
+                background: AppTheme.page;
+                border-width: 1px;
+                border-color: AppTheme.border-subtle;
+                auto-text := Text {
+                    text: "AUTO";
+                    font-size: 11px;
+                    font-weight: 700;
+                    letter-spacing: 0.66px;
+                    color: AppTheme.text-brand;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    width: parent.width;
+                    height: parent.height;
+                }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            track := Rectangle {
+                width: 44px;
+                height: 26px;
+                border-radius: 13px;
+                background: root.on ? AppTheme.brand : AppTheme.border-subtle;
+                animate background { duration: AppMotion.reduced ? 0ms : 150ms; }
+                Rectangle {
+                    y: 3px;
+                    x: root.on ? 21px : 3px;
+                    width: 20px;
+                    height: 20px;
+                    border-radius: 10px;
+                    background: #FFFFFF;
+                    drop-shadow-blur: 3px;
+                    drop-shadow-offset-y: 1px;
+                    drop-shadow-color: #1E1A2640;
+                    animate x { duration: AppMotion.reduced ? 0ms : 150ms; }
+                }
+                if focus.has-focus : FocusRing { host-width: track.width; host-height: track.height; corner-radius: 13px; }
+            }
+        }
+        Text {
+            text: "Daily";
+            font-size: 15px;
+            font-weight: 700;
+            color: AppTheme.text;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+    }
+
+    touch := TouchArea {
+        clicked => { root.toggled(); }
+        changed has-hover => {
+            if (self.has-hover) { tooltip.show(); } else if (!focus.has-focus) { tooltip.close(); }
+        }
+    }
+    focus := FocusScope {
+        width: 0px;
+        key-pressed(event) => {
+            if (event.text == Key.Space || event.text == Key.Return) {
+                root.toggled();
+                return accept;
+            }
+            return reject;
+        }
+        changed has-focus => {
+            if (self.has-focus) { tooltip.show(); } else { tooltip.close(); }
+        }
+    }
+
+    tooltip := PopupWindow {
+        close-policy: PopupClosePolicy.no-auto-close;
+        x: root.width - 280px;
+        y: -(root.tip-height + 6px) - 4px;
+        width: 280px;
+        height: root.tip-height + 6px;
+        Rectangle {
+            height: root.tip-height;
+            border-radius: AppTheme.radius-item;
+            background: AppTheme.danger;
+            drop-shadow-blur: 24px;
+            drop-shadow-offset-y: 8px;
+            drop-shadow-color: #1E1A2633;
+            Text {
+                x: 12px;
+                y: 10px;
+                width: parent.width - 24px;
+                height: parent.height - 20px;
+                text: root.tip;
+                font-size: 13px;
+                font-weight: 500;
+                color: AppTheme.on-danger;
+                wrap: word-wrap;
+                vertical-alignment: top;
+            }
+        }
+        Path {
+            x: 280px - 18px - 12px;
+            y: root.tip-height;
+            width: 12px;
+            height: 6px;
+            viewbox-width: 12;
+            viewbox-height: 6;
+            fill: AppTheme.danger;
+            commands: "M0 0H12L6 6z";
+        }
+    }
+}
+
+component MeetingsPage inherits VerticalLayout {
     in property <string> account-name;
     in property <[MeetingRow]> meetings;
     in property <bool> loading;
     in property <string> error;
     callback select(int);
-    callback open-editor(int);
+    callback set-daily(int, bool);
     callback refresh();
-    callback logout();
-    callback free-slots();
-    callback help();
+    padding-left: 32px;
+    padding-right: 32px;
+    padding-top: 32px;
+    padding-bottom: 40px;
 
     init => { root.refresh(); }
     Timer { interval: 60s; running: true; triggered => { root.refresh(); } }
 
     VerticalLayout {
-        padding: 32px;
-        spacing: 24px;
-        Navigation {
-            meetings-page: true;
-            signed-in: true;
-            free-slots => { root.free-slots(); }
-            meetings => { root.refresh(); }
-            logout => { root.logout(); }
-            help => { root.help(); }
-        }
-        Heading { text: "I meeting di oggi"; }
-        MutedText { text: "Google Calendar · " + root.account-name; overflow: elide; }
-        if root.loading : MutedText { text: "Caricamento…"; }
-        if root.error != "" : AppText {
+        spacing: 12px;
+        PageTitle { text: "I meeting di oggi"; }
+        PageSub { text: "Google Calendar · " + root.account-name; overflow: elide; }
+    }
+    if root.loading : VerticalLayout {
+        padding-top: 16px;
+        AppText { text: "Caricamento…"; color: AppTheme.text-secondary; font-size: 15px; }
+    }
+    if root.error != "" : VerticalLayout {
+        padding-top: 16px;
+        AppText {
             text: root.error;
-            color: AppTheme.accent;
+            color: AppTheme.notice;
+            font-size: 15px;
             wrap: word-wrap;
-        }
-        if !root.loading && root.error == "" && root.meetings.length == 0 : MutedText {
-            text: "Nessun altro meeting oggi.";
-        }
-        meeting-list := ListView {
-            vertical-stretch: 1;
-            for row[index] in root.meetings : Rectangle {
-                height: index == root.meetings.length - 1 ? 78px : 102px;
-                Rectangle {
-                    y: 0px;
-                    height: 78px;
-                    border-radius: 10px;
-                    background: row.in-progress ? AppTheme.tint : AppTheme.background;
-                    HorizontalLayout {
-                        padding: 16px;
-                        spacing: 20px;
-                        AppText {
-                            text: row.time-range;
-                            font-size: 16px;
-                            font-weight: 700;
-                            vertical-alignment: center;
-                        }
-                        VerticalLayout {
-                            spacing: 5px;
-                            alignment: center;
-                            horizontal-stretch: 1;
-                            AppText {
-                                text: row.title;
-                                font-size: 17px;
-                                font-weight: 700;
-                                overflow: elide;
-                            }
-                            MutedText {
-                                text: (row.in-progress ? "In corso · " : "") + row.attendees + (row.has-template ? " · slot salvati" : "");
-                                font-size: 12px;
-                                overflow: elide;
-                            }
-                        }
-                        ThemedButton {
-                            text: "Editor";
-                            clicked => { root.open-editor(index); }
-                        }
-                        if row.in-progress : ThemedButton {
-                            text: "Avvia";
-                            primary: true;
-                            clicked => { root.select(index); }
-                        }
-                    }
-                }
-            }
         }
     }
-}
-
-component EditorPage {
-    in property <string> title;
-    in property <string> time-range;
-    in property <string> duration;
-    in property <bool> attendees-warning;
-    in property <bool> loading;
-    in property <bool> busy;
-    in property <string> notice;
-    in property <string> unassigned;
-    in property <bool> over;
-    in property <bool> has-template;
-    in property <[EditorRow]> rows;
-    callback set-label(int, string);
-    callback set-minutes(int, int);
-    callback set-included(int, bool);
-    callback move-up(int);
-    callback move-down(int);
-    callback remove-row(int);
-    callback add-row();
-    callback reset();
-    callback save();
-    callback delete-template();
-    callback start-meeting();
-    callback back();
-
-    VerticalLayout {
-        padding: 24px;
-        spacing: 8px;
-        Heading { text: "Organizza i turni"; }
-        MutedText {
-            text: root.title + " · " + root.time-range + " · " + root.duration;
-            overflow: elide;
-        }
-        if root.attendees-warning : AppText {
-            text: "Lista partecipanti incompleta: aggiungi le voci mancanti";
-            color: AppTheme.accent;
-            font-size: 12px;
-            wrap: word-wrap;
-        }
-        if root.loading : MutedText { text: "Caricamento…"; vertical-stretch: 1; }
-        if !root.loading : ScrollList {
-            vertical-stretch: 1;
-            for row[index] in root.rows : Rectangle {
-                height: 56px;
-                Rectangle {
-                    height: 52px;
-                    border-radius: 8px;
-                    background: AppTheme.background;
-                    HorizontalLayout {
-                        padding-left: 8px;
-                        padding-right: 8px;
+    if !root.loading && root.error == "" && root.meetings.length == 0 : VerticalLayout {
+        padding-top: 16px;
+        AppText { text: "Nessun altro meeting oggi."; color: AppTheme.text-secondary; font-size: 15px; }
+    }
+    Rectangle { height: 32px; }
+    ListView {
+        vertical-stretch: 1;
+        for row[index] in root.meetings : Rectangle {
+            height: index == root.meetings.length - 1 ? 92px : 104px;
+            Rectangle {
+                y: 0px;
+                height: 92px;
+                border-radius: AppTheme.radius-card;
+                background: AppTheme.surface;
+                HorizontalLayout {
+                    padding-left: 24px;
+                    padding-right: 24px;
+                    padding-top: 20px;
+                    padding-bottom: 20px;
+                    spacing: 24px;
+                    Text {
+                        width: 150px;
+                        text: row.time-range;
+                        font-size: 21px;
+                        font-weight: 700;
+                        color: AppTheme.text;
+                        vertical-alignment: center;
+                    }
+                    VerticalLayout {
+                        horizontal-stretch: 1;
                         spacing: 4px;
-                        CompactButton {
-                            text: "↑";
-                            accessible-name: "Sposta su " + row.label;
-                            bare: true;
-                            enabled: index > 0;
-                            clicked => { root.move-up(index); }
+                        alignment: center;
+                        Text {
+                            text: row.title;
+                            font-size: 21px;
+                            font-weight: 700;
+                            color: AppTheme.text;
+                            overflow: elide;
                         }
-                        CompactButton {
-                            text: "↓";
-                            accessible-name: "Sposta giù " + row.label;
-                            bare: true;
-                            enabled: index < root.rows.length - 1;
-                            clicked => { root.move-down(index); }
-                        }
-                        if row.attendee : VerticalLayout {
-                            alignment: center;
-                            horizontal-stretch: 0;
-                            ThemedButton {
-                                compact: true;
-                                accessible-role: checkbox;
-                                text: row.included ? "☑" : "☐";
-                                accessible-name: "Includi " + row.label;
-                                bare: true;
-                                checkable: true;
-                                checked: row.included;
-                                clicked => { root.set-included(index, !row.included); }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            if row.in-progress : VerticalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    width: 8px;
+                                    height: 8px;
+                                    border-radius: 4px;
+                                    background: AppTheme.orange;
+                                }
                             }
-                        }
-                        VerticalLayout {
-                            alignment: center;
-                            horizontal-stretch: 1;
-                            ThemedField {
-                                text <=> row.label;
-                                accessible-name: "Nome del turno " + (index + 1);
-                                opacity: row.included ? 1 : 0.6;
-                                edited(text) => { root.set-label(index, text); }
-                            }
-                            if row.attendee && row.email != "" : MutedText {
-                                text: row.email;
-                                font-size: 9px;
+                            Text {
+                                text: row.meta;
+                                font-size: 15px;
+                                color: AppTheme.text-secondary;
                                 overflow: elide;
                             }
                         }
-                        if !row.attendee : CompactButton {
-                            text: "×";
-                            accessible-name: "Rimuovi " + row.label;
-                            bare: true;
-                            clicked => { root.remove-row(index); }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        DailySwitch {
+                            on: row.daily-on;
+                            auto: row.daily-auto;
+                            toggled => { root.set-daily(index, !row.daily-on); }
                         }
-                        CompactButton {
-                            text: "−";
-                            accessible-name: "Riduci minuti di " + row.label;
-                            bare: true;
-                            enabled: row.minutes > 0;
-                            clicked => { root.set-minutes(index, row.minutes - 1); }
-                        }
-                        ThemedField {
-                            width: 44px;
-                            text: row.minutes;
-                            committed-text: row.minutes;
-                            accessible-name: "Minuti di " + row.label;
-                            numeric: true;
-                            font-weight: 400;
-                            horizontal-alignment: center;
-                            edited(text) => {
-                                if (text.is-float()) { root.set-minutes(index, round(text.to-float())); }
-                            }
-                        }
-                        AppText { text: "min"; vertical-alignment: center; }
-                        CompactButton {
-                            text: "+";
-                            foreground: #ffffff;
-                            accessible-name: "Aumenta minuti di " + row.label;
-                            primary: true;
-                            enabled: row.minutes < 600;
-                            clicked => { root.set-minutes(index, row.minutes + 1); }
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        PillButton {
+                            text: "Avvia";
+                            clicked => { root.select(index); }
+                            PlayIcon { width: 20px; height: 20px; tint: parent.foreground; }
                         }
                     }
                 }
             }
         }
-        if root.notice != "" : AppText {
-            text: root.notice;
-            color: AppTheme.accent;
-            font-size: 12px;
-            wrap: word-wrap;
-        }
-        HorizontalLayout {
-            AppText {
-                text: root.unassigned;
-                color: root.over ? AppTheme.accent : AppTheme.muted;
-                vertical-alignment: center;
-                horizontal-stretch: 1;
-                overflow: elide;
-            }
-            CompactButton {
-                text: "+ Aggiungi voce";
-                bare: true;
-                enabled: !root.loading;
-                clicked => { root.add-row(); }
-            }
-        }
-        HorizontalLayout {
-            spacing: 8px;
-            CompactButton {
-                text: "←";
-                accessible-name: "Indietro";
-                bare: true;
-                clicked => { root.back(); }
-            }
-            CompactButton {
-                text: "Slot uguali";
-                accessible-name: "Ripristina slot uguali";
-                bare: true;
-                enabled: !root.loading;
-                clicked => { root.reset(); }
-            }
-            if root.has-template : CompactButton {
-                text: "Elimina preferenza";
-                bare: true;
-                enabled: !root.loading && !root.busy;
-                clicked => { root.delete-template(); }
-            }
-            Rectangle { horizontal-stretch: 1; }
-            ThemedButton {
-                text: "Salva preferenza";
-                width: 180px;
-                enabled: !root.loading && !root.busy;
-                clicked => { root.save(); }
-            }
-            ThemedButton {
-                text: "Avvia";
-                width: 96px;
-                primary: true;
-                enabled: !root.loading;
-                clicked => { root.start-meeting(); }
-            }
-        }
     }
 }
 
-component SpeakerName inherits Rectangle {
-    in property <string> name;
-    in property <int> identity: -1;
-    private property <string> remembered-name;
-    private property <string> previous-name;
-    private property <int> previous-identity: -1;
-    min-height: speaker-content.preferred-height;
-    horizontal-stretch: 1;
-
-    init => {
-        root.remembered-name = root.name;
-        root.previous-identity = root.identity;
-    }
-    changed name => {
-        if (root.identity == root.previous-identity) {
-            root.remembered-name = root.name;
-        }
-    }
-    changed identity => {
-        if (root.identity != root.previous-identity) {
-            root.previous-name = root.remembered-name;
-            root.remembered-name = root.name;
-            if (root.previous-identity >= 0 && root.identity >= 0) {
-                speaker-fade.restart();
-            } else {
-                speaker-fade.finish();
-            }
-            root.previous-identity = root.identity;
-        }
-    }
-    speaker-fade := MotionProgress { duration: 220ms; }
-    speaker-previous := AppText {
-        x: 0px;
-        y: 0px;
-        width: root.width;
-        height: root.height;
-        text: root.previous-name;
-        font-size: 24px;
-        font-weight: 700;
-        overflow: elide;
-        opacity: 1 - speaker-fade.value;
+// One fixed-width cell of the countdown, so the digits never shift while they tick.
+component ClockCell inherits Rectangle {
+    in property <string> glyph;
+    in property <bool> colon;
+    in property <length> size;
+    in property <color> tint;
+    width: root.colon ? root.size * 0.28 : root.size * 0.6;
+    height: root.size;
+    Text {
+        width: parent.width;
+        height: parent.height;
+        text: root.glyph;
+        font-size: root.size;
+        font-weight: 800;
+        color: root.tint;
+        horizontal-alignment: center;
+        vertical-alignment: center;
         accessible-role: none;
     }
-    speaker-content := AppText {
-        x: 0px;
-        y: 0px;
-        width: root.width;
-        height: root.height;
-        text: root.name;
-        font-size: 24px;
-        font-weight: 700;
-        overflow: elide;
-        opacity: speaker-fade.value;
+}
+
+// Countdown as MM:SS, or HH:MM:SS from one hour on. `size` shrinks to fit `max-width`.
+component ClockText inherits Rectangle {
+    in property <int> seconds;
+    in property <length> size;
+    in property <length> avail;
+    in property <color> tint;
+    private property <int> hours: floor(root.seconds / 3600);
+    private property <int> minutes: mod(floor(root.seconds / 60), 60);
+    private property <int> secs: mod(root.seconds, 60);
+    private property <length> fitted: min(root.size, root.avail / (root.hours > 0 ? 4.3 : 2.8));
+    height: root.fitted;
+    horizontal-stretch: 1;
+
+    accessible-role: text;
+    accessible-label: root.hours > 0
+        ? root.hours + ":" + (root.minutes < 10 ? "0" : "") + root.minutes + ":" + (root.secs < 10 ? "0" : "") + root.secs
+        : (root.minutes < 10 ? "0" : "") + root.minutes + ":" + (root.secs < 10 ? "0" : "") + root.secs;
+
+    HorizontalLayout {
+        alignment: center;
+        spacing: 0px;
+        if root.hours > 0 : ClockCell { glyph: floor(root.hours / 10); size: root.fitted; tint: root.tint; }
+        if root.hours > 0 : ClockCell { glyph: mod(root.hours, 10); size: root.fitted; tint: root.tint; }
+        if root.hours > 0 : ClockCell { glyph: ":"; colon: true; size: root.fitted; tint: root.tint; }
+        ClockCell { glyph: floor(root.minutes / 10); size: root.fitted; tint: root.tint; }
+        ClockCell { glyph: mod(root.minutes, 10); size: root.fitted; tint: root.tint; }
+        ClockCell { glyph: ":"; colon: true; size: root.fitted; tint: root.tint; }
+        ClockCell { glyph: floor(root.secs / 10); size: root.fitted; tint: root.tint; }
+        ClockCell { glyph: mod(root.secs, 10); size: root.fitted; tint: root.tint; }
     }
 }
 
-component TimerPage {
+// Speaker time as MM:SS in fixed-width cells.
+component MiniClock inherits HorizontalLayout {
+    in property <int> seconds;
+    in property <length> size;
+    in property <color> tint;
+    // Shows --:-- instead of the digits.
+    in property <bool> dashes;
+    private property <int> minutes: min(99, floor(root.seconds / 60));
+    private property <int> secs: mod(root.seconds, 60);
+    spacing: 0px;
+    ClockCell { glyph: root.dashes ? "-" : floor(root.minutes / 10); size: root.size; tint: root.tint; }
+    ClockCell { glyph: root.dashes ? "-" : mod(root.minutes, 10); size: root.size; tint: root.tint; }
+    ClockCell { glyph: ":"; colon: true; size: root.size; tint: root.tint; }
+    ClockCell { glyph: root.dashes ? "-" : floor(root.secs / 10); size: root.size; tint: root.tint; }
+    ClockCell { glyph: root.dashes ? "-" : mod(root.secs, 10); size: root.size; tint: root.tint; }
+}
+
+component StopPill inherits PillButton {
+    text: "Stop";
+    kind: PillKind.outline;
+    StopIcon {
+        width: root.compact ? 12px : 16px;
+        height: root.compact ? 12px : 16px;
+        tint: parent.foreground;
+    }
+}
+
+component StepButton inherits Rectangle {
+    in property <bool> plus;
+    in property <bool> enabled: true;
+    in property <bool> compact;
+    in property <string> label;
+    callback clicked();
+    forward-focus: focus;
+    width: root.compact ? 26px : 42px;
+    opacity: root.enabled ? 1 : 0.4;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if (root.enabled) { root.clicked(); } }
+
+    FadeFill {
+        width: parent.width;
+        height: parent.height;
+        target: touch.has-hover && root.enabled ? AppTheme.orange-soft : AppTheme.orange-soft.transparentize(1);
+    }
+    StepIcon {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: root.compact ? 14px : 24px;
+        height: root.compact ? 14px : 24px;
+        plus: root.plus;
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+    focus := FocusScope {
+        width: 0px;
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if (!root.enabled) { return reject; }
+            if (event.text == Key.Space || event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    if focus.has-focus : FocusRing { host-width: root.width; host-height: root.height; corner-radius: 4px; }
+}
+
+// Pill with a minus and a plus button around the children.
+component Stepper inherits Rectangle {
+    in property <bool> compact;
+    in property <bool> can-minus: true;
+    in property <bool> can-plus: true;
+    in property <string> minus-label;
+    in property <string> plus-label;
+    callback minus();
+    callback plus();
+    height: root.compact ? 30px : 46px;
+    border-radius: self.height / 2;
+    background: AppTheme.page;
+    clip: true;
+    preferred-width: row.preferred-width;
+    min-width: row.min-width;
+    horizontal-stretch: 0;
+
+    row := HorizontalLayout {
+        StepButton {
+            compact: root.compact;
+            enabled: root.can-minus;
+            label: root.minus-label;
+            clicked => { root.minus(); }
+        }
+        @children
+        StepButton {
+            plus: true;
+            compact: root.compact;
+            enabled: root.can-plus;
+            label: root.plus-label;
+            clicked => { root.plus(); }
+        }
+    }
+    Rectangle {
+        width: parent.width;
+        height: parent.height;
+        border-radius: self.height / 2;
+        border-width: 2px;
+        border-color: AppTheme.orange-tint;
+    }
+}
+
+// Round soft button; the icon is a child sized by `icon-size` and colored by `icon-color`.
+component SoftRoundButton inherits Rectangle {
+    in property <bool> compact;
+    in property <bool> enabled: true;
+    in property <string> label;
+    out property <length> icon-size: root.compact ? 14px : 22px;
+    out property <color> icon-color: touch.has-hover && root.enabled ? #FFFFFF : AppTheme.orange;
+    callback clicked();
+    forward-focus: focus;
+    width: root.compact ? 30px : 46px;
+    height: root.compact ? 30px : 46px;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+    opacity: root.enabled ? 1 : 0.4;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if (root.enabled) { root.clicked(); } }
+
+    FadeFill {
+        width: parent.width;
+        height: parent.height;
+        border-radius: self.height / 2;
+        target: touch.has-hover && root.enabled ? AppTheme.orange : AppTheme.orange-tint;
+    }
+    HorizontalLayout {
+        alignment: center;
+        VerticalLayout {
+            alignment: center;
+            @children
+        }
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+    focus := FocusScope {
+        width: 0px;
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if (event.text == Key.Space || event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    if focus.has-focus : FocusRing { host-width: root.width; host-height: root.height; corner-radius: root.height / 2; }
+}
+
+// Participant dropdown: a pill that opens a list in a popup.
+component TurnSelect inherits Rectangle {
+    in property <[string]> names;
+    in property <int> selected;
+    in property <bool> compact;
+    callback picked(int);
+    private property <length> item-height: root.compact ? 28px : 40px;
+    private property <int> highlight;
+    private property <string> current: root.selected >= 0 && root.selected < root.names.length ? root.names[root.selected] : "";
+    forward-focus: focus;
+    height: root.compact ? 30px : 46px;
+    min-width: root.compact ? 104px : 170px;
+    max-width: root.compact ? 124px : 200px;
+    preferred-width: root.compact ? 124px : 200px;
+    horizontal-stretch: 0;
+    border-radius: self.height / 2;
+    background: AppTheme.page;
+
+    accessible-role: combobox;
+    accessible-label: "Partecipante";
+    accessible-value: root.current;
+    accessible-action-default => { popup.show(); }
+
+    function open() {
+        root.highlight = root.selected;
+        popup.show();
+    }
+
+    Rectangle {
+        width: parent.width;
+        height: parent.height;
+        border-radius: self.height / 2;
+        border-width: 2px;
+        border-color: AppTheme.orange-tint;
+    }
+    Text {
+        x: root.compact ? 10px : 14px;
+        width: parent.width - (root.compact ? 34px : 52px);
+        height: parent.height;
+        text: root.current;
+        font-size: root.compact ? 12px : 16px;
+        font-weight: 600;
+        color: AppTheme.text;
+        vertical-alignment: center;
+        overflow: elide;
+        accessible-role: none;
+    }
+    ChevronIcon {
+        x: parent.width - (root.compact ? 8px : 14px) - self.width;
+        y: (parent.height - self.height) / 2;
+        width: root.compact ? 14px : 18px;
+        height: root.compact ? 14px : 18px;
+    }
+    touch := TouchArea { clicked => { root.open(); } }
+    focus := FocusScope {
+        width: 0px;
+        key-pressed(event) => {
+            if (event.text == Key.DownArrow) {
+                if (root.selected < root.names.length - 1) { root.picked(root.selected + 1); }
+                return accept;
+            }
+            if (event.text == Key.UpArrow) {
+                if (root.selected > 0) { root.picked(root.selected - 1); }
+                return accept;
+            }
+            if (event.text == Key.Space || event.text == Key.Return) {
+                root.open();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    if focus.has-focus : FocusRing { host-width: root.width; host-height: root.height; corner-radius: root.height / 2; }
+
+    popup := PopupWindow {
+        forward-focus: keys;
+        x: 0px;
+        y: root.height + 4px;
+        width: root.width;
+        height: min(root.names.length, 6) * root.item-height + 12px;
+        Rectangle {
+            background: AppTheme.page;
+            border-radius: AppTheme.radius-item;
+            border-width: 1px;
+            border-color: AppTheme.border-subtle;
+            drop-shadow-blur: 24px;
+            drop-shadow-offset-y: 8px;
+            drop-shadow-color: #1E1A2629;
+            keys := FocusScope {
+                key-pressed(event) => {
+                    if (event.text == Key.DownArrow) {
+                        root.highlight = min(root.highlight + 1, root.names.length - 1);
+                        return accept;
+                    }
+                    if (event.text == Key.UpArrow) {
+                        root.highlight = max(root.highlight - 1, 0);
+                        return accept;
+                    }
+                    if (event.text == Key.Return) {
+                        root.picked(root.highlight);
+                        popup.close();
+                        return accept;
+                    }
+                    if (event.text == Key.Escape) {
+                        popup.close();
+                        return accept;
+                    }
+                    return reject;
+                }
+                ListView {
+                    x: 6px;
+                    y: 6px;
+                    width: parent.width - 12px;
+                    height: parent.height - 12px;
+                    for name[i] in root.names : Rectangle {
+                        height: root.item-height;
+                        border-radius: root.compact ? 8px : AppTheme.radius-item;
+                        background: item-touch.has-hover || i == root.highlight ? AppTheme.surface : #FFFFFF00;
+                        accessible-role: list-item;
+                        accessible-label: name;
+                        Text {
+                            x: root.compact ? 8px : 12px;
+                            width: parent.width - 2 * self.x;
+                            height: parent.height;
+                            text: name;
+                            font-size: root.compact ? 12px : 15px;
+                            font-weight: i == root.selected ? 700 : 500;
+                            color: AppTheme.text;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            accessible-role: none;
+                        }
+                        item-touch := TouchArea { clicked => { root.picked(i); } }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Turn settings: who speaks, for how long, and the start button.
+component TurnBar inherits Rectangle {
+    in property <bool> compact;
+    in property <[string]> names;
+    in property <int> selected;
+    in property <int> minutes;
+    in property <int> max-minutes;
+    callback picked(int);
+    callback minutes-delta(int);
+    callback start();
+    background: AppTheme.orange-soft;
+    border-radius: root.compact ? 12px : AppTheme.radius-card;
+    preferred-width: row.preferred-width;
+    min-width: row.min-width;
+    horizontal-stretch: 0;
+
+    row := HorizontalLayout {
+        padding: root.compact ? 6px : 16px;
+        padding-left: root.compact ? 8px : 16px;
+        padding-right: root.compact ? 8px : 16px;
+        spacing: root.compact ? 6px : 12px;
+        alignment: center;
+        TurnSelect {
+            compact: root.compact;
+            names: root.names;
+            selected: root.selected;
+            picked(index) => { root.picked(index); }
+        }
+        Stepper {
+            compact: root.compact;
+            can-minus: root.minutes > 1;
+            can-plus: root.minutes < root.max-minutes;
+            minus-label: "Meno un minuto";
+            plus-label: "Più un minuto";
+            minus => { root.minutes-delta(-1); }
+            plus => { root.minutes-delta(1); }
+            Rectangle {
+                min-width: root.compact ? 34px : 46px;
+                HorizontalLayout {
+                    alignment: center;
+                    spacing: 2px;
+                    padding-left: 2px;
+                    padding-right: 2px;
+                    Text {
+                        text: root.minutes;
+                        font-size: root.compact ? 12px : 16px;
+                        font-weight: 800;
+                        color: AppTheme.text;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: "min";
+                        font-size: root.compact ? 10px : 13px;
+                        font-weight: 600;
+                        color: AppTheme.text-secondary;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+        SoftRoundButton {
+            compact: root.compact;
+            label: "Avvia il turno";
+            clicked => { root.start(); }
+            PlayIcon { width: parent.icon-size; height: parent.icon-size; tint: parent.icon-color; }
+        }
+    }
+}
+
+// Speaker bar: name, remaining time with one minute steps, and the buttons given as children.
+// While `paused` the name and time are dimmed and a badge sits on the top edge.
+component PersonBar inherits Rectangle {
+    in property <bool> compact;
+    in property <string> speaker;
+    in property <duration> left;
+    in property <bool> can-add;
+    in property <bool> can-remove;
+    in property <bool> dashes;
+    in property <bool> paused;
+    in property <duration> warn-under: 60s;
+    in property <length> name-max: 260px;
+    callback time-delta(int);
+    background: AppTheme.orange-soft;
+    border-radius: root.compact ? 12px : AppTheme.radius-card;
+    preferred-width: row.preferred-width;
+    min-width: row.min-width;
+    horizontal-stretch: 0;
+    private property <int> seconds: max(0, ceil(root.left / 1s));
+
+    row := HorizontalLayout {
+        padding-top: root.compact ? 6px : 12px;
+        padding-bottom: root.compact ? 6px : 12px;
+        padding-left: root.compact ? 8px : 16px;
+        padding-right: root.compact ? 8px : 16px;
+        spacing: root.compact ? 6px : 12px;
+        alignment: center;
+        Text {
+            width: min(self.preferred-width, root.name-max);
+            text: root.speaker;
+            font-size: root.compact ? 13px : 18px;
+            font-weight: 700;
+            color: AppTheme.text;
+            vertical-alignment: center;
+            overflow: elide;
+            opacity: root.paused ? 0.45 : 1;
+        }
+        Stepper {
+            compact: root.compact;
+            can-minus: root.can-remove;
+            can-plus: root.can-add;
+            minus-label: "Togli un minuto";
+            plus-label: "Aggiungi un minuto";
+            minus => { root.time-delta(-1); }
+            plus => { root.time-delta(1); }
+            Rectangle {
+                min-width: root.compact ? 50px : 66px;
+                opacity: root.paused ? 0.45 : 1;
+                VerticalLayout {
+                    alignment: center;
+                    HorizontalLayout {
+                        alignment: center;
+                        MiniClock {
+                            seconds: root.seconds;
+                            dashes: root.dashes;
+                            size: root.compact ? 13px : 18px;
+                            tint: root.left < root.warn-under && !root.dashes ? AppTheme.orange : AppTheme.text;
+                        }
+                    }
+                }
+            }
+        }
+        @children
+    }
+    if root.paused : Rectangle {
+        x: (root.width - self.width) / 2;
+        y: root.compact ? -8px : -12px;
+        width: badge-text.preferred-width + (root.compact ? 14px : 20px);
+        height: badge-text.preferred-height + (root.compact ? 4px : 8px);
+        border-radius: self.height / 2;
+        background: AppTheme.danger;
+        badge-text := Text {
+            text: "IN PAUSA";
+            font-size: root.compact ? 9px : 11px;
+            font-weight: 700;
+            letter-spacing: root.compact ? 0.72px : 0.88px;
+            color: AppTheme.on-danger;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            width: parent.width;
+            height: parent.height;
+        }
+    }
+}
+
+// Countdown screen with its three views: plain, turn settings and running turn.
+component TimerPage inherits Rectangle {
     in property <duration> timer-time;
     in property <bool> running-state;
-    in property <string> meeting-title;
     in property <string> timer-end;
-    in property <float> progress;
-    in property <bool> has-slots;
-    in property <bool> free-time;
-    in property <string> slot-name;
-    in property <int> slot-identity;
-    in property <duration> slot-time;
-    in property <string> next-slot-name;
-    in property <bool> slots-warning;
-    in property <bool> plan-loading;
-    in property <bool> plan-warning;
+    in property <bool> turn-available;
+    in property <TurnView> turn-view;
+    in property <[string]> turn-names;
+    in property <int> turn-selected;
+    in property <int> turn-minutes;
+    in property <int> turn-max-minutes;
+    in property <string> turn-speaker;
+    in property <duration> turn-left;
+    in property <bool> turn-can-add;
+    in property <string> daily-name;
+    in property <string> daily-short-name;
+    in property <duration> daily-left;
+    in property <bool> daily-paused;
+    in property <bool> daily-finished;
+    in property <bool> daily-can-add;
+    in property <bool> daily-can-remove;
+    in property <string> daily-remaining;
+    in property <[string]> daily-chips;
     callback stop(StopType);
     callback tick();
-    callback next-slot();
+    callback show-turns();
+    callback hide-turns();
+    callback select-turner(int);
+    callback adjust-turn-minutes(int);
+    callback start-turn();
+    callback adjust-turn-time(int);
+    callback end-turn();
+    callback toggle-daily-pause();
+    callback next-daily-speaker();
+    callback adjust-daily-time(int);
+    // Compact rules below about 560px of width, large rules above.
+    private property <bool> compact: root.width < 560px;
+    private property <length> side: root.compact ? 16px : 32px;
+    private property <bool> plain: root.turn-view == TurnView.Plain;
 
     Timer {
         interval: 0.25s;
         running: root.running-state;
         triggered => { if (root.running-state) { root.tick(); } }
     }
-    pure function duration-text(value: duration) -> string {
-        let total = max(0, ceil(value / 1s));
-        let hours = floor(total / 3600);
-        let minutes = mod(floor(total / 60), 60);
-        let seconds = mod(total, 60);
-        return (hours > 0 ? (hours < 10 ? "0" : "") + hours + ":" : "")
-            + (minutes < 10 ? "0" : "") + minutes + ":"
-            + (seconds < 10 ? "0" : "") + seconds;
-    }
 
-    if root.meeting-title == "" : VerticalLayout {
-        padding: 32px;
-        spacing: 40px;
+    VerticalLayout {
+        padding-left: root.side;
+        padding-right: root.side;
+        padding-top: root.compact ? 12px : 32px;
+        padding-bottom: root.compact ? 12px : 40px;
         alignment: center;
-        AppText {
-            text: root.duration-text(root.timer-time);
-            color: AppTheme.accent;
-            font-size: min(144px, root.width / (root.timer-time >= 3600s ? 7.5 : 5.4));
-            font-weight: 700;
+        spacing: root.plain ? 0px : (root.compact ? 8px : 24px);
+        ClockText {
+            seconds: max(0, ceil(root.timer-time / 1s));
+            size: root.compact && !root.plain ? 54px : (root.compact ? 84px : clamp(72px, root.width * 0.16, 160px));
+            avail: root.width - 2 * root.side;
+            tint: root.timer-time < 300s ? AppTheme.orange : AppTheme.text-brand;
+        }
+        if root.plain : Rectangle { height: root.compact ? 4px : 12px; }
+        if root.plain : Text {
+            text: "Fine alle " + root.timer-end;
+            font-size: root.compact ? 13px : 19px;
+            color: AppTheme.text-secondary;
             horizontal-alignment: center;
         }
+        if root.plain : Rectangle {
+            min-height: root.compact ? 24px : 16px;
+            max-height: root.compact ? 32px : 112px;
+            vertical-stretch: 1;
+        }
+        if root.turn-view == TurnView.Settings : HorizontalLayout {
+            alignment: center;
+            TurnBar {
+                compact: root.compact;
+                names: root.turn-names;
+                selected: root.turn-selected;
+                minutes: root.turn-minutes;
+                max-minutes: root.turn-max-minutes;
+                picked(index) => { root.select-turner(index); }
+                minutes-delta(delta) => { root.adjust-turn-minutes(delta); }
+                start => { root.start-turn(); }
+            }
+        }
+        if root.turn-view == TurnView.Running : HorizontalLayout {
+            alignment: center;
+            PersonBar {
+                compact: root.compact;
+                speaker: root.turn-speaker;
+                left: root.turn-left;
+                can-add: root.turn-can-add;
+                can-remove: root.turn-left > 0s;
+                name-max: root.compact ? 92px : 260px;
+                time-delta(delta) => { root.adjust-turn-time(delta); }
+                SoftRoundButton {
+                    compact: root.compact;
+                    label: "Fine turno";
+                    clicked => { root.end-turn(); }
+                    StopIcon { width: parent.icon-size; height: parent.icon-size; tint: parent.icon-color; }
+                }
+            }
+        }
+        if root.turn-view == TurnView.Daily : HorizontalLayout {
+            alignment: center;
+            VerticalLayout {
+                spacing: root.compact ? 6px : 12px;
+                horizontal-stretch: 0;
+                PersonBar {
+                    compact: root.compact;
+                    speaker: root.compact ? root.daily-short-name : root.daily-name;
+                    left: root.daily-left;
+                    can-add: root.daily-can-add;
+                    can-remove: root.daily-can-remove;
+                    dashes: root.daily-finished;
+                    paused: root.daily-paused;
+                    warn-under: 30s;
+                    name-max: root.compact ? 84px : 260px;
+                    time-delta(delta) => { root.adjust-daily-time(delta); }
+                    SoftRoundButton {
+                        compact: root.compact;
+                        enabled: !root.daily-finished;
+                        label: root.daily-paused ? "Riprendi" : "Pausa";
+                        clicked => { root.toggle-daily-pause(); }
+                        if root.daily-paused : PlayIcon { width: parent.icon-size; height: parent.icon-size; tint: parent.icon-color; }
+                        if !root.daily-paused : PauseIcon { width: parent.icon-size; height: parent.icon-size; tint: parent.icon-color; }
+                    }
+                    SoftRoundButton {
+                        compact: root.compact;
+                        enabled: !root.daily-finished;
+                        label: "Passa la parola";
+                        clicked => { root.next-daily-speaker(); }
+                        SkipIcon { width: parent.icon-size; height: parent.icon-size; tint: parent.icon-color; }
+                    }
+                }
+                if !root.compact : Rectangle {
+                    height: 28px;
+                    clip: true;
+                    min-width: 0px;
+                    preferred-width: 0px;
+                    horizontal-stretch: 1;
+                    HorizontalLayout {
+                        alignment: center;
+                        spacing: 6px;
+                        for chip in root.daily-chips : Rectangle {
+                            width: chip-text.preferred-width + 22px;
+                            height: 26px;
+                            border-radius: 13px;
+                            background: AppTheme.page;
+                            border-width: 1px;
+                            border-color: AppTheme.border-subtle;
+                            chip-text := Text {
+                                x: 11px;
+                                width: parent.width - 22px;
+                                height: parent.height;
+                                text: chip;
+                                font-size: 12px;
+                                font-weight: 500;
+                                color: AppTheme.text-secondary;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                        }
+                    }
+                }
+                if root.compact && root.daily-remaining != "" : Text {
+                    text: root.daily-remaining;
+                    font-size: 12px;
+                    color: AppTheme.text-secondary;
+                    horizontal-alignment: center;
+                }
+            }
+        }
+        if root.turn-view == TurnView.Daily && !root.compact : Rectangle { height: 16px; }
         HorizontalLayout {
             alignment: center;
-            ThemedButton {
-                text: "Stop";
-                width: AppTheme.dark ? 200px : 112px;
+            spacing: 12px;
+            if root.plain && root.turn-available : PillButton {
+                text: root.compact ? "Turni" : "Turni di parola";
+                kind: PillKind.outline;
+                compact: root.compact;
+                clicked => { root.show-turns(); }
+                PeopleIcon {
+                    width: root.compact ? 12px : 16px;
+                    height: root.compact ? 12px : 16px;
+                    tint: parent.foreground;
+                }
+            }
+            if root.turn-view == TurnView.Settings : PillButton {
+                text: "Nascondi";
+                kind: PillKind.outline;
+                compact: root.compact;
+                clicked => { root.hide-turns(); }
+                EyeOffIcon {
+                    width: root.compact ? 12px : 16px;
+                    height: root.compact ? 12px : 16px;
+                    tint: parent.foreground;
+                }
+            }
+            StopPill {
+                compact: root.compact;
                 clicked => { root.stop(StopType.UserStopped); }
             }
         }
     }
+}
 
-    if root.meeting-title != "" : VerticalLayout {
-        padding: 32px;
-        spacing: root.plan-loading || root.plan-warning || root.slots-warning ? 8px : 16px;
+component ConfettiPiece inherits Rectangle {
+    in property <int> index;
+    in property <duration> elapsed;
+    in property <duration> delay;
+    in property <length> area-width;
+    in property <length> area-height;
+    in property <color> tint;
+    pure function rnd(k: int) -> float {
+        let v = sin((root.index * 12.9898 + k * 78.233) * 1rad) * 43758.5453;
+        return v - floor(v);
+    }
+    // Frames at 60 per second since the piece was thrown.
+    private property <float> n: max(0, (root.elapsed - root.delay) / 1ms * 0.06);
+    private property <float> vx: (rnd(1) - 0.5) * 14;
+    private property <float> vy: -rnd(2) * 13 - 4;
+    private property <length> px: root.area-width / 2 + (rnd(3) - 0.5) * root.area-width * 0.3
+        + root.vx * (1 - pow(0.985, root.n)) / 0.015 * 1px;
+    private property <length> py: root.area-height * 0.45 + (root.vy * root.n + 0.175 * root.n * (root.n + 1)) * 1px;
+    private property <float> fade: clamp(1 - (root.py - root.area-height * 0.9) / (root.area-height * 0.1 + 40px), 0, 1);
+    x: root.px;
+    y: root.py;
+    width: (6 + rnd(4) * 6) * 1px;
+    height: (8 + rnd(5) * 8) * 1px;
+    background: root.tint;
+    opacity: root.fade;
+    visible: root.elapsed >= root.delay && root.fade > 0;
+    transform-rotation: (rnd(6) * 3.14159 + (rnd(7) - 0.5) * 0.3 * root.n) * 57.2958deg;
+}
+
+// "Meeting terminato!" with rotating captions and confetti.
+component FinishedPage inherits Rectangle {
+    in property <int> seed;
+    callback home();
+    private property <bool> compact: root.width < 560px;
+    private property <length> side: root.compact ? 16px : 32px;
+    private property <[string]> captions: [
+        "Finalmente.",
+        "Poteva essere una mail. Ma ce l’abbiamo fatta.",
+        "Nessun partecipante è stato maltrattato.",
+        "GG. Si va a pranzo?",
+        "Il countdown ha vinto, ancora una volta.",
+        "Ultima slide? Non c’era nessuna slide.",
+        "Mission accomplished (quella di finire in orario).",
+        "Stand-up seduto, ma in orario.",
+        "Le colonne hanno retto.",
+    ];
+    private property <int> current;
+    private property <int> previous;
+    private property <duration> started;
+    private property <bool> settled;
+    private property <duration> elapsed: root.settled ? 12s : animation-tick() - root.started;
+    private property <float> pop: clamp(intro.value * 1100 / 700, 0, 1);
+    private property <float> rise: clamp((intro.value * 1100 - 500) / 600, 0, 1);
+    private property <float> swap-in: clamp((swap.value - 0.43) / 0.57, 0, 1);
+    private property <float> swap-out: clamp(swap.value / 0.43, 0, 1);
+
+    intro := MotionProgress { duration: 1100ms; }
+    swap := MotionProgress { duration: 700ms; }
+
+    init => {
+        root.started = animation-tick();
+        root.current = mod(root.seed, root.captions.length);
+        root.previous = root.current;
+        intro.restart();
+    }
+    Timer {
+        interval: 2800ms;
+        running: true;
+        triggered => {
+            root.previous = root.current;
+            root.current = mod(root.current + 1, root.captions.length);
+            swap.restart();
+        }
+    }
+    Timer {
+        interval: 12s;
+        running: !root.settled;
+        triggered => { root.settled = true; }
+    }
+
+    if !AppMotion.reduced : Rectangle {
+        width: parent.width;
+        height: parent.height;
+        for i in 140 : ConfettiPiece {
+            index: i;
+            elapsed: root.elapsed;
+            delay: 0ms;
+            area-width: root.width;
+            area-height: root.height;
+            tint: i < 0 ? #000000 : (mod(i, 5) == 0 ? #6B2FBF : (mod(i, 5) == 1 ? #E07B00 : (mod(i, 5) == 2 ? #F6C453 : (mod(i, 5) == 3 ? #C9B3F0 : (AppTheme.dark ? #F3EFF9 : #1E1A26)))));
+        }
+        for i in 40 : ConfettiPiece {
+            index: 200 + i;
+            elapsed: root.elapsed;
+            delay: 1800ms + i * 155ms;
+            area-width: root.width;
+            area-height: root.height;
+            tint: mod(i, 5) == 0 ? #6B2FBF : (mod(i, 5) == 1 ? #E07B00 : (mod(i, 5) == 2 ? #F6C453 : (mod(i, 5) == 3 ? #C9B3F0 : (AppTheme.dark ? #F3EFF9 : #1E1A26))));
+        }
+    }
+
+    VerticalLayout {
+        padding-left: root.side;
+        padding-right: root.side;
+        padding-top: root.compact ? 12px : 32px;
+        padding-bottom: root.compact ? 12px : 40px;
         alignment: center;
-        AppText {
-            text: root.meeting-title;
-            font-size: 20px;
-            font-weight: 700;
-            horizontal-alignment: center;
-            overflow: elide;
-        }
-        MutedText { text: "Termina alle " + root.timer-end; horizontal-alignment: center; }
-        AppText {
-            text: root.duration-text(root.timer-time);
-            color: AppTheme.accent;
-            font-size: min(110px, root.width / (root.timer-time >= 3600s ? 7.5 : 5.4));
-            font-weight: 700;
-            horizontal-alignment: center;
-        }
-        HorizontalLayout {
-            alignment: center;
-            Rectangle {
-                width: min(680px, root.width - 64px);
-                height: 6px;
-                border-radius: 3px;
-                background: AppTheme.line;
-                progress-fill := Rectangle {
-                    x: 0px;
-                    y: 0px;
-                    width: parent.width * clamp(root.progress, 0, 1);
-                    height: parent.height;
-                    border-radius: 3px;
-                    background: AppTheme.accent;
-                }
-            }
-        }
-        if root.has-slots : HorizontalLayout {
-            alignment: center;
-            Rectangle {
-                width: min(680px, root.width - 64px);
-                height: 88px;
-                border-radius: 12px;
-                background: AppTheme.tint;
-                HorizontalLayout {
-                    padding: 16px;
-                    spacing: 32px;
-                    VerticalLayout {
-                        horizontal-stretch: 1;
-                        spacing: 5px;
-                        if !root.free-time : AppText { text: "STA PARLANDO"; color: AppTheme.accent; font-size: 11px; }
-                        SpeakerName { name: root.slot-name; identity: root.slot-identity; }
-                    }
-                    if !root.free-time : AppText {
-                        text: root.duration-text(root.slot-time);
-                        font-size: 24px;
-                        font-weight: 700;
-                        vertical-alignment: center;
-                    }
-                }
-            }
-        }
-        if root.has-slots && root.next-slot-name != "" : MutedText {
-            text: "Poi: " + root.next-slot-name;
-            horizontal-alignment: center;
-            overflow: elide;
-        }
-        if root.plan-loading : MutedText { text: "Caricamento slot…"; horizontal-alignment: center; }
-        if root.plan-warning || root.slots-warning : AppText {
-            text: (root.plan-warning ? "Preferenza non caricata: slot uguali" : "")
-                + (root.plan-warning && root.slots-warning ? " · " : "")
-                + (root.slots-warning ? "Lista partecipanti incompleta" : "");
-            font-size: 12px;
-            color: AppTheme.accent;
+        spacing: root.compact ? 8px : 24px;
+        Text {
+            text: "Meeting terminato!";
+            font-size: root.compact ? 30px : clamp(34px, root.width * 0.06, 56px);
+            font-weight: 800;
+            letter-spacing: -0.03 * self.font-size;
+            color: AppTheme.text-brand;
             horizontal-alignment: center;
             wrap: word-wrap;
+            opacity: root.pop < 0.6 ? root.pop / 0.6 : 1;
+            transform-scale: root.pop < 0.6 ? 0.4 + 0.68 * (root.pop / 0.6) : 1.08 - 0.08 * ((root.pop - 0.6) / 0.4);
+            transform-rotation: (root.pop < 0.6 ? -6 + 8 * (root.pop / 0.6) : 2 - 2 * ((root.pop - 0.6) / 0.4)) * 1deg;
         }
         HorizontalLayout {
             alignment: center;
-            spacing: 20px;
-            ThemedButton { text: "Stop"; width: 200px; clicked => { root.stop(StopType.UserStopped); } }
-            if root.has-slots : ThemedButton {
-                text: "Avanti →   N";
-                width: 200px;
-                primary: true;
-                clicked => { root.next-slot(); }
+            Rectangle {
+                width: min(340px, root.width - 2 * root.side);
+                height: root.compact ? 34px : 54px;
+                Text {
+                    width: parent.width;
+                    height: parent.height;
+                    text: root.captions[swap.active && swap.value < 0.43 ? root.previous : root.current];
+                    font-size: root.compact ? 12px : 18px;
+                    font-weight: 600;
+                    color: AppTheme.text-secondary;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    wrap: word-wrap;
+                    opacity: swap.active ? (swap.value < 0.43 ? 1 - root.swap-out : root.swap-in) : 1;
+                    y: swap.active ? (swap.value < 0.43 ? -8px * root.swap-out : 8px * (1 - root.swap-in)) : 0px;
+                }
+            }
+        }
+        Rectangle { height: 16px; }
+        HorizontalLayout {
+            alignment: center;
+            Rectangle {
+                width: home-button.preferred-width;
+                height: home-button.preferred-height;
+                home-button := PillButton {
+                    width: parent.width;
+                    height: parent.height;
+                    y: (1 - root.rise) * 12px;
+                    opacity: root.rise;
+                    text: "Torna alla home";
+                    kind: PillKind.outline;
+                    compact: root.compact;
+                    clicked => { root.home(); }
+                    HomeIcon {
+                        width: root.compact ? 12px : 16px;
+                        height: root.compact ? 12px : 16px;
+                        tint: parent.foreground;
+                    }
+                }
             }
         }
     }
 }
+
 export component MainWindow inherits Window {
     title: "Schisaciaccole";
-    background: AppTheme.panel;
+    background: AppTheme.page;
     icon: @image-url("../assets/icon_256.png");
-    preferred-width: 816px;
-    min-width: 720px;
-    preferred-height: 516px;
-    min-height: 500px;
-    default-font-family: "Plus Jakarta Sans";
+    preferred-width: 880px;
+    min-width: root.timer-mode ? 360px : 800px;
+    preferred-height: 660px;
+    min-height: root.timer-mode ? 240px : 600px;
+    default-font-family: "Manrope";
     forward-focus: scope;
 
-    property <bool> on-top: false;
-    // Single-letter shortcuts are off on the editor page, where names are typed.
-    property <bool> letter-keys-enabled: page != Page.EditorPage;
-
+    in-out property <bool> on-top: false;
     always-on-top: on-top;
+    // True while a countdown screen shows; allows the small window.
+    in property <bool> timer-mode: false;
 
     in-out property <bool> reduce-motion <=> AppMotion.reduced;
     page-fade := MotionProgress { duration: 180ms; }
-    finish-pulse := MotionProgress { duration: 600ms; }
 
     in property <string> current-time;
-    in property <string> meeting-title;
     in property <string> timer-end;
-    in property <float> timer-progress;
-    in property <int> slot-identity: -1;
+    in property <int> finish-seed;
+    in property <bool> turn-available;
+    in property <TurnView> turn-view;
+    in property <[string]> turn-names;
+    in property <int> turn-selected;
+    in property <int> turn-minutes;
+    in property <int> turn-max-minutes;
+    in property <string> turn-speaker;
+    in property <duration> turn-left;
+    in property <bool> turn-can-add;
+    in property <string> daily-name;
+    in property <string> daily-short-name;
+    in property <duration> daily-left;
+    in property <bool> daily-paused;
+    in property <bool> daily-finished;
+    in property <bool> daily-can-add;
+    in property <bool> daily-can-remove;
+    in property <string> daily-remaining;
+    in property <[string]> daily-chips;
 
     in property     <duration> timer-time: 3s;
     in property     <bool>     running-state: false;
-    in property     <Page>     page: SelectionPage; 
+    in property     <Page>     page: Page.ManualPage;
     in property     <[TimeOption]> options;
+    in property     <int>      selected-slot: -1;
     in property     <bool>     is-macos;
     in property     <bool>     signed-in;
     in property     <string>   account-name;
@@ -589,30 +1552,12 @@ export component MainWindow inherits Window {
     in property     <[MeetingRow]> meetings;
     in property     <bool>     meetings-loading;
     in property     <string>   meetings-error;
-    in property     <bool>     has-slots;
-    in property     <bool>     free-time;
-    in property     <string>   slot-name;
-    in property     <duration> slot-time;
-    in property     <string>   next-slot-name;
-    in property     <bool>     slots-warning;
-    in property     <bool>     plan-loading;
-    in property     <bool>     plan-warning;
-    in property     <[EditorRow]> editor-rows;
-    in property     <string>   editor-title;
-    in property     <string>   editor-time-range;
-    in property     <string>   editor-duration;
-    in property     <bool>     editor-attendees-warning;
-    in property     <bool>     editor-loading;
-    in property     <bool>     editor-busy;
-    in property     <string>   editor-notice;
-    in property     <string>   editor-unassigned;
-    in property     <bool>     editor-over;
-    in property     <bool>     editor-has-template;
 
-    callback select-time(int);
+    callback select-slot(int);
+    callback start-selected();
     callback compute-options();
     callback tick();
-    callback set-selection-page();
+    callback set-manual-page();
     callback quit();
     callback fullscreen(bool);
     callback help();
@@ -625,29 +1570,19 @@ export component MainWindow inherits Window {
     callback set-meetings-page();
     callback close-finished();
     callback logout();
-    callback next-slot();
-    callback open-editor(int);
-    callback editor-set-label(int, string);
-    callback editor-set-minutes(int, int);
-    callback editor-set-included(int, bool);
-    callback editor-move-up(int);
-    callback editor-move-down(int);
-    callback editor-remove-row(int);
-    callback editor-add-row();
-    callback editor-reset();
-    callback editor-save();
-    callback editor-delete();
-    callback editor-start();
-    callback editor-back();
+    callback show-turns();
+    callback hide-turns();
+    callback select-turner(int);
+    callback adjust-turn-minutes(int);
+    callback start-turn();
+    callback adjust-turn-time(int);
+    callback end-turn();
+    callback set-daily(int, bool);
+    callback toggle-daily-pause();
+    callback next-daily-speaker();
+    callback adjust-daily-time(int);
 
-    // Leaving the editor drops its focused text field: give the focus back to the shortcuts.
-    changed page => {
-        page-fade.restart();
-        if (page == Page.TimerFinished) { finish-pulse.restart(); }
-        if (page != Page.EditorPage) {
-            scope.focus();
-        }
-    }
+    changed page => { page-fade.restart(); }
 
     if is-macos: MenuBar {
 	Menu {
@@ -670,13 +1605,11 @@ export component MainWindow inherits Window {
     scope := FocusScope {
         KeyBinding {
             keys: @keys(Q);
-            enabled: root.letter-keys-enabled;
             activated => { quit(); }
         }
 
         KeyBinding {
             keys: @keys(M);
-            enabled: root.letter-keys-enabled;
             activated => { fullscreen(false); }
         }
 
@@ -687,20 +1620,12 @@ export component MainWindow inherits Window {
 
         KeyBinding {
             keys: @keys(T);
-            enabled: root.letter-keys-enabled;
             activated => { on-top = !on-top; }
         }
 
         KeyBinding {
             keys: @keys(H);
-            enabled: root.letter-keys-enabled;
             activated => { help(); }
-        }
-
-        KeyBinding {
-            keys: @keys(N);
-            enabled: root.letter-keys-enabled;
-            activated => { next-slot(); }
         }
     }
 
@@ -708,7 +1633,7 @@ export component MainWindow inherits Window {
     compute-options-timer := Timer {
 	interval  : 3s;
 	running: !running-state;
-	
+
 	triggered() => {
 	    // when the main timer is stopped keep updating the selection
 	    compute-options();
@@ -720,126 +1645,87 @@ export component MainWindow inherits Window {
         width: root.width;
         height: root.height;
         opacity: page-fade.value;
-        if page == Page.SelectionPage : VerticalLayout {
-            padding: 32px;
-            spacing: 24px;
+        if page == Page.ManualPage || page == Page.MeetingsPage : VerticalLayout {
             Navigation {
+                meetings-page: root.page == Page.MeetingsPage;
                 signed-in: root.signed-in;
-                free-slots => { root.set-selection-page(); }
-                meetings => { root.set-meetings-page(); }
+                manual => { root.set-manual-page(); }
+                meetings => {
+                    if (root.page == Page.MeetingsPage) {
+                        root.refresh-meetings();
+                    } else {
+                        root.set-meetings-page();
+                    }
+                }
                 logout => { root.logout(); }
                 help => { root.help(); }
             }
-            Heading { text: "Quando finisce la cerimonia?"; }
-            MutedText {
-                text: "Sono le " + root.current-time + ". Scegli l’orario di fine.";
-                font-size: 16px;
+            if page == Page.ManualPage : ManualPage {
+                current-time: root.current-time;
+                options: root.options;
+                selected-slot: root.selected-slot;
+                notice: root.notice;
+                select-slot(index) => { root.select-slot(index); }
+                start-timer => { root.start-selected(); }
             }
-            GridLayout {
-                height: 204px;
-                spacing-horizontal: 16px;
-                spacing-vertical: 24px;
-                for option[index] in root.options : ThemedButton {
-                    row: floor(index / 4);
-                    col: mod(index, 4);
-                    height: 90px;
-                    horizontal-stretch: 1;
-                    text: option.time;
-                    detail: "tra " + option.minutes + " min";
-                    font-size: 24px;
-                    primary: index == 0;
-                    base-background: index == 0 ? AppTheme.accent : AppTheme.background;
-                    hover-background: index == 0 ? AppTheme.accent.darker(0.08) : AppTheme.tint;
-                    border-width: self.has-focus ? 2px : 0px;
-                    border-radius: 10px;
-                    clicked => { root.select-time(index); }
-                }
+            if page == Page.MeetingsPage : MeetingsPage {
+                account-name: root.account-name;
+                meetings: root.meetings;
+                loading: root.meetings-loading;
+                error: root.meetings-error;
+                select(index) => { root.select-meeting(index); }
+                set-daily(index, on) => { root.set-daily(index, on); }
+                refresh => { root.refresh-meetings(); }
             }
-            if root.notice != "" : AppText {
-                text: root.notice;
-                color: AppTheme.accent;
-                font-size: 12px;
-                wrap: word-wrap;
-            }
-            Rectangle { vertical-stretch: 1; }
-        }
-
-        if page == Page.MeetingsPage : MeetingsPage {
-            width: root.width;
-            height: root.height;
-            account-name: root.account-name;
-            meetings: root.meetings;
-            loading: root.meetings-loading;
-            error: root.meetings-error;
-            select(index) => { root.select-meeting(index); }
-            open-editor(index) => { root.open-editor(index); }
-            refresh => { root.refresh-meetings(); }
-            logout => { root.logout(); }
-            free-slots => { root.set-selection-page(); }
-            help => { root.help(); }
-        }
-        if page == Page.EditorPage : EditorPage {
-            width: root.width;
-            height: root.height;
-            title: root.editor-title;
-            time-range: root.editor-time-range;
-            duration: root.editor-duration;
-            attendees-warning: root.editor-attendees-warning;
-            loading: root.editor-loading;
-            busy: root.editor-busy;
-            notice: root.editor-notice;
-            unassigned: root.editor-unassigned;
-            over: root.editor-over;
-            has-template: root.editor-has-template;
-            rows: root.editor-rows;
-            set-label(index, text) => { root.editor-set-label(index, text); }
-            set-minutes(index, value) => { root.editor-set-minutes(index, value); }
-            set-included(index, included) => { root.editor-set-included(index, included); }
-            move-up(index) => { root.editor-move-up(index); }
-            move-down(index) => { root.editor-move-down(index); }
-            remove-row(index) => { root.editor-remove-row(index); }
-            add-row => { root.editor-add-row(); }
-            reset => { root.editor-reset(); }
-            save => { root.editor-save(); }
-            delete-template => { root.editor-delete(); }
-            start-meeting => { root.editor-start(); }
-            back => { root.editor-back(); }
         }
         if page == Page.LoadingPage : VerticalLayout {
             padding: 32px;
             alignment: center;
             spacing: 16px;
-            Heading { text: "Connessione…"; horizontal-alignment: center; }
-            MutedText { text: "Prepariamo i tuoi meeting."; horizontal-alignment: center; }
+            HorizontalLayout {
+                alignment: center;
+                BrandMark { width: 64px; height: 64px; }
+            }
+            PageTitle { text: "Connessione…"; horizontal-alignment: center; }
+            PageSub { text: "Prepariamo i tuoi meeting."; horizontal-alignment: center; }
         }
         if page == Page.LoginPage : VerticalLayout {
             padding: 48px;
-            spacing: 24px;
+            spacing: 20px;
             alignment: center;
-            Heading { text: "Accedi con Google"; horizontal-alignment: center; color: AppTheme.accent; }
-            MutedText {
+            HorizontalLayout {
+                alignment: center;
+                BrandMark { width: 64px; height: 64px; }
+            }
+            PageTitle { text: "Accedi con Google"; horizontal-alignment: center; }
+            PageSub {
                 text: "I tuoi meeting di oggi, con un tempo per ogni voce.";
-                font-size: 16px;
                 horizontal-alignment: center;
                 wrap: word-wrap;
             }
             HorizontalLayout {
+                padding-top: 8px;
                 alignment: center;
                 spacing: 16px;
-                if !root.login-waiting : ThemedButton {
+                if !root.login-waiting : PillButton {
                     text: "Accedi con Google";
-                    primary: true;
                     clicked => { root.login(); }
                 }
-                if !root.login-waiting : ThemedButton {
+                if !root.login-waiting : PillButton {
                     text: "Usa senza accesso";
+                    kind: PillKind.ghost;
                     clicked => { root.skip-login(); }
                 }
-                if root.login-waiting : ThemedButton { text: "Annulla"; clicked => { root.cancel-login(); } }
+                if root.login-waiting : PillButton {
+                    text: "Annulla";
+                    kind: PillKind.ghost;
+                    clicked => { root.cancel-login(); }
+                }
             }
             AppText {
                 text: root.login-status;
-                color: AppTheme.accent;
+                color: AppTheme.notice;
+                font-size: 15px;
                 horizontal-alignment: center;
                 wrap: word-wrap;
             }
@@ -849,37 +1735,43 @@ export component MainWindow inherits Window {
             height: root.height;
             timer-time: root.timer-time;
             running-state: root.running-state;
-            meeting-title: root.meeting-title;
             timer-end: root.timer-end;
-            progress: root.timer-progress;
-            has-slots: root.has-slots;
-            free-time: root.free-time;
-            slot-name: root.slot-name;
-            slot-identity: root.slot-identity;
-            slot-time: root.slot-time;
-            next-slot-name: root.next-slot-name;
-            slots-warning: root.slots-warning;
-            plan-loading: root.plan-loading;
-            plan-warning: root.plan-warning;
-            next-slot => { root.next-slot(); }
+            turn-available: root.turn-available;
+            turn-view: root.turn-view;
+            turn-names: root.turn-names;
+            turn-selected: root.turn-selected;
+            turn-minutes: root.turn-minutes;
+            turn-max-minutes: root.turn-max-minutes;
+            turn-speaker: root.turn-speaker;
+            turn-left: root.turn-left;
+            turn-can-add: root.turn-can-add;
+            show-turns => { root.show-turns(); }
+            hide-turns => { root.hide-turns(); }
+            select-turner(index) => { root.select-turner(index); }
+            adjust-turn-minutes(delta) => { root.adjust-turn-minutes(delta); }
+            start-turn => { root.start-turn(); }
+            adjust-turn-time(delta) => { root.adjust-turn-time(delta); }
+            end-turn => { root.end-turn(); }
+            daily-name: root.daily-name;
+            daily-short-name: root.daily-short-name;
+            daily-left: root.daily-left;
+            daily-paused: root.daily-paused;
+            daily-finished: root.daily-finished;
+            daily-can-add: root.daily-can-add;
+            daily-can-remove: root.daily-can-remove;
+            daily-remaining: root.daily-remaining;
+            daily-chips: root.daily-chips;
+            toggle-daily-pause => { root.toggle-daily-pause(); }
+            next-daily-speaker => { root.next-daily-speaker(); }
+            adjust-daily-time(delta) => { root.adjust-daily-time(delta); }
             stop(stop-type) => { root.stop(stop-type); }
             tick => { root.tick(); }
         }
-        if page == Page.TimerFinished : VerticalLayout {
-            padding: 32px;
-            spacing: 24px;
-            alignment: center;
-            finish-message := Heading {
-                opacity: finish-pulse.active ? 1 - 0.08 * sin(180deg * finish-pulse.value) : 1;
-                text: "Congrats!\nScrum ceremony finished";
-                color: AppTheme.accent;
-                horizontal-alignment: center;
-            }
-            AppText { text: "Now get the fuck outta here"; font-size: 24px; horizontal-alignment: center; }
-            HorizontalLayout {
-                alignment: center;
-                ThemedButton { text: root.signed-in ? "Torna ai meeting" : "Torna agli orari"; clicked => { root.close-finished(); } }
-            }
+        if page == Page.TimerFinished : FinishedPage {
+            width: root.width;
+            height: root.height;
+            seed: root.finish-seed;
+            home => { root.close-finished(); }
         }
     }
     if on-top : Rectangle {
@@ -887,36 +1779,50 @@ export component MainWindow inherits Window {
         height: 8px;
         x: root.width - 12px;
         y: 4px;
-        background: AppTheme.accent;
+        background: AppTheme.orange;
         border-radius: 4px;
+    }
+}
+
+component KeyChip inherits Rectangle {
+    in property <string> key;
+    width: 64px;
+    height: 36px;
+    border-radius: AppTheme.radius-item;
+    background: AppTheme.surface;
+    Text {
+        text: root.key;
+        color: AppTheme.text-brand;
+        font-size: 16px;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
     }
 }
 
 export component Help inherits Window {
     title: "Schisaciaccole · Scorciatoie";
-    background: AppTheme.panel;
+    background: AppTheme.page;
     preferred-width: 640px;
-    preferred-height: 390px;
+    preferred-height: 440px;
     min-width: 600px;
-    min-height: 380px;
+    min-height: 420px;
     always-on-top: true;
-    default-font-family: "Plus Jakarta Sans";
+    default-font-family: "Manrope";
 
     VerticalLayout {
         padding: 32px;
-        spacing: 16px;
-        Heading { text: "Scorciatoie da tastiera"; }
+        spacing: 20px;
+        PageTitle { text: "Scorciatoie da tastiera"; font-size: 28px; letter-spacing: -0.56px; }
         GridLayout {
             spacing-horizontal: 24px;
             spacing-vertical: 12px;
-            Row { AppText { text: "Q"; color: AppTheme.accent; } AppText { text: "Esci dall’app"; } }
-            Row { AppText { text: "M"; color: AppTheme.accent; } AppText { text: "Attiva o disattiva lo schermo intero"; } }
-            Row { AppText { text: "Esc"; color: AppTheme.accent; } AppText { text: "Esci dallo schermo intero"; } }
-            Row { AppText { text: "T"; color: AppTheme.accent; } AppText { text: "Mantieni la finestra in primo piano"; } }
-            Row { AppText { text: "H"; color: AppTheme.accent; } AppText { text: "Mostra le scorciatoie"; } }
-            Row { AppText { text: "N"; color: AppTheme.accent; } AppText { text: "Passa al turno successivo"; } }
+            Row { KeyChip { key: "Q"; } AppText { text: "Esci dall’app"; font-size: 16px; vertical-alignment: center; } }
+            Row { KeyChip { key: "M"; } AppText { text: "Attiva o disattiva lo schermo intero"; font-size: 16px; vertical-alignment: center; } }
+            Row { KeyChip { key: "Esc"; } AppText { text: "Esci dallo schermo intero"; font-size: 16px; vertical-alignment: center; } }
+            Row { KeyChip { key: "T"; } AppText { text: "Mantieni la finestra in primo piano"; font-size: 16px; vertical-alignment: center; } }
+            Row { KeyChip { key: "H"; } AppText { text: "Mostra le scorciatoie"; font-size: 16px; vertical-alignment: center; } }
         }
-        MutedText { text: "Le scorciatoie con lettere sono sospese nell’editor."; font-size: 12px; }
         AboutSlint { height: 50px; }
     }
 }
