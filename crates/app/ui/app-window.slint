@@ -1,5 +1,5 @@
 import { ListView, AboutSlint } from "std-widgets.slint";
-import { AppTheme, AppText, ThemedButton, CompactButton, AppMotion, MotionProgress } from "theme.slint";
+import { AppTheme, AppText, PageTitle, PageSub, PillButton, PillKind, PlayIcon, HelpIcon, DotsIcon, LogoutIcon, LogoMark, FadeFill, FocusRing, AppMotion, MotionProgress } from "theme.slint";
 
 import "../assets/fonts/Manrope/static/Manrope-Regular.ttf";
 import "../assets/fonts/Manrope/static/Manrope-Medium.ttf";
@@ -7,136 +7,454 @@ import "../assets/fonts/Manrope/static/Manrope-SemiBold.ttf";
 import "../assets/fonts/Manrope/static/Manrope-Bold.ttf";
 import "../assets/fonts/Manrope/static/Manrope-ExtraBold.ttf";
 
-export enum Page { SelectionPage, TimerPage, TimerFinished, LoadingPage, LoginPage, MeetingsPage }
+export enum Page { ManualPage, TimerPage, TimerFinished, LoadingPage, LoginPage, MeetingsPage }
 export enum StopType { TimerFinished, UserStopped }
 
 export struct TimeOption { time: string, minutes: string }
 export struct MeetingRow {
     time-range: string,
     title: string,
-    attendees: string,
+    meta: string,
     in-progress: bool,
 }
 
-component Heading inherits AppText {
-    font-size: 28px;
-    font-weight: 700;
-    overflow: elide;
+component BrandMark inherits LogoMark {
+    bubble: AppTheme.dark ? AppTheme.text-brand : AppTheme.brand;
+    hands: AppTheme.dark ? AppTheme.page : #FFFFFF;
 }
 
-component MutedText inherits AppText { color: AppTheme.muted; }
+component NavTab inherits Rectangle {
+    in property <string> text;
+    in property <bool> selected;
+    in property <bool> enabled: true;
+    callback clicked();
+    forward-focus: focus;
+    preferred-width: content.preferred-width;
+    preferred-height: content.preferred-height;
+    min-width: content.min-width;
+    min-height: content.min-height;
+    horizontal-stretch: 0;
+    opacity: root.enabled ? 1 : 0.4;
 
-component Navigation inherits HorizontalLayout {
+    accessible-role: tab;
+    accessible-label: root.text;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if (root.enabled) { root.clicked(); } }
+
+    FadeFill {
+        width: parent.width;
+        height: parent.height;
+        border-radius: self.height / 2;
+        target: root.selected
+            ? (touch.has-hover ? AppTheme.nav-selected-hover : AppTheme.nav-selected)
+            : (touch.has-hover ? AppTheme.nav-tab-hover : #FFFFFF00);
+    }
+    content := HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 16px;
+        padding-top: 8px;
+        padding-bottom: 8px;
+        Text {
+            text: root.text;
+            font-size: 17px;
+            font-weight: 700;
+            letter-spacing: 0.51px;
+            vertical-alignment: center;
+            color: root.selected ? AppTheme.brand : (touch.has-hover ? #FFFFFF : AppTheme.nav-tab-text);
+            accessible-role: none;
+        }
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+    focus := FocusScope {
+        width: 0px;
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if (!root.enabled) { return reject; }
+            if (event.text == Key.Space || event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    if focus.has-focus : FocusRing { host-width: root.width; host-height: root.height; corner-radius: root.height / 2; }
+}
+
+component NavIconButton inherits Rectangle {
+    in property <string> accessible-name;
+    callback clicked();
+    forward-focus: focus;
+    width: 40px;
+    height: 40px;
+    accessible-role: button;
+    accessible-label: root.accessible-name;
+    accessible-action-default => { root.clicked(); }
+
+    FadeFill {
+        width: parent.width;
+        height: parent.height;
+        border-radius: self.height / 2;
+        target: touch.has-hover ? AppTheme.nav-icon-hover : #FFFFFF00;
+    }
+    Rectangle {
+        width: 26px;
+        height: 26px;
+        @children
+    }
+    touch := TouchArea { clicked => { root.clicked(); } }
+    focus := FocusScope {
+        width: 0px;
+        key-pressed(event) => {
+            if (event.text == Key.Space || event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    if focus.has-focus : FocusRing { host-width: root.width; host-height: root.height; corner-radius: 20px; }
+}
+
+component Navigation inherits Rectangle {
     in property <bool> meetings-page;
     in property <bool> signed-in;
-    callback free-slots();
+    callback manual();
     callback meetings();
     callback logout();
     callback help();
-    spacing: 8px;
-    height: 44px;
+    background: AppTheme.brand;
+    height: 64px;
 
-    ThemedButton {
-        width: 150px;
-        text: "Orari liberi";
-        primary: !root.meetings-page;
-        clicked => { root.free-slots(); }
+    HorizontalLayout {
+        padding-left: 32px;
+        padding-right: 32px;
+        padding-top: 12px;
+        padding-bottom: 12px;
+        spacing: 24px;
+
+        HorizontalLayout {
+            horizontal-stretch: 1;
+            alignment: start;
+            spacing: 32px;
+            HorizontalLayout {
+                spacing: 10px;
+                VerticalLayout {
+                    alignment: center;
+                    LogoMark { width: 38px; height: 38px; }
+                }
+                Text {
+                    text: "Schisaciaccole";
+                    color: #FFFFFF;
+                    font-size: 22px;
+                    font-weight: 800;
+                    letter-spacing: -0.66px;
+                    vertical-alignment: center;
+                }
+            }
+            HorizontalLayout {
+                spacing: 8px;
+                NavTab {
+                    text: "MANUALE";
+                    selected: !root.meetings-page;
+                    clicked => { root.manual(); }
+                }
+                NavTab {
+                    text: "I MIEI MEETING";
+                    selected: root.meetings-page;
+                    enabled: root.signed-in;
+                    clicked => { root.meetings(); }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+            NavIconButton {
+                accessible-name: "Aiuto";
+                clicked => { root.help(); }
+                HelpIcon { width: parent.width; height: parent.height; }
+            }
+            if root.signed-in : NavIconButton {
+                accessible-name: "Altre azioni";
+                clicked => { menu.show(); }
+                DotsIcon { width: parent.width; height: parent.height; }
+            }
+        }
     }
-    ThemedButton {
-        width: 150px;
-        text: "I miei meeting";
-        primary: root.meetings-page;
-        enabled: root.signed-in;
-        clicked => { root.meetings(); }
-    }
-    Rectangle { horizontal-stretch: 1; }
-    if root.signed-in : CompactButton {
-        text: "Esci";
-        bare: true;
-        clicked => { root.logout(); }
-    }
-    CompactButton {
-        text: "?";
-        accessible-name: "Scorciatoie da tastiera";
-        bare: true;
-        clicked => { root.help(); }
+
+    menu := PopupWindow {
+        x: root.width - 32px - 200px;
+        y: root.height - 6px;
+        width: 200px;
+        height: 65px;
+        Rectangle {
+            background: AppTheme.page;
+            border-radius: AppTheme.radius-card;
+            border-width: 1px;
+            border-color: AppTheme.border-subtle;
+            drop-shadow-blur: 24px;
+            drop-shadow-offset-y: 8px;
+            drop-shadow-color: #1E1A2629;
+            VerticalLayout {
+                padding: 8px;
+                Rectangle {
+                    border-radius: AppTheme.radius-item;
+                    accessible-role: button;
+                    accessible-label: "Logout";
+                    accessible-action-default => { root.logout(); }
+                    FadeFill {
+                        width: parent.width;
+                        height: parent.height;
+                        border-radius: AppTheme.radius-item;
+                        target: item-touch.has-hover ? AppTheme.surface : AppTheme.surface.transparentize(1);
+                    }
+                    HorizontalLayout {
+                        padding: 12px;
+                        spacing: 12px;
+                        VerticalLayout {
+                            alignment: center;
+                            LogoutIcon { width: 20px; height: 20px; }
+                        }
+                        Text {
+                            text: "Logout";
+                            color: AppTheme.text;
+                            font-size: 15px;
+                            font-weight: 500;
+                            vertical-alignment: center;
+                            accessible-role: none;
+                        }
+                    }
+                    item-touch := TouchArea { clicked => { root.logout(); } }
+                }
+            }
+        }
     }
 }
 
-component MeetingsPage {
+component SlotCard inherits Rectangle {
+    in property <string> time;
+    in property <string> minutes;
+    in property <bool> selected;
+    callback clicked();
+    forward-focus: focus;
+    height: 112px;
+    border-radius: AppTheme.radius-card;
+
+    accessible-role: button;
+    accessible-checkable: true;
+    accessible-checked: root.selected;
+    accessible-label: root.time + ", tra " + root.minutes + " min";
+    accessible-action-default => { root.clicked(); }
+
+    FadeFill {
+        width: parent.width;
+        height: parent.height;
+        border-radius: AppTheme.radius-card;
+        target: root.selected ? AppTheme.brand : AppTheme.surface;
+    }
+    Rectangle {
+        width: parent.width;
+        height: parent.height;
+        border-radius: AppTheme.radius-card;
+        border-width: 2px;
+        border-color: touch.has-hover ? AppTheme.border-subtle : #FFFFFF00;
+    }
+    VerticalLayout {
+        alignment: center;
+        spacing: 4px;
+        Text {
+            text: root.time;
+            font-size: 30px;
+            font-weight: 800;
+            letter-spacing: -0.6px;
+            horizontal-alignment: center;
+            color: root.selected ? AppTheme.on-brand : AppTheme.text;
+            accessible-role: none;
+        }
+        Text {
+            text: "tra " + root.minutes + " min";
+            font-size: 15px;
+            font-weight: 500;
+            horizontal-alignment: center;
+            color: root.selected ? #FFFFFFD9 : AppTheme.text-secondary;
+            accessible-role: none;
+        }
+    }
+    touch := TouchArea { clicked => { root.clicked(); } }
+    focus := FocusScope {
+        width: 0px;
+        key-pressed(event) => {
+            if (event.text == Key.Space || event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    if focus.has-focus : FocusRing { host-width: root.width; host-height: root.height; corner-radius: AppTheme.radius-card; }
+}
+
+component ManualPage inherits VerticalLayout {
+    in property <string> current-time;
+    in property <[TimeOption]> options;
+    in property <int> selected-slot;
+    in property <string> notice;
+    callback select-slot(int);
+    callback start-timer();
+    padding-left: 32px;
+    padding-right: 32px;
+    padding-top: 32px;
+    padding-bottom: 40px;
+
+    VerticalLayout {
+        spacing: 12px;
+        PageTitle { text: "Quando finisce il meeting?"; }
+        HorizontalLayout {
+            alignment: start;
+            spacing: 5px;
+            PageSub { text: "Sono le"; }
+            HorizontalLayout {
+                PageSub { text: root.current-time; color: AppTheme.text; font-weight: 700; }
+                PageSub { text: ". Scegli l’orario di fine."; }
+            }
+        }
+    }
+    Rectangle { height: 32px; }
+    GridLayout {
+        height: 244px;
+        spacing: 20px;
+        for option[index] in root.options : SlotCard {
+            row: floor(index / 4);
+            col: mod(index, 4);
+            horizontal-stretch: 1;
+            time: option.time;
+            minutes: option.minutes;
+            selected: index == root.selected-slot;
+            clicked => { root.select-slot(index); }
+        }
+    }
+    if root.notice != "" : VerticalLayout {
+        padding-top: 16px;
+        AppText {
+            text: root.notice;
+            color: AppTheme.notice;
+            font-size: 15px;
+            wrap: word-wrap;
+        }
+    }
+    Rectangle { vertical-stretch: 1; }
+    HorizontalLayout {
+        padding-top: 32px;
+        alignment: end;
+        PillButton {
+            text: "Avvia timer";
+            enabled: root.selected-slot >= 0;
+            clicked => { root.start-timer(); }
+            PlayIcon { width: 20px; height: 20px; tint: parent.foreground; }
+        }
+    }
+}
+
+component MeetingsPage inherits VerticalLayout {
     in property <string> account-name;
     in property <[MeetingRow]> meetings;
     in property <bool> loading;
     in property <string> error;
     callback select(int);
     callback refresh();
-    callback logout();
-    callback free-slots();
-    callback help();
+    padding-left: 32px;
+    padding-right: 32px;
+    padding-top: 32px;
+    padding-bottom: 40px;
 
     init => { root.refresh(); }
     Timer { interval: 60s; running: true; triggered => { root.refresh(); } }
 
     VerticalLayout {
-        padding: 32px;
-        spacing: 24px;
-        Navigation {
-            meetings-page: true;
-            signed-in: true;
-            free-slots => { root.free-slots(); }
-            meetings => { root.refresh(); }
-            logout => { root.logout(); }
-            help => { root.help(); }
-        }
-        Heading { text: "I meeting di oggi"; }
-        MutedText { text: "Google Calendar · " + root.account-name; overflow: elide; }
-        if root.loading : MutedText { text: "Caricamento…"; }
-        if root.error != "" : AppText {
+        spacing: 12px;
+        PageTitle { text: "I meeting di oggi"; }
+        PageSub { text: "Google Calendar · " + root.account-name; overflow: elide; }
+    }
+    if root.loading : VerticalLayout {
+        padding-top: 16px;
+        AppText { text: "Caricamento…"; color: AppTheme.text-secondary; font-size: 15px; }
+    }
+    if root.error != "" : VerticalLayout {
+        padding-top: 16px;
+        AppText {
             text: root.error;
-            color: AppTheme.accent;
+            color: AppTheme.notice;
+            font-size: 15px;
             wrap: word-wrap;
         }
-        if !root.loading && root.error == "" && root.meetings.length == 0 : MutedText {
-            text: "Nessun altro meeting oggi.";
-        }
-        meeting-list := ListView {
-            vertical-stretch: 1;
-            for row[index] in root.meetings : Rectangle {
-                height: index == root.meetings.length - 1 ? 78px : 102px;
-                Rectangle {
-                    y: 0px;
-                    height: 78px;
-                    border-radius: 10px;
-                    background: row.in-progress ? AppTheme.tint : AppTheme.background;
-                    HorizontalLayout {
-                        padding: 16px;
-                        spacing: 20px;
-                        AppText {
-                            text: row.time-range;
-                            font-size: 16px;
+    }
+    if !root.loading && root.error == "" && root.meetings.length == 0 : VerticalLayout {
+        padding-top: 16px;
+        AppText { text: "Nessun altro meeting oggi."; color: AppTheme.text-secondary; font-size: 15px; }
+    }
+    Rectangle { height: 32px; }
+    ListView {
+        vertical-stretch: 1;
+        for row[index] in root.meetings : Rectangle {
+            height: index == root.meetings.length - 1 ? 92px : 104px;
+            Rectangle {
+                y: 0px;
+                height: 92px;
+                border-radius: AppTheme.radius-card;
+                background: AppTheme.surface;
+                HorizontalLayout {
+                    padding-left: 24px;
+                    padding-right: 24px;
+                    padding-top: 20px;
+                    padding-bottom: 20px;
+                    spacing: 24px;
+                    Text {
+                        width: 150px;
+                        text: row.time-range;
+                        font-size: 21px;
+                        font-weight: 700;
+                        color: AppTheme.text;
+                        vertical-alignment: center;
+                    }
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 4px;
+                        alignment: center;
+                        Text {
+                            text: row.title;
+                            font-size: 21px;
                             font-weight: 700;
-                            vertical-alignment: center;
+                            color: AppTheme.text;
+                            overflow: elide;
                         }
-                        VerticalLayout {
-                            spacing: 5px;
-                            alignment: center;
-                            horizontal-stretch: 1;
-                            AppText {
-                                text: row.title;
-                                font-size: 17px;
-                                font-weight: 700;
+                        HorizontalLayout {
+                            spacing: 6px;
+                            if row.in-progress : VerticalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    width: 8px;
+                                    height: 8px;
+                                    border-radius: 4px;
+                                    background: AppTheme.orange;
+                                }
+                            }
+                            Text {
+                                text: row.meta;
+                                font-size: 15px;
+                                color: AppTheme.text-secondary;
                                 overflow: elide;
                             }
-                            MutedText {
-                                text: (row.in-progress ? "In corso · " : "") + row.attendees;
-                                font-size: 12px;
-                                overflow: elide;
-                            }
                         }
-                        if row.in-progress : ThemedButton {
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        PillButton {
                             text: "Avvia";
-                            primary: true;
                             clicked => { root.select(index); }
+                            PlayIcon { width: 20px; height: 20px; tint: parent.foreground; }
                         }
                     }
                 }
@@ -175,16 +493,16 @@ component TimerPage {
         alignment: center;
         AppText {
             text: root.duration-text(root.timer-time);
-            color: AppTheme.accent;
+            color: AppTheme.text-brand;
             font-size: min(144px, root.width / (root.timer-time >= 3600s ? 7.5 : 5.4));
-            font-weight: 700;
+            font-weight: 800;
             horizontal-alignment: center;
         }
         HorizontalLayout {
             alignment: center;
-            ThemedButton {
+            PillButton {
                 text: "Stop";
-                width: AppTheme.dark ? 200px : 112px;
+                kind: PillKind.ghost;
                 clicked => { root.stop(StopType.UserStopped); }
             }
         }
@@ -201,12 +519,16 @@ component TimerPage {
             horizontal-alignment: center;
             overflow: elide;
         }
-        MutedText { text: "Termina alle " + root.timer-end; horizontal-alignment: center; }
+        AppText {
+            text: "Termina alle " + root.timer-end;
+            color: AppTheme.text-secondary;
+            horizontal-alignment: center;
+        }
         AppText {
             text: root.duration-text(root.timer-time);
-            color: AppTheme.accent;
+            color: AppTheme.text-brand;
             font-size: min(110px, root.width / (root.timer-time >= 3600s ? 7.5 : 5.4));
-            font-weight: 700;
+            font-weight: 800;
             horizontal-alignment: center;
         }
         HorizontalLayout {
@@ -215,32 +537,37 @@ component TimerPage {
                 width: min(680px, root.width - 64px);
                 height: 6px;
                 border-radius: 3px;
-                background: AppTheme.line;
+                background: AppTheme.border-subtle;
                 progress-fill := Rectangle {
                     x: 0px;
                     y: 0px;
                     width: parent.width * clamp(root.progress, 0, 1);
                     height: parent.height;
                     border-radius: 3px;
-                    background: AppTheme.accent;
+                    background: AppTheme.brand;
                 }
             }
         }
         HorizontalLayout {
             alignment: center;
             spacing: 20px;
-            ThemedButton { text: "Stop"; width: 200px; clicked => { root.stop(StopType.UserStopped); } }
+            PillButton {
+                text: "Stop";
+                kind: PillKind.ghost;
+                clicked => { root.stop(StopType.UserStopped); }
+            }
         }
     }
 }
+
 export component MainWindow inherits Window {
     title: "Schisaciaccole";
-    background: AppTheme.panel;
+    background: AppTheme.page;
     icon: @image-url("../assets/icon_256.png");
-    preferred-width: 816px;
-    min-width: 720px;
-    preferred-height: 516px;
-    min-height: 500px;
+    preferred-width: 880px;
+    min-width: 800px;
+    preferred-height: 660px;
+    min-height: 600px;
     default-font-family: "Manrope";
     forward-focus: scope;
 
@@ -258,8 +585,9 @@ export component MainWindow inherits Window {
 
     in property     <duration> timer-time: 3s;
     in property     <bool>     running-state: false;
-    in property     <Page>     page: SelectionPage; 
+    in property     <Page>     page: Page.ManualPage;
     in property     <[TimeOption]> options;
+    in property     <int>      selected-slot: -1;
     in property     <bool>     is-macos;
     in property     <bool>     signed-in;
     in property     <string>   account-name;
@@ -270,10 +598,11 @@ export component MainWindow inherits Window {
     in property     <bool>     meetings-loading;
     in property     <string>   meetings-error;
 
-    callback select-time(int);
+    callback select-slot(int);
+    callback start-selected();
     callback compute-options();
     callback tick();
-    callback set-selection-page();
+    callback set-manual-page();
     callback quit();
     callback fullscreen(bool);
     callback help();
@@ -341,7 +670,7 @@ export component MainWindow inherits Window {
     compute-options-timer := Timer {
 	interval  : 3s;
 	running: !running-state;
-	
+
 	triggered() => {
 	    // when the main timer is stopped keep updating the selection
 	    compute-options();
@@ -353,98 +682,86 @@ export component MainWindow inherits Window {
         width: root.width;
         height: root.height;
         opacity: page-fade.value;
-        if page == Page.SelectionPage : VerticalLayout {
-            padding: 32px;
-            spacing: 24px;
+        if page == Page.ManualPage || page == Page.MeetingsPage : VerticalLayout {
             Navigation {
+                meetings-page: root.page == Page.MeetingsPage;
                 signed-in: root.signed-in;
-                free-slots => { root.set-selection-page(); }
-                meetings => { root.set-meetings-page(); }
+                manual => { root.set-manual-page(); }
+                meetings => {
+                    if (root.page == Page.MeetingsPage) {
+                        root.refresh-meetings();
+                    } else {
+                        root.set-meetings-page();
+                    }
+                }
                 logout => { root.logout(); }
                 help => { root.help(); }
             }
-            Heading { text: "Quando finisce la cerimonia?"; }
-            MutedText {
-                text: "Sono le " + root.current-time + ". Scegli l’orario di fine.";
-                font-size: 16px;
+            if page == Page.ManualPage : ManualPage {
+                current-time: root.current-time;
+                options: root.options;
+                selected-slot: root.selected-slot;
+                notice: root.notice;
+                select-slot(index) => { root.select-slot(index); }
+                start-timer => { root.start-selected(); }
             }
-            GridLayout {
-                height: 204px;
-                spacing-horizontal: 16px;
-                spacing-vertical: 24px;
-                for option[index] in root.options : ThemedButton {
-                    row: floor(index / 4);
-                    col: mod(index, 4);
-                    height: 90px;
-                    horizontal-stretch: 1;
-                    text: option.time;
-                    detail: "tra " + option.minutes + " min";
-                    font-size: 24px;
-                    primary: index == 0;
-                    base-background: index == 0 ? AppTheme.accent : AppTheme.background;
-                    hover-background: index == 0 ? AppTheme.accent.darker(0.08) : AppTheme.tint;
-                    border-width: self.has-focus ? 2px : 0px;
-                    border-radius: 10px;
-                    clicked => { root.select-time(index); }
-                }
+            if page == Page.MeetingsPage : MeetingsPage {
+                account-name: root.account-name;
+                meetings: root.meetings;
+                loading: root.meetings-loading;
+                error: root.meetings-error;
+                select(index) => { root.select-meeting(index); }
+                refresh => { root.refresh-meetings(); }
             }
-            if root.notice != "" : AppText {
-                text: root.notice;
-                color: AppTheme.accent;
-                font-size: 12px;
-                wrap: word-wrap;
-            }
-            Rectangle { vertical-stretch: 1; }
-        }
-
-        if page == Page.MeetingsPage : MeetingsPage {
-            width: root.width;
-            height: root.height;
-            account-name: root.account-name;
-            meetings: root.meetings;
-            loading: root.meetings-loading;
-            error: root.meetings-error;
-            select(index) => { root.select-meeting(index); }
-            refresh => { root.refresh-meetings(); }
-            logout => { root.logout(); }
-            free-slots => { root.set-selection-page(); }
-            help => { root.help(); }
         }
         if page == Page.LoadingPage : VerticalLayout {
             padding: 32px;
             alignment: center;
             spacing: 16px;
-            Heading { text: "Connessione…"; horizontal-alignment: center; }
-            MutedText { text: "Prepariamo i tuoi meeting."; horizontal-alignment: center; }
+            HorizontalLayout {
+                alignment: center;
+                BrandMark { width: 64px; height: 64px; }
+            }
+            PageTitle { text: "Connessione…"; horizontal-alignment: center; }
+            PageSub { text: "Prepariamo i tuoi meeting."; horizontal-alignment: center; }
         }
         if page == Page.LoginPage : VerticalLayout {
             padding: 48px;
-            spacing: 24px;
+            spacing: 20px;
             alignment: center;
-            Heading { text: "Accedi con Google"; horizontal-alignment: center; color: AppTheme.accent; }
-            MutedText {
+            HorizontalLayout {
+                alignment: center;
+                BrandMark { width: 64px; height: 64px; }
+            }
+            PageTitle { text: "Accedi con Google"; horizontal-alignment: center; }
+            PageSub {
                 text: "I tuoi meeting di oggi, con un tempo per ogni voce.";
-                font-size: 16px;
                 horizontal-alignment: center;
                 wrap: word-wrap;
             }
             HorizontalLayout {
+                padding-top: 8px;
                 alignment: center;
                 spacing: 16px;
-                if !root.login-waiting : ThemedButton {
+                if !root.login-waiting : PillButton {
                     text: "Accedi con Google";
-                    primary: true;
                     clicked => { root.login(); }
                 }
-                if !root.login-waiting : ThemedButton {
+                if !root.login-waiting : PillButton {
                     text: "Usa senza accesso";
+                    kind: PillKind.ghost;
                     clicked => { root.skip-login(); }
                 }
-                if root.login-waiting : ThemedButton { text: "Annulla"; clicked => { root.cancel-login(); } }
+                if root.login-waiting : PillButton {
+                    text: "Annulla";
+                    kind: PillKind.ghost;
+                    clicked => { root.cancel-login(); }
+                }
             }
             AppText {
                 text: root.login-status;
-                color: AppTheme.accent;
+                color: AppTheme.notice;
+                font-size: 15px;
                 horizontal-alignment: center;
                 wrap: word-wrap;
             }
@@ -464,16 +781,19 @@ export component MainWindow inherits Window {
             padding: 32px;
             spacing: 24px;
             alignment: center;
-            finish-message := Heading {
+            finish-message := PageTitle {
                 opacity: finish-pulse.active ? 1 - 0.08 * sin(180deg * finish-pulse.value) : 1;
                 text: "Congrats!\nScrum ceremony finished";
-                color: AppTheme.accent;
+                color: AppTheme.text-brand;
                 horizontal-alignment: center;
             }
             AppText { text: "Now get the fuck outta here"; font-size: 24px; horizontal-alignment: center; }
             HorizontalLayout {
                 alignment: center;
-                ThemedButton { text: root.signed-in ? "Torna ai meeting" : "Torna agli orari"; clicked => { root.close-finished(); } }
+                PillButton {
+                    text: root.signed-in ? "Torna ai meeting" : "Torna agli orari";
+                    clicked => { root.close-finished(); }
+                }
             }
         }
     }
@@ -482,33 +802,49 @@ export component MainWindow inherits Window {
         height: 8px;
         x: root.width - 12px;
         y: 4px;
-        background: AppTheme.accent;
+        background: AppTheme.orange;
         border-radius: 4px;
+    }
+}
+
+component KeyChip inherits Rectangle {
+    in property <string> key;
+    width: 64px;
+    height: 36px;
+    border-radius: AppTheme.radius-item;
+    background: AppTheme.surface;
+    Text {
+        text: root.key;
+        color: AppTheme.text-brand;
+        font-size: 16px;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
     }
 }
 
 export component Help inherits Window {
     title: "Schisaciaccole · Scorciatoie";
-    background: AppTheme.panel;
+    background: AppTheme.page;
     preferred-width: 640px;
-    preferred-height: 390px;
+    preferred-height: 440px;
     min-width: 600px;
-    min-height: 380px;
+    min-height: 420px;
     always-on-top: true;
     default-font-family: "Manrope";
 
     VerticalLayout {
         padding: 32px;
-        spacing: 16px;
-        Heading { text: "Scorciatoie da tastiera"; }
+        spacing: 20px;
+        PageTitle { text: "Scorciatoie da tastiera"; font-size: 28px; letter-spacing: -0.56px; }
         GridLayout {
             spacing-horizontal: 24px;
             spacing-vertical: 12px;
-            Row { AppText { text: "Q"; color: AppTheme.accent; } AppText { text: "Esci dall’app"; } }
-            Row { AppText { text: "M"; color: AppTheme.accent; } AppText { text: "Attiva o disattiva lo schermo intero"; } }
-            Row { AppText { text: "Esc"; color: AppTheme.accent; } AppText { text: "Esci dallo schermo intero"; } }
-            Row { AppText { text: "T"; color: AppTheme.accent; } AppText { text: "Mantieni la finestra in primo piano"; } }
-            Row { AppText { text: "H"; color: AppTheme.accent; } AppText { text: "Mostra le scorciatoie"; } }
+            Row { KeyChip { key: "Q"; } AppText { text: "Esci dall’app"; font-size: 16px; vertical-alignment: center; } }
+            Row { KeyChip { key: "M"; } AppText { text: "Attiva o disattiva lo schermo intero"; font-size: 16px; vertical-alignment: center; } }
+            Row { KeyChip { key: "Esc"; } AppText { text: "Esci dallo schermo intero"; font-size: 16px; vertical-alignment: center; } }
+            Row { KeyChip { key: "T"; } AppText { text: "Mantieni la finestra in primo piano"; font-size: 16px; vertical-alignment: center; } }
+            Row { KeyChip { key: "H"; } AppText { text: "Mostra le scorciatoie"; font-size: 16px; vertical-alignment: center; } }
         }
         AboutSlint { height: 50px; }
     }

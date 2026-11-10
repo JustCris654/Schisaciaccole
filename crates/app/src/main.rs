@@ -65,7 +65,7 @@ fn main() -> anyhow::Result<()> {
 
     main_window.set_is_macos(std::env::consts::OS == "macos");
 
-    main_window.on_select_time({
+    main_window.on_select_slot({
         let window_weak = main_window.as_weak();
         let state = app_state.clone();
 
@@ -74,7 +74,21 @@ fn main() -> anyhow::Result<()> {
                 return;
             };
             let mut state = state.borrow_mut();
-            let tick_sound = state.select(index);
+            state.select_slot(index);
+            state.render(&window);
+        }
+    });
+
+    main_window.on_start_selected({
+        let window_weak = main_window.as_weak();
+        let state = app_state.clone();
+
+        move || {
+            let Some(window) = window_weak.upgrade() else {
+                return;
+            };
+            let mut state = state.borrow_mut();
+            let tick_sound = state.start_selected();
             state.render(&window);
             play_for(tick_sound);
         }
@@ -176,7 +190,7 @@ fn main() -> anyhow::Result<()> {
         }
     });
 
-    main_window.on_set_selection_page({
+    main_window.on_set_manual_page({
         let window_weak = main_window.as_weak();
         let state = app_state.clone();
 
@@ -185,7 +199,7 @@ fn main() -> anyhow::Result<()> {
                 return;
             };
             let mut state = state.borrow_mut();
-            state.show_selection_page();
+            state.show_manual_page();
             state.render(&window);
         }
     });

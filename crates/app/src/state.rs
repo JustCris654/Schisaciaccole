@@ -7,8 +7,8 @@ use chrono::{DateTime, FixedOffset, Local, TimeZone};
 use log::{debug, error, info, warn};
 use schisaciaccole_core::api::{Me, Meeting};
 use schisaciaccole_core::{
-    DEFAULT_OPTION_COUNT, QuarterOption, TickOutcome, TimeError, evaluate, quarter_options,
-    resolve_target,
+    DEFAULT_OPTION_COUNT, QuarterOption, TickOutcome, TimeError, evaluate, participants,
+    quarter_options,
 };
 use slint::{ModelRc, VecModel};
 
@@ -16,11 +16,11 @@ use crate::ui::{MainWindow, MeetingRow, Page, StopType, TimeOption};
 
 /// Login page status while the browser login is in progress.
 pub const LOGIN_WAITING_STATUS: &str = "Completa l'accesso nel browser…";
-/// Selection page notice when the backend cannot be reached at startup.
+/// Manual page notice when the backend cannot be reached at startup.
 pub const OFFLINE_NOTICE: &str = "Server non raggiungibile: modalità locale";
-/// Selection page notice when the backend client cannot be created.
+/// Manual page notice when the backend client cannot be created.
 pub const LOCAL_MODE_NOTICE: &str = "Accesso non disponibile: modalità locale";
-/// Selection page notice while the logout runs.
+/// Manual page notice while the logout runs.
 pub const LOGOUT_NOTICE: &str = "Disconnessione…";
 
 /// Sound the caller must play after a state update.
@@ -47,12 +47,14 @@ enum MeetingsStatus {
 pub struct AppState {
     page: Page,
     options: Vec<DateTime<Local>>,
+    /// End instant of the slot picked on the manual page; `None` when no slot is picked.
+    selected: Option<DateTime<Local>>,
     target: Option<DateTime<Local>>,
     timer_ms: i64,
     options_model: Rc<VecModel<TimeOption>>,
     /// Label of the signed-in account; `None` when not signed in.
     account: Option<String>,
-    /// Status line of the selection page; empty when there is none.
+    /// Status line of the manual page; empty when there is none.
     notice: &'static str,
     /// Status line of the login page; empty when there is none.
     login_status: &'static str,
@@ -70,7 +72,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Creates the state on the selection page, with options computed from the current time.
+    /// Creates the state on the manual page, with options computed from the current time.
     ///
     /// # Errors
     ///
@@ -80,8 +82,9 @@ impl AppState {
         let (options, rows) = split_options(quarter_options(&Local::now(), DEFAULT_OPTION_COUNT)?);
 
         Ok(Self {
-            page: Page::SelectionPage,
+            page: Page::ManualPage,
             options,
+            selected: None,
             target: None,
             timer_ms: 0,
             options_model: Rc::new(VecModel::from(rows)),
@@ -100,8 +103,9 @@ impl AppState {
 
     /// Recomputes the selectable end times from the current time.
     ///
-    /// On error the error is logged and the previous options are kept. The meeting rows are
-    /// rebuilt too, so meetings that have just ended disappear.
+    /// On error the error is logged and the previous options and selection are kept. The
+    /// picked slot stays picked while its end instant is still offered and is cleared otherwise.
+    /// The meeting rows are rebuilt too, so meetings that have just ended disappear.
     pub fn refresh_options(&mut self) {
         self.rebuild_meeting_rows();
         let now = Local::now();
@@ -111,6 +115,7 @@ impl AppState {
             Ok(options) => {
                 let (options, rows) = split_options(options);
                 debug!("refresh_options refreshed {} options", rows.len());
+                self.selected = retain_selection(self.selected, &options);
                 self.options = options;
                 self.options_model.set_vec(rows);
             }
@@ -118,34 +123,51 @@ impl AppState {
         }
     }
 
-    /// Starts the countdown to the option at `index` and moves to the timer page.
+    /// Picks the option at `index` on the manual page; the countdown does not start.
     ///
-    /// The target is chosen by [`resolve_target`], so an option already in the
-    /// past moves to the next one. Any running meeting is forgotten.
-    /// Returns the sound to play, which is [`TickSound::MeetingEnd`] only if the target is
-    /// reached at once (see [`AppState::tick`]).
+    /// Picking another option replaces the previous pick.
     ///
-    /// Edge cases: a negative `index` or one out of range is logged and
-    /// ignored; the state does not change and [`TickSound::None`] is returned.
-    #[must_use]
-    pub fn select(&mut self, index: i32) -> TickSound {
+    /// Edge cases: a negative `index` or one out of range is logged and ignored; the pick does
+    /// not change.
+    pub fn select_slot(&mut self, index: i32) {
         let Ok(position) = usize::try_from(index) else {
-            warn!("select: ignoring negative option index {index}");
-            return TickSound::None;
+            warn!("select_slot: ignoring negative option index {index}");
+            return;
         };
+        let Some(end) = self.options.get(position) else {
+            warn!("select_slot: ignoring out of range option index {index}");
+            return;
+        };
+        self.selected = Some(*end);
+    }
 
-        let now = Local::now();
-        let Some(target) = resolve_target(&self.options, position, &now) else {
-            warn!("select: ignoring out of range option index {index}");
+    /// Starts the countdown to the picked option and moves to the timer page.
+    ///
+    /// The pick is consumed and any running meeting is forgotten. Returns the sound of the first
+    /// update (see [`AppState::tick`]).
+    ///
+    /// Edge cases: without a pick nothing changes. A pick whose end has already passed (the
+    /// options were not refreshed yet) is dropped after refreshing the options, and nothing
+    /// starts. Both return [`TickSound::None`].
+    #[must_use]
+    pub fn start_selected(&mut self) -> TickSound {
+        let Some(target) = self.selected else {
             return TickSound::None;
         };
+        let now = Local::now();
+        if target <= now {
+            warn!("start_selected: the picked end has passed, refreshing the options");
+            self.refresh_options();
+            return TickSound::None;
+        }
 
         info!(
-            "select: target={} remaining={}s",
+            "start_selected: target={} remaining={}s",
             target.format("%H:%M"),
             target.signed_duration_since(now).num_seconds()
         );
 
+        self.selected = None;
         self.run = None;
         self.page = Page::TimerPage;
         self.target = Some(target);
@@ -154,7 +176,7 @@ impl AppState {
 
     /// Starts the countdown to the end of the meeting in row `index` and moves to the timer page.
     ///
-    /// The countdown is plain: it shows the meeting title and end time and has no speaking
+    /// Works for a meeting in progress and for one that has not started. The countdown is plain: it shows the meeting title and end time and has no speaking
     /// slots. Returns the sound of the first update (see [`AppState::tick`]), which is
     /// [`TickSound::MeetingEnd`] only if the end is reached at once.
     ///
@@ -233,18 +255,18 @@ impl AppState {
         };
     }
 
-    /// Moves to the selection page without touching the countdown or the options.
-    pub fn show_selection_page(&mut self) {
-        self.page = Page::SelectionPage;
+    /// Moves to the manual page without touching the countdown or the options.
+    pub fn show_manual_page(&mut self) {
+        self.page = Page::ManualPage;
     }
 
     /// Moves to the meetings page, keeping the meetings already loaded. Without an account it moves to
-    /// the selection page instead.
+    /// the manual page instead.
     pub fn show_meetings_page(&mut self) {
         self.page = self.home_page();
     }
 
-    /// Leaves the finished page: the meetings page when signed in, otherwise the selection page.
+    /// Leaves the finished page: the meetings page when signed in, otherwise the manual page.
     pub fn show_home(&mut self) {
         self.page = self.home_page();
     }
@@ -281,13 +303,24 @@ impl AppState {
         self.meetings_status = MeetingsStatus::Loading;
     }
 
+    /// Position of the picked slot among the options, or -1 when none is picked.
+    fn selected_index(&self) -> i32 {
+        let Some(selected) = self.selected else {
+            return -1;
+        };
+        match self.options.iter().position(|end| *end == selected) {
+            Some(position) => i32::try_from(position).unwrap_or(-1),
+            None => -1,
+        }
+    }
+
     /// True when an account is signed in.
     pub fn is_signed_in(&self) -> bool {
         self.account.is_some()
     }
 
     /// Page a finished or stopped countdown returns to: the meetings page when signed in (marked
-    /// as loading only when no meetings were loaded yet), the selection page otherwise.
+    /// as loading only when no meetings were loaded yet), the manual page otherwise.
     fn home_page(&mut self) -> Page {
         if self.account.is_some() {
             if !self.meetings_loaded {
@@ -295,7 +328,7 @@ impl AppState {
             }
             Page::MeetingsPage
         } else {
-            Page::SelectionPage
+            Page::ManualPage
         }
     }
 
@@ -335,12 +368,12 @@ impl AppState {
         self.page = Page::LoginPage;
     }
 
-    /// Moves to the selection page without an account, showing `notice` (empty for none)..
+    /// Moves to the manual page without an account, showing `notice` (empty for none)..
     pub fn on_local_mode(&mut self, notice: &'static str) {
         self.account = None;
         self.notice = notice;
         self.login_waiting = false;
-        self.page = Page::SelectionPage;
+        self.page = Page::ManualPage;
     }
 
     /// Shows the login page as waiting for the browser.
@@ -362,12 +395,12 @@ impl AppState {
     }
 
     /// Hides the account (and its meetings) while the logout runs and tells the user it is in progress, on the
-    /// selection page.
+    /// manual page.
     pub fn on_logout_started(&mut self) {
         self.forget_meetings();
         self.account = None;
         self.notice = LOGOUT_NOTICE;
-        self.page = Page::SelectionPage;
+        self.page = Page::ManualPage;
     }
 
     /// Stops any countdown, forgets the account and moves to the idle login page.
@@ -413,6 +446,7 @@ impl AppState {
             meeting_remaining_fraction(meeting, self.timer_ms)
         });
         window.set_timer_progress(progress);
+        window.set_selected_slot(self.selected_index());
         window.set_signed_in(self.account.is_some());
         window.set_account_name(self.account.as_deref().unwrap_or_default().into());
         window.set_notice(self.notice.into());
@@ -500,26 +534,67 @@ fn meeting_remaining_fraction(meeting: &Meeting, remaining_ms: i64) -> f32 {
     (remaining_ms as f64 / total_ms as f64).clamp(0.0, 1.0) as f32
 }
 
-/// Builds the row of `meeting`: times in `tz` as `HH:MM–HH:MM`, the title and the attendee count.
-///
-/// The count is the length of `attendees`, so it can be short for an event with omitted
-/// attendees; one attendee is "1 partecipante", any other count is plural.
+/// Builds the row of `meeting`: times in `tz` as `HH:MM–HH:MM`, the title and the meta line
+/// (see [`meeting_meta`]).
 fn meeting_row<Tz: TimeZone>(meeting: &Meeting, now: &DateTime<FixedOffset>, tz: &Tz) -> MeetingRow
 where
     Tz::Offset: Display,
 {
-    let count = meeting.attendees.len();
-    let attendees = if count == 1 {
-        "1 partecipante".to_string()
-    } else {
-        format!("{count} partecipanti")
-    };
-
     MeetingRow {
         time_range: time_range(meeting, tz).into(),
         title: meeting.title.as_str().into(),
-        attendees: attendees.into(),
+        meta: meeting_meta(meeting, now).into(),
         in_progress: is_in_progress(meeting, now),
+    }
+}
+
+/// Meta line of a meeting row: "In corso" or the time to the start, then the participant count.
+///
+/// The count is the length of [`participants`], so declined attendees are not counted and the
+/// attendees the calendar omitted are not known. One participant is singular, any other count
+/// (zero included) is plural.
+fn meeting_meta(meeting: &Meeting, now: &DateTime<FixedOffset>) -> String {
+    let count = participants(meeting).len();
+    let people = if count == 1 {
+        "1 partecipante accettato".to_string()
+    } else {
+        format!("{count} partecipanti accettati")
+    };
+
+    if is_in_progress(meeting, now) {
+        return format!("In corso · {people}");
+    }
+    let seconds = meeting.start.signed_duration_since(*now).num_seconds();
+    let minutes = seconds.saturating_add(59).div_euclid(60).max(1);
+    format!("{} · {people}", starts_in_text(minutes))
+}
+
+/// Text for a start `minutes` away: "Tra 52 min", "Tra 1 h", "Tra 1 h 20 min".
+///
+/// Hours are used from 60 minutes on; a whole number of hours omits the minutes.
+fn starts_in_text(minutes: i64) -> String {
+    if minutes < 60 {
+        return format!("Tra {minutes} min");
+    }
+    let hours = minutes / 60;
+    let rest = minutes % 60;
+    if rest == 0 {
+        format!("Tra {hours} h")
+    } else {
+        format!("Tra {hours} h {rest} min")
+    }
+}
+
+/// Keeps `selected` only while `options` still offers that end instant.
+fn retain_selection<Tz: TimeZone>(
+    selected: Option<DateTime<Tz>>,
+    options: &[DateTime<Tz>],
+) -> Option<DateTime<Tz>> {
+    let selected = selected?;
+    if options.contains(&selected) {
+        Some(selected)
+    } else {
+        None
     }
 }
 
@@ -564,7 +639,7 @@ pub mod tests {
     use schisaciaccole_core::api::{Attendee, ResponseStatus};
     use slint::Model;
 
-    /// State on the selection page, as at startup without a backend.
+    /// State on the manual page, as at startup without a backend.
     pub fn sample_state() -> AppState {
         AppState::new().unwrap()
     }
@@ -756,33 +831,73 @@ pub mod tests {
         assert!(!meeting_row(&meeting, &at(10, 0), &Utc).in_progress);
     }
 
+    fn meta(meeting: &Meeting, now: DateTime<FixedOffset>) -> String {
+        meeting_meta(meeting, &now)
+    }
+
     #[test]
-    fn row_counts_all_attendees() {
+    fn meta_of_a_running_meeting_says_in_corso() {
         let mut meeting = meeting("Review", at(9, 0), at(10, 0));
         meeting.attendees = attendees(3);
 
-        let row = meeting_row(&meeting, &at(8, 0), &Utc);
-
-        assert_eq!(row.attendees, "3 partecipanti");
+        assert_eq!(
+            meta(&meeting, at(9, 30)),
+            "In corso · 3 partecipanti accettati"
+        );
     }
 
     #[test]
-    fn row_uses_the_singular_for_one_attendee() {
+    fn meta_of_a_future_meeting_counts_minutes() {
+        let mut meeting = meeting("Retro", at(9, 52), at(10, 30));
+        meeting.attendees = attendees(7);
+
+        assert_eq!(
+            meta(&meeting, at(9, 0)),
+            "Tra 52 min · 7 partecipanti accettati"
+        );
+    }
+
+    #[test]
+    fn meta_rounds_a_partial_minute_up() {
+        let meeting = meeting("Retro", at(9, 0), at(10, 0));
+        let now = at(8, 57) + chrono::Duration::seconds(30);
+
+        assert!(meta(&meeting, now).starts_with("Tra 3 min"));
+    }
+
+    #[test]
+    fn meta_switches_to_hours_from_sixty_minutes() {
+        let meeting = meeting("Retro", at(10, 20), at(11, 0));
+
+        assert!(meta(&meeting, at(9, 0)).starts_with("Tra 1 h 20 min · "));
+        assert!(meta(&meeting, at(9, 20)).starts_with("Tra 1 h · "));
+    }
+
+    #[test]
+    fn meta_uses_the_singular_for_one_participant() {
         let mut meeting = meeting("1:1", at(9, 0), at(10, 0));
         meeting.attendees = attendees(1);
 
-        let row = meeting_row(&meeting, &at(8, 0), &Utc);
-
-        assert_eq!(row.attendees, "1 partecipante");
+        assert_eq!(
+            meta(&meeting, at(9, 10)),
+            "In corso · 1 partecipante accettato"
+        );
     }
 
     #[test]
-    fn row_uses_the_plural_for_no_attendees() {
+    fn meta_uses_the_plural_for_no_participants() {
         let meeting = meeting("Solo", at(9, 0), at(10, 0));
 
-        let row = meeting_row(&meeting, &at(8, 0), &Utc);
+        assert!(meta(&meeting, at(8, 59)).ends_with("0 partecipanti accettati"));
+    }
 
-        assert_eq!(row.attendees, "0 partecipanti");
+    #[test]
+    fn meta_does_not_count_declined_attendees() {
+        let mut meeting = meeting("Review", at(9, 0), at(10, 0));
+        meeting.attendees = attendees(2);
+        meeting.attendees[0].response = ResponseStatus::Declined;
+
+        assert!(meta(&meeting, at(9, 10)).ends_with("1 partecipante accettato"));
     }
 
     fn state_with_meetings() -> AppState {
@@ -820,6 +935,129 @@ pub mod tests {
     }
 
     #[test]
+    fn a_future_meeting_can_be_started() {
+        let mut state = state_with_meetings();
+        assert!(!is_in_progress(
+            &state.shown[1],
+            &Local::now().fixed_offset()
+        ));
+        let end = state.shown[1].end;
+
+        let sound = state.select_meeting(1);
+
+        assert_eq!(sound, TickSound::None);
+        assert_eq!(state.page, Page::TimerPage);
+        assert_eq!(state.target, Some(end.with_timezone(&Local)));
+    }
+
+    #[test]
+    fn selecting_a_slot_does_not_start_the_timer() {
+        let mut state = sample_state();
+
+        state.select_slot(2);
+
+        assert_eq!(state.page, Page::ManualPage);
+        assert_eq!(state.target, None);
+        assert_eq!(state.selected, Some(state.options[2]));
+        assert_eq!(state.selected_index(), 2);
+    }
+
+    #[test]
+    fn selecting_another_slot_replaces_the_pick() {
+        let mut state = sample_state();
+        state.select_slot(2);
+
+        state.select_slot(5);
+
+        assert_eq!(state.selected_index(), 5);
+    }
+
+    #[test]
+    fn selecting_an_invalid_slot_keeps_the_pick() {
+        let mut state = sample_state();
+        state.select_slot(1);
+
+        state.select_slot(-1);
+        state.select_slot(99);
+
+        assert_eq!(state.selected_index(), 1);
+    }
+
+    #[test]
+    fn starting_without_a_pick_does_nothing() {
+        let mut state = sample_state();
+
+        let sound = state.start_selected();
+
+        assert_eq!(sound, TickSound::None);
+        assert_eq!(state.page, Page::ManualPage);
+        assert_eq!(state.target, None);
+    }
+
+    #[test]
+    fn starting_uses_the_picked_end() {
+        let mut state = sample_state();
+        state.select_slot(3);
+        let end = state.options[3];
+
+        let sound = state.start_selected();
+
+        assert_eq!(sound, TickSound::None);
+        assert_eq!(state.page, Page::TimerPage);
+        assert_eq!(state.target, Some(end));
+        assert!(state.timer_ms > 0);
+        assert_eq!(state.selected, None);
+    }
+
+    #[test]
+    fn starting_a_pick_that_has_passed_drops_it() {
+        let mut state = sample_state();
+        state.selected = Some(Local::now() - chrono::Duration::minutes(1));
+
+        let sound = state.start_selected();
+
+        assert_eq!(sound, TickSound::None);
+        assert_eq!(state.page, Page::ManualPage);
+        assert_eq!(state.target, None);
+        assert_eq!(state.selected, None);
+    }
+
+    #[test]
+    fn refresh_keeps_a_pick_that_is_still_offered() {
+        let mut state = sample_state();
+        state.select_slot(4);
+        let end = state.options[4];
+
+        state.refresh_options();
+
+        assert_eq!(state.selected, Some(end));
+        assert_eq!(state.selected_index(), 4);
+    }
+
+    #[test]
+    fn refresh_clears_a_pick_that_is_no_longer_offered() {
+        let mut state = sample_state();
+        state.selected = Some(Local::now() - chrono::Duration::minutes(30));
+
+        state.refresh_options();
+
+        assert_eq!(state.selected, None);
+        assert_eq!(state.selected_index(), -1);
+    }
+
+    #[test]
+    fn retain_selection_follows_the_offered_options() {
+        let options = vec![utc(9, 15), utc(9, 30)];
+
+        assert_eq!(
+            retain_selection(Some(utc(9, 30)), &options),
+            Some(utc(9, 30))
+        );
+        assert_eq!(retain_selection(Some(utc(9, 0)), &options), None);
+        assert_eq!(retain_selection(None, &options), None);
+    }
+
+    #[test]
     fn selecting_an_out_of_range_meeting_changes_nothing() {
         let mut state = state_with_meetings();
 
@@ -849,7 +1087,7 @@ pub mod tests {
     fn entering_meetings_without_data_shows_loading() {
         let mut state = sample_state();
         state.on_signed_in(&me(None));
-        state.page = Page::SelectionPage;
+        state.page = Page::ManualPage;
 
         state.show_meetings_page();
 
@@ -859,7 +1097,7 @@ pub mod tests {
     #[test]
     fn entering_meetings_with_data_keeps_the_list() {
         let mut state = state_with_meetings();
-        state.page = Page::SelectionPage;
+        state.page = Page::ManualPage;
 
         state.show_meetings_page();
 
@@ -906,7 +1144,7 @@ pub mod tests {
 
         state.stop(StopType::UserStopped);
 
-        assert_eq!(state.page, Page::SelectionPage);
+        assert_eq!(state.page, Page::ManualPage);
     }
 
     #[test]
@@ -919,7 +1157,7 @@ pub mod tests {
         let mut local = sample_state();
         local.page = Page::TimerFinished;
         local.show_home();
-        assert_eq!(local.page, Page::SelectionPage);
+        assert_eq!(local.page, Page::ManualPage);
     }
 
     #[test]
@@ -996,7 +1234,7 @@ pub mod tests {
 
         state.on_local_mode(OFFLINE_NOTICE);
 
-        assert_eq!(state.page, Page::SelectionPage);
+        assert_eq!(state.page, Page::ManualPage);
         assert_eq!(state.account, None);
         assert_eq!(state.notice, OFFLINE_NOTICE);
     }
@@ -1047,7 +1285,7 @@ pub mod tests {
 
         assert_eq!(state.account, None);
         assert_eq!(state.notice, LOGOUT_NOTICE);
-        assert_eq!(state.page, Page::SelectionPage);
+        assert_eq!(state.page, Page::ManualPage);
     }
 
     #[test]
