@@ -150,6 +150,25 @@ export component DotsIcon inherits Path {
     commands: "M1.9 12a2.6 2.6 0 1 0 5.2 0a2.6 2.6 0 1 0-5.2 0z M9.4 12a2.6 2.6 0 1 0 5.2 0a2.6 2.6 0 1 0-5.2 0z M16.9 12a2.6 2.6 0 1 0 5.2 0a2.6 2.6 0 1 0-5.2 0z";
 }
 
+export component StopIcon inherits Path {
+    in property <color> tint: AppTheme.text-brand;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    fill: root.tint;
+    commands: "M7 5H17A2 2 0 0 1 19 7V17A2 2 0 0 1 17 19H7A2 2 0 0 1 5 17V7A2 2 0 0 1 7 5z";
+}
+
+export component HomeIcon inherits Path {
+    in property <color> tint: AppTheme.text-brand;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: root.tint;
+    stroke-width: 2.2 * self.width / 24;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    commands: "M3 11.5L12 4l9 7.5 M5 10v10h5v-6h4v6h5V10";
+}
+
 export component LogoutIcon inherits Path {
     in property <color> tint: AppTheme.text;
     viewbox-width: 24;
@@ -201,17 +220,20 @@ export component LogoMark inherits Rectangle {
     }
 }
 
-export enum PillKind { primary, ghost, link }
+export enum PillKind { primary, ghost, outline, link }
 
 // Fully rounded button. Children (an icon) are placed before the label.
 export component PillButton inherits Rectangle {
     in property <string> text;
     in property <PillKind> kind: PillKind.primary;
     in property <bool> enabled: true;
+    // Small variant of the outline kind used by the countdown screens.
+    in property <bool> compact;
     in property <string> accessible-name;
     out property <bool> has-focus: focus.has-focus;
     out property <color> foreground: root.kind == PillKind.primary ? AppTheme.on-brand
-        : (root.kind == PillKind.link && !touch.has-hover ? AppTheme.text-secondary : AppTheme.text);
+        : (root.kind == PillKind.outline ? AppTheme.text-brand
+            : (root.kind == PillKind.link && !touch.has-hover ? AppTheme.text-secondary : AppTheme.text));
     callback clicked();
     private property <bool> link: root.kind == PillKind.link;
     private property <color> fill-color: root.kind == PillKind.primary
@@ -222,9 +244,9 @@ export component PillButton inherits Rectangle {
 
     forward-focus: focus;
     preferred-width: content.preferred-width;
-    preferred-height: content.preferred-height;
+    preferred-height: root.outline && root.compact ? 28px : content.preferred-height;
     min-width: content.min-width;
-    min-height: content.min-height;
+    min-height: root.outline && root.compact ? 28px : content.min-height;
     horizontal-stretch: 0;
     vertical-stretch: 0;
     opacity: root.enabled ? 1 : 0.4;
@@ -240,7 +262,7 @@ export component PillButton inherits Rectangle {
         border-radius: self.height / 2;
         target: root.fill-color;
     }
-    if root.kind == PillKind.ghost : Rectangle {
+    if root.kind == PillKind.ghost || root.kind == PillKind.outline : Rectangle {
         width: parent.width;
         height: parent.height;
         border-radius: self.height / 2;
@@ -248,17 +270,21 @@ export component PillButton inherits Rectangle {
         border-color: AppTheme.border-subtle;
     }
 
+    private property <bool> outline: root.kind == PillKind.outline;
     content := HorizontalLayout {
-        padding-left: root.link ? 14px : 28px;
-        padding-right: root.link ? 14px : 28px;
-        padding-top: root.link ? 10px : 14px;
-        padding-bottom: root.link ? 10px : 14px;
-        spacing: 10px;
+        padding-left: root.link ? 14px : (root.outline ? (root.compact ? 10px : 18px) : 28px);
+        padding-right: root.link ? 14px : (root.outline ? (root.compact ? 10px : 18px) : 28px);
+        padding-top: root.link ? 10px : (root.outline ? (root.compact ? 0px : 8px) : 14px);
+        padding-bottom: root.link ? 10px : (root.outline ? (root.compact ? 0px : 8px) : 14px);
+        spacing: root.outline && root.compact ? 5px : (root.outline ? 8px : 10px);
         alignment: center;
-        @children
+        VerticalLayout {
+            alignment: center;
+            @children
+        }
         Text {
             text: root.text;
-            font-size: root.link ? 15px : 17px;
+            font-size: root.link ? 15px : (root.outline ? (root.compact ? 11px : 14px) : 17px);
             font-weight: root.link ? 600 : 700;
             color: root.foreground;
             vertical-alignment: center;

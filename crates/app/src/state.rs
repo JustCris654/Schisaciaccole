@@ -10,7 +10,7 @@ use schisaciaccole_core::{
     DEFAULT_OPTION_COUNT, QuarterOption, TickOutcome, TimeError, evaluate, participants,
     quarter_options,
 };
-use slint::{ModelRc, VecModel};
+use slint::{ComponentHandle, LogicalSize, ModelRc, VecModel};
 
 use crate::ui::{MainWindow, MeetingRow, Page, StopType, TimeOption};
 
@@ -43,6 +43,36 @@ enum MeetingsStatus {
     Failed(&'static str),
 }
 
+/// Where the running countdown was started from, so leaving it goes back there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TimerOrigin {
+    /// A slot picked on the manual page.
+    Manual,
+    /// A meeting picked on the meetings page.
+    Meeting,
+}
+
+/// Size of the window while a countdown shows.
+const TIMER_WINDOW_SIZE: LogicalSize = LogicalSize::new(360.0, 240.0);
+
+/// Window geometry to bring back when the countdown screens are left.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct SavedWindow {
+    size: LogicalSize,
+    on_top: bool,
+}
+
+/// What [`AppState::render`] must do to the window size and on-top state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WindowStep {
+    /// The window already matches the page.
+    Keep,
+    /// A countdown screen just opened: shrink the window and keep it on top.
+    Enter,
+    /// The countdown screens were left: restore the window.
+    Leave,
+}
+
 /// Everything the main window shows, owned by Rust and pushed to Slint by [`AppState::render`].
 pub struct AppState {
     page: Page,
@@ -67,8 +97,14 @@ pub struct AppState {
     /// True once a fetch succeeded for the current account.
     meetings_loaded: bool,
     meetings_status: MeetingsStatus,
-    /// Meeting selected from the list while its countdown runs.
-    run: Option<Meeting>,
+    /// Origin of the running countdown, kept while the finished page shows.
+    origin: Option<TimerOrigin>,
+    /// Random number the finished page turns into its first caption.
+    finish_seed: i32,
+    /// True while the window is in its countdown shape (small and on top).
+    timer_window: bool,
+    /// Window geometry before the countdown shape; `None` when it was not changed.
+    saved_window: Option<SavedWindow>,
 }
 
 impl AppState {
@@ -97,7 +133,10 @@ impl AppState {
             meetings_model: Rc::new(VecModel::from(Vec::new())),
             meetings_loaded: false,
             meetings_status: MeetingsStatus::Loading,
-            run: None,
+            origin: None,
+            finish_seed: 0,
+            timer_window: false,
+            saved_window: None,
         })
     }
 
@@ -168,7 +207,7 @@ impl AppState {
         );
 
         self.selected = None;
-        self.run = None;
+        self.origin = Some(TimerOrigin::Manual);
         self.page = Page::TimerPage;
         self.target = Some(target);
         self.tick()
@@ -176,8 +215,8 @@ impl AppState {
 
     /// Starts the countdown to the end of the meeting in row `index` and moves to the timer page.
     ///
-    /// Works for a meeting in progress and for one that has not started. The countdown is plain: it shows the meeting title and end time and has no speaking
-    /// slots. Returns the sound of the first update (see [`AppState::tick`]), which is
+    /// Works for a meeting in progress and for one that has not started. The countdown is plain:
+    /// it shows the end time and has no speaking slots. Returns the sound of the first update (see [`AppState::tick`]), which is
     /// [`TickSound::MeetingEnd`] only if the end is reached at once.
     ///
     /// Edge cases: a negative `index` or one out of range is logged and ignored; the state does
@@ -198,7 +237,7 @@ impl AppState {
             meeting.end.with_timezone(&Local).format("%H:%M")
         );
         let target = meeting.end.with_timezone(&Local);
-        self.run = Some(meeting.clone());
+        self.origin = Some(TimerOrigin::Meeting);
         self.page = Page::TimerPage;
         self.target = Some(target);
         self.tick()
@@ -239,20 +278,23 @@ impl AppState {
 
     /// Ends the countdown: refreshes the options, clears the target and the timer.
     ///
-    /// Moves to the finished page for [`StopType::TimerFinished`] and to the home page (see
-    /// [`AppState::show_home`]) for [`StopType::UserStopped`]. Calling it without a
-    /// running countdown still refreshes the options and changes the page.
+    /// Moves to the finished page for [`StopType::TimerFinished`], which remembers where the
+    /// countdown came from, and to the page the countdown was started from for
+    /// [`StopType::UserStopped`] (see [`AppState::show_home`]). Calling it without a running
+    /// countdown still refreshes the options and changes the page.
     pub fn stop(&mut self, stop_type: StopType) {
-        info!("stop: timer stopped, back to selection");
+        info!("stop: timer stopped");
 
         self.refresh_options();
         self.target = None;
         self.timer_ms = 0;
-        self.run = None;
-        self.page = match stop_type {
-            StopType::TimerFinished => Page::TimerFinished,
-            StopType::UserStopped => self.home_page(),
-        };
+        match stop_type {
+            StopType::TimerFinished => {
+                self.finish_seed = random_seed();
+                self.page = Page::TimerFinished;
+            }
+            StopType::UserStopped => self.show_home(),
+        }
     }
 
     /// Moves to the manual page without touching the countdown or the options.
@@ -266,9 +308,17 @@ impl AppState {
         self.page = self.home_page();
     }
 
-    /// Leaves the finished page: the meetings page when signed in, otherwise the manual page.
+    /// Leaves the countdown screens for the page the countdown was started from: the manual page
+    /// after a manual countdown, the meetings page after a meeting countdown. The origin is
+    /// forgotten.
+    ///
+    /// Edge cases: after a meeting countdown without an account it moves to the manual page.
+    /// Without any origin it behaves like [`AppState::show_meetings_page`].
     pub fn show_home(&mut self) {
-        self.page = self.home_page();
+        self.page = match self.origin.take() {
+            Some(TimerOrigin::Manual) => Page::ManualPage,
+            Some(TimerOrigin::Meeting) | None => self.home_page(),
+        };
     }
 
     /// Replaces the meetings with those of a successful fetch and shows them.
@@ -290,7 +340,7 @@ impl AppState {
     pub fn on_session_lost(&mut self, status: &'static str) {
         self.target = None;
         self.timer_ms = 0;
-        self.run = None;
+        self.origin = None;
         self.on_login_required(status);
     }
 
@@ -301,6 +351,43 @@ impl AppState {
         self.meetings_model.set_vec(Vec::new());
         self.meetings_loaded = false;
         self.meetings_status = MeetingsStatus::Loading;
+    }
+
+    /// Shrinks the window to the countdown shape when the countdown screens open and restores it
+    /// when they close.
+    ///
+    /// The previous size and on-top state are saved on entering and put back on leaving, so a
+    /// change of the on-top state during the countdown does not stick. A fullscreen window is
+    /// neither resized nor made on top. The resize is queued on the event loop so the new
+    /// minimum size is in force first.
+    fn sync_window(&mut self, window: &MainWindow) {
+        let wants_timer = shows_countdown(self.page);
+        match window_step(self.timer_window, wants_timer) {
+            WindowStep::Keep => {}
+            WindowStep::Enter => {
+                self.timer_window = true;
+                window.set_timer_mode(true);
+                if window.window().is_fullscreen() {
+                    self.saved_window = None;
+                    return;
+                }
+                let size = window.window().size();
+                self.saved_window = Some(SavedWindow {
+                    size: size.to_logical(window.window().scale_factor()),
+                    on_top: window.get_on_top(),
+                });
+                window.set_on_top(true);
+                resize_later(window, TIMER_WINDOW_SIZE);
+            }
+            WindowStep::Leave => {
+                self.timer_window = false;
+                window.set_timer_mode(false);
+                if let Some(saved) = self.saved_window.take() {
+                    window.set_on_top(saved.on_top);
+                    resize_later(window, saved.size);
+                }
+            }
+        }
     }
 
     /// Position of the picked slot among the options, or -1 when none is picked.
@@ -407,7 +494,7 @@ impl AppState {
     pub fn on_logged_out(&mut self) {
         self.target = None;
         self.timer_ms = 0;
-        self.run = None;
+        self.origin = None;
         self.notice = "";
         self.on_login_required("");
     }
@@ -424,28 +511,19 @@ impl AppState {
         window.set_meetings(ModelRc::from(self.meetings_model.clone()));
     }
 
-    /// Pushes page, running state, timer, account and status lines to `window`.
-    pub fn render(&self, window: &MainWindow) {
+    /// Pushes page, running state, timer, account and status lines to `window`, and fits the
+    /// window shape to the page (see [`window_step`]).
+    pub fn render(&mut self, window: &MainWindow) {
+        self.sync_window(window);
         window.set_page(self.page);
         window.set_running_state(self.target.is_some());
         window.set_timer_time(self.timer_ms);
         window.set_current_time(Local::now().format("%H:%M").to_string().into());
-        let title = self.run.as_ref().map_or("", |meeting| {
-            if meeting.title.is_empty() {
-                "Meeting"
-            } else {
-                meeting.title.as_str()
-            }
-        });
-        window.set_meeting_title(title.into());
         let end = self
             .target
             .map_or_else(String::new, |target| target.format("%H:%M").to_string());
         window.set_timer_end(end.into());
-        let progress = self.run.as_ref().map_or(0.0, |meeting| {
-            meeting_remaining_fraction(meeting, self.timer_ms)
-        });
-        window.set_timer_progress(progress);
+        window.set_finish_seed(self.finish_seed);
         window.set_selected_slot(self.selected_index());
         window.set_signed_in(self.account.is_some());
         window.set_account_name(self.account.as_deref().unwrap_or_default().into());
@@ -519,19 +597,41 @@ fn visible_meetings(meetings: &[Meeting], now: &DateTime<FixedOffset>) -> Vec<Me
     shown
 }
 
-/// Fraction of the nominal meeting duration that remains, clamped to zero through one.
-///
-/// Invalid or sub-millisecond durations and expired countdowns give zero. A remaining time
-/// longer than the nominal duration gives one; starting late never resets the bar to full.
-fn meeting_remaining_fraction(meeting: &Meeting, remaining_ms: i64) -> f32 {
-    let total_ms = meeting
-        .end
-        .signed_duration_since(meeting.start)
-        .num_milliseconds();
-    if total_ms <= 0 || remaining_ms <= 0 {
-        return 0.0;
+/// True for the pages that show a countdown: the running one and the finished one.
+fn shows_countdown(page: Page) -> bool {
+    matches!(page, Page::TimerPage | Page::TimerFinished)
+}
+
+/// Decides how the window shape must change when the shown page moves from `in_timer_shape` to
+/// one that does (`wants_timer`) or does not show a countdown.
+fn window_step(in_timer_shape: bool, wants_timer: bool) -> WindowStep {
+    match (in_timer_shape, wants_timer) {
+        (false, true) => WindowStep::Enter,
+        (true, false) => WindowStep::Leave,
+        _ => WindowStep::Keep,
     }
-    (remaining_ms as f64 / total_ms as f64).clamp(0.0, 1.0) as f32
+}
+
+/// Queues a resize of `window` to `size` on the event loop.
+fn resize_later(window: &MainWindow, size: LogicalSize) {
+    let weak = window.as_weak();
+    if let Err(err) = slint::invoke_from_event_loop(move || {
+        if let Some(window) = weak.upgrade() {
+            window.window().set_size(size);
+        }
+    }) {
+        warn!("resize_later: cannot queue the resize: {err}");
+    }
+}
+
+/// Random non-negative number for the first caption of the finished page; 0 when the system
+/// source of randomness fails.
+fn random_seed() -> i32 {
+    let mut bytes = [0u8; 2];
+    if getrandom::fill(&mut bytes).is_err() {
+        return 0;
+    }
+    i32::from(u16::from_le_bytes(bytes))
 }
 
 /// Builds the row of `meeting`: times in `tz` as `HH:MM–HH:MM`, the title and the meta line
@@ -657,42 +757,6 @@ pub mod tests {
             .and_hms_opt(hour, minute, 0)
             .unwrap()
             .and_utc()
-    }
-
-    #[test]
-    fn late_meeting_start_keeps_the_nominal_progress() {
-        let now = Local::now().fixed_offset();
-        let meeting = meeting(
-            "daily",
-            now - chrono::Duration::minutes(10),
-            now + chrono::Duration::minutes(5),
-        );
-
-        let fraction = meeting_remaining_fraction(&meeting, 5 * 60 * 1000);
-
-        assert!((fraction - 1.0 / 3.0).abs() < f32::EPSILON);
-    }
-
-    #[test]
-    fn meeting_progress_clamps_clock_changes_and_expiry() {
-        let now = Local::now().fixed_offset();
-        let meeting = meeting("daily", now, now + chrono::Duration::minutes(15));
-
-        assert_eq!(meeting_remaining_fraction(&meeting, 30 * 60 * 1000), 1.0);
-        assert_eq!(meeting_remaining_fraction(&meeting, -1), 0.0);
-        assert_eq!(meeting_remaining_fraction(&meeting, 0), 0.0);
-    }
-
-    #[test]
-    fn invalid_meeting_duration_has_no_progress() {
-        let now = Local::now().fixed_offset();
-        let empty = meeting("empty", now, now);
-        let reversed = meeting("reversed", now, now - chrono::Duration::minutes(1));
-        let sub_millisecond = meeting("short", now, now + chrono::Duration::microseconds(1));
-
-        assert_eq!(meeting_remaining_fraction(&empty, 60_000), 0.0);
-        assert_eq!(meeting_remaining_fraction(&reversed, 60_000), 0.0);
-        assert_eq!(meeting_remaining_fraction(&sub_millisecond, 1), 0.0);
     }
 
     #[test]
@@ -1135,6 +1199,111 @@ pub mod tests {
 
         assert_eq!(state.meetings_status, MeetingsStatus::Loading);
         assert_eq!(state.meetings_model.row_count(), 0);
+    }
+
+    #[test]
+    fn stopping_a_manual_timer_returns_to_the_manual_page_even_when_signed_in() {
+        let mut state = state_with_meetings();
+        state.select_slot(1);
+        let _ = state.start_selected();
+
+        state.stop(StopType::UserStopped);
+
+        assert_eq!(state.page, Page::ManualPage);
+        assert_eq!(state.origin, None);
+    }
+
+    #[test]
+    fn stopping_a_meeting_timer_returns_to_the_meetings_page() {
+        let mut state = state_with_meetings();
+        let _ = state.select_meeting(1);
+
+        state.stop(StopType::UserStopped);
+
+        assert_eq!(state.page, Page::MeetingsPage);
+        assert_eq!(state.origin, None);
+    }
+
+    #[test]
+    fn finishing_keeps_the_origin_until_leaving_the_finished_page() {
+        let mut state = state_with_meetings();
+        let _ = state.select_meeting(0);
+
+        state.stop(StopType::TimerFinished);
+
+        assert_eq!(state.page, Page::TimerFinished);
+        assert_eq!(state.origin, Some(TimerOrigin::Meeting));
+        assert_eq!(state.target, None);
+        assert!(state.finish_seed >= 0);
+    }
+
+    #[test]
+    fn leaving_the_finished_page_after_a_manual_timer_goes_to_the_manual_page() {
+        let mut state = state_with_meetings();
+        state.select_slot(0);
+        let _ = state.start_selected();
+        state.stop(StopType::TimerFinished);
+
+        state.show_home();
+
+        assert_eq!(state.page, Page::ManualPage);
+        assert_eq!(state.origin, None);
+    }
+
+    #[test]
+    fn leaving_the_finished_page_after_a_meeting_timer_goes_to_the_meetings_page() {
+        let mut state = state_with_meetings();
+        let _ = state.select_meeting(0);
+        state.stop(StopType::TimerFinished);
+
+        state.show_home();
+
+        assert_eq!(state.page, Page::MeetingsPage);
+        assert_eq!(state.origin, None);
+    }
+
+    #[test]
+    fn a_meeting_timer_without_account_goes_to_the_manual_page() {
+        let mut state = state_with_meetings();
+        let _ = state.select_meeting(0);
+        state.account = None;
+
+        state.stop(StopType::UserStopped);
+
+        assert_eq!(state.page, Page::ManualPage);
+    }
+
+    #[test]
+    fn session_lost_forgets_the_origin() {
+        let mut state = state_with_meetings();
+        let _ = state.select_meeting(0);
+
+        state.on_session_lost("");
+
+        assert_eq!(state.origin, None);
+    }
+
+    #[test]
+    fn only_countdown_pages_use_the_timer_window() {
+        assert!(shows_countdown(Page::TimerPage));
+        assert!(shows_countdown(Page::TimerFinished));
+        assert!(!shows_countdown(Page::ManualPage));
+        assert!(!shows_countdown(Page::MeetingsPage));
+        assert!(!shows_countdown(Page::LoginPage));
+        assert!(!shows_countdown(Page::LoadingPage));
+    }
+
+    #[test]
+    fn window_shape_changes_only_when_crossing_into_or_out_of_the_countdown() {
+        assert_eq!(window_step(false, true), WindowStep::Enter);
+        assert_eq!(window_step(true, false), WindowStep::Leave);
+        assert_eq!(window_step(true, true), WindowStep::Keep);
+        assert_eq!(window_step(false, false), WindowStep::Keep);
+    }
+
+    #[test]
+    fn random_seed_is_never_negative() {
+        assert!(random_seed() >= 0);
     }
 
     #[test]

@@ -1,5 +1,5 @@
 import { ListView, AboutSlint } from "std-widgets.slint";
-import { AppTheme, AppText, PageTitle, PageSub, PillButton, PillKind, PlayIcon, HelpIcon, DotsIcon, LogoutIcon, LogoMark, FadeFill, FocusRing, AppMotion, MotionProgress } from "theme.slint";
+import { AppTheme, AppText, PageTitle, PageSub, PillButton, PillKind, PlayIcon, StopIcon, HomeIcon, HelpIcon, DotsIcon, LogoutIcon, LogoMark, FadeFill, FocusRing, AppMotion, MotionProgress } from "theme.slint";
 
 import "../assets/fonts/Manrope/static/Manrope-Regular.ttf";
 import "../assets/fonts/Manrope/static/Manrope-Medium.ttf";
@@ -240,6 +240,8 @@ component SlotCard inherits Rectangle {
     in property <bool> selected;
     callback clicked();
     forward-focus: focus;
+    min-width: 100px;
+    preferred-width: 100px;
     height: 112px;
     border-radius: AppTheme.radius-card;
 
@@ -463,98 +465,279 @@ component MeetingsPage inherits VerticalLayout {
     }
 }
 
-component TimerPage {
+// One fixed-width cell of the countdown, so the digits never shift while they tick.
+component ClockCell inherits Rectangle {
+    in property <string> glyph;
+    in property <bool> colon;
+    in property <length> size;
+    in property <color> tint;
+    width: root.colon ? root.size * 0.28 : root.size * 0.6;
+    height: root.size;
+    Text {
+        width: parent.width;
+        height: parent.height;
+        text: root.glyph;
+        font-size: root.size;
+        font-weight: 800;
+        color: root.tint;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+}
+
+// Countdown as MM:SS, or HH:MM:SS from one hour on. `size` shrinks to fit `max-width`.
+component ClockText inherits Rectangle {
+    in property <int> seconds;
+    in property <length> size;
+    in property <length> avail;
+    in property <color> tint;
+    private property <int> hours: floor(root.seconds / 3600);
+    private property <int> minutes: mod(floor(root.seconds / 60), 60);
+    private property <int> secs: mod(root.seconds, 60);
+    private property <length> fitted: min(root.size, root.avail / (root.hours > 0 ? 4.3 : 2.8));
+    height: root.fitted;
+    horizontal-stretch: 1;
+
+    accessible-role: text;
+    accessible-label: root.hours > 0
+        ? root.hours + ":" + (root.minutes < 10 ? "0" : "") + root.minutes + ":" + (root.secs < 10 ? "0" : "") + root.secs
+        : (root.minutes < 10 ? "0" : "") + root.minutes + ":" + (root.secs < 10 ? "0" : "") + root.secs;
+
+    HorizontalLayout {
+        alignment: center;
+        spacing: 0px;
+        if root.hours > 0 : ClockCell { glyph: floor(root.hours / 10); size: root.fitted; tint: root.tint; }
+        if root.hours > 0 : ClockCell { glyph: mod(root.hours, 10); size: root.fitted; tint: root.tint; }
+        if root.hours > 0 : ClockCell { glyph: ":"; colon: true; size: root.fitted; tint: root.tint; }
+        ClockCell { glyph: floor(root.minutes / 10); size: root.fitted; tint: root.tint; }
+        ClockCell { glyph: mod(root.minutes, 10); size: root.fitted; tint: root.tint; }
+        ClockCell { glyph: ":"; colon: true; size: root.fitted; tint: root.tint; }
+        ClockCell { glyph: floor(root.secs / 10); size: root.fitted; tint: root.tint; }
+        ClockCell { glyph: mod(root.secs, 10); size: root.fitted; tint: root.tint; }
+    }
+}
+
+// Countdown screen. Children go between the end line and the Stop button.
+component TimerPage inherits Rectangle {
     in property <duration> timer-time;
     in property <bool> running-state;
-    in property <string> meeting-title;
     in property <string> timer-end;
-    in property <float> progress;
     callback stop(StopType);
     callback tick();
+    // Compact rules below about 560px of width, large rules above.
+    private property <bool> compact: root.width < 560px;
+    private property <length> side: root.compact ? 16px : 32px;
 
     Timer {
         interval: 0.25s;
         running: root.running-state;
         triggered => { if (root.running-state) { root.tick(); } }
     }
-    pure function duration-text(value: duration) -> string {
-        let total = max(0, ceil(value / 1s));
-        let hours = floor(total / 3600);
-        let minutes = mod(floor(total / 60), 60);
-        let seconds = mod(total, 60);
-        return (hours > 0 ? (hours < 10 ? "0" : "") + hours + ":" : "")
-            + (minutes < 10 ? "0" : "") + minutes + ":"
-            + (seconds < 10 ? "0" : "") + seconds;
-    }
 
-    if root.meeting-title == "" : VerticalLayout {
-        padding: 32px;
-        spacing: 40px;
+    VerticalLayout {
+        padding-left: root.side;
+        padding-right: root.side;
+        padding-top: root.compact ? 12px : 32px;
+        padding-bottom: root.compact ? 12px : 40px;
         alignment: center;
-        AppText {
-            text: root.duration-text(root.timer-time);
-            color: AppTheme.text-brand;
-            font-size: min(144px, root.width / (root.timer-time >= 3600s ? 7.5 : 5.4));
-            font-weight: 800;
+        ClockText {
+            seconds: max(0, ceil(root.timer-time / 1s));
+            size: root.compact ? 84px : clamp(72px, root.width * 0.16, 160px);
+            avail: root.width - 2 * root.side;
+            tint: root.timer-time < 300s ? AppTheme.orange : AppTheme.text-brand;
+        }
+        Rectangle { height: root.compact ? 4px : 12px; }
+        Text {
+            text: "Fine alle " + root.timer-end;
+            font-size: root.compact ? 13px : 19px;
+            color: AppTheme.text-secondary;
             horizontal-alignment: center;
+        }
+        @children
+        Rectangle {
+            min-height: root.compact ? 24px : 16px;
+            max-height: root.compact ? 32px : 112px;
+            vertical-stretch: 1;
         }
         HorizontalLayout {
             alignment: center;
             PillButton {
                 text: "Stop";
-                kind: PillKind.ghost;
+                kind: PillKind.outline;
+                compact: root.compact;
                 clicked => { root.stop(StopType.UserStopped); }
+                StopIcon {
+                    width: root.compact ? 12px : 16px;
+                    height: root.compact ? 12px : 16px;
+                    tint: parent.foreground;
+                }
             }
         }
     }
+}
 
-    if root.meeting-title != "" : VerticalLayout {
-        padding: 32px;
-        spacing: 16px;
+component ConfettiPiece inherits Rectangle {
+    in property <int> index;
+    in property <duration> elapsed;
+    in property <duration> delay;
+    in property <length> area-width;
+    in property <length> area-height;
+    in property <color> tint;
+    pure function rnd(k: int) -> float {
+        let v = sin((root.index * 12.9898 + k * 78.233) * 1rad) * 43758.5453;
+        return v - floor(v);
+    }
+    // Frames at 60 per second since the piece was thrown.
+    private property <float> n: max(0, (root.elapsed - root.delay) / 1ms * 0.06);
+    private property <float> vx: (rnd(1) - 0.5) * 14;
+    private property <float> vy: -rnd(2) * 13 - 4;
+    private property <length> px: root.area-width / 2 + (rnd(3) - 0.5) * root.area-width * 0.3
+        + root.vx * (1 - pow(0.985, root.n)) / 0.015 * 1px;
+    private property <length> py: root.area-height * 0.45 + (root.vy * root.n + 0.175 * root.n * (root.n + 1)) * 1px;
+    private property <float> fade: clamp(1 - (root.py - root.area-height * 0.9) / (root.area-height * 0.1 + 40px), 0, 1);
+    x: root.px;
+    y: root.py;
+    width: (6 + rnd(4) * 6) * 1px;
+    height: (8 + rnd(5) * 8) * 1px;
+    background: root.tint;
+    opacity: root.fade;
+    visible: root.elapsed >= root.delay && root.fade > 0;
+    transform-rotation: (rnd(6) * 3.14159 + (rnd(7) - 0.5) * 0.3 * root.n) * 57.2958deg;
+}
+
+// "Meeting terminato!" with rotating captions and confetti.
+component FinishedPage inherits Rectangle {
+    in property <int> seed;
+    callback home();
+    private property <bool> compact: root.width < 560px;
+    private property <length> side: root.compact ? 16px : 32px;
+    private property <[string]> captions: [
+        "Finalmente.",
+        "Poteva essere una mail. Ma ce l’abbiamo fatta.",
+        "Nessun partecipante è stato maltrattato.",
+        "GG. Si va a pranzo?",
+        "Il countdown ha vinto, ancora una volta.",
+        "Ultima slide? Non c’era nessuna slide.",
+        "Mission accomplished (quella di finire in orario).",
+        "Stand-up seduto, ma in orario.",
+        "Le colonne hanno retto.",
+    ];
+    private property <int> current;
+    private property <int> previous;
+    private property <duration> started;
+    private property <bool> settled;
+    private property <duration> elapsed: root.settled ? 12s : animation-tick() - root.started;
+    private property <float> pop: clamp(intro.value * 1100 / 700, 0, 1);
+    private property <float> rise: clamp((intro.value * 1100 - 500) / 600, 0, 1);
+    private property <float> swap-in: clamp((swap.value - 0.43) / 0.57, 0, 1);
+    private property <float> swap-out: clamp(swap.value / 0.43, 0, 1);
+
+    intro := MotionProgress { duration: 1100ms; }
+    swap := MotionProgress { duration: 700ms; }
+
+    init => {
+        root.started = animation-tick();
+        root.current = mod(root.seed, root.captions.length);
+        root.previous = root.current;
+        intro.restart();
+    }
+    Timer {
+        interval: 2800ms;
+        running: true;
+        triggered => {
+            root.previous = root.current;
+            root.current = mod(root.current + 1, root.captions.length);
+            swap.restart();
+        }
+    }
+    Timer {
+        interval: 12s;
+        running: !root.settled;
+        triggered => { root.settled = true; }
+    }
+
+    if !AppMotion.reduced : Rectangle {
+        width: parent.width;
+        height: parent.height;
+        for i in 140 : ConfettiPiece {
+            index: i;
+            elapsed: root.elapsed;
+            delay: 0ms;
+            area-width: root.width;
+            area-height: root.height;
+            tint: i < 0 ? #000000 : (mod(i, 5) == 0 ? #6B2FBF : (mod(i, 5) == 1 ? #E07B00 : (mod(i, 5) == 2 ? #F6C453 : (mod(i, 5) == 3 ? #C9B3F0 : (AppTheme.dark ? #F3EFF9 : #1E1A26)))));
+        }
+        for i in 40 : ConfettiPiece {
+            index: 200 + i;
+            elapsed: root.elapsed;
+            delay: 1800ms + i * 155ms;
+            area-width: root.width;
+            area-height: root.height;
+            tint: mod(i, 5) == 0 ? #6B2FBF : (mod(i, 5) == 1 ? #E07B00 : (mod(i, 5) == 2 ? #F6C453 : (mod(i, 5) == 3 ? #C9B3F0 : (AppTheme.dark ? #F3EFF9 : #1E1A26))));
+        }
+    }
+
+    VerticalLayout {
+        padding-left: root.side;
+        padding-right: root.side;
+        padding-top: root.compact ? 12px : 32px;
+        padding-bottom: root.compact ? 12px : 40px;
         alignment: center;
-        AppText {
-            text: root.meeting-title;
-            font-size: 20px;
-            font-weight: 700;
-            horizontal-alignment: center;
-            overflow: elide;
-        }
-        AppText {
-            text: "Termina alle " + root.timer-end;
-            color: AppTheme.text-secondary;
-            horizontal-alignment: center;
-        }
-        AppText {
-            text: root.duration-text(root.timer-time);
-            color: AppTheme.text-brand;
-            font-size: min(110px, root.width / (root.timer-time >= 3600s ? 7.5 : 5.4));
+        spacing: root.compact ? 8px : 24px;
+        Text {
+            text: "Meeting terminato!";
+            font-size: root.compact ? 30px : clamp(34px, root.width * 0.06, 56px);
             font-weight: 800;
+            letter-spacing: -0.03 * self.font-size;
+            color: AppTheme.text-brand;
             horizontal-alignment: center;
+            wrap: word-wrap;
+            opacity: root.pop < 0.6 ? root.pop / 0.6 : 1;
+            transform-scale: root.pop < 0.6 ? 0.4 + 0.68 * (root.pop / 0.6) : 1.08 - 0.08 * ((root.pop - 0.6) / 0.4);
+            transform-rotation: (root.pop < 0.6 ? -6 + 8 * (root.pop / 0.6) : 2 - 2 * ((root.pop - 0.6) / 0.4)) * 1deg;
         }
         HorizontalLayout {
             alignment: center;
             Rectangle {
-                width: min(680px, root.width - 64px);
-                height: 6px;
-                border-radius: 3px;
-                background: AppTheme.border-subtle;
-                progress-fill := Rectangle {
-                    x: 0px;
-                    y: 0px;
-                    width: parent.width * clamp(root.progress, 0, 1);
+                width: min(340px, root.width - 2 * root.side);
+                height: root.compact ? 34px : 54px;
+                Text {
+                    width: parent.width;
                     height: parent.height;
-                    border-radius: 3px;
-                    background: AppTheme.brand;
+                    text: root.captions[swap.active && swap.value < 0.43 ? root.previous : root.current];
+                    font-size: root.compact ? 12px : 18px;
+                    font-weight: 600;
+                    color: AppTheme.text-secondary;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    wrap: word-wrap;
+                    opacity: swap.active ? (swap.value < 0.43 ? 1 - root.swap-out : root.swap-in) : 1;
+                    y: swap.active ? (swap.value < 0.43 ? -8px * root.swap-out : 8px * (1 - root.swap-in)) : 0px;
                 }
             }
         }
+        Rectangle { height: 16px; }
         HorizontalLayout {
             alignment: center;
-            spacing: 20px;
-            PillButton {
-                text: "Stop";
-                kind: PillKind.ghost;
-                clicked => { root.stop(StopType.UserStopped); }
+            Rectangle {
+                width: home-button.preferred-width;
+                height: home-button.preferred-height;
+                home-button := PillButton {
+                    width: parent.width;
+                    height: parent.height;
+                    y: (1 - root.rise) * 12px;
+                    opacity: root.rise;
+                    text: "Torna alla home";
+                    kind: PillKind.outline;
+                    compact: root.compact;
+                    clicked => { root.home(); }
+                    HomeIcon {
+                        width: root.compact ? 12px : 16px;
+                        height: root.compact ? 12px : 16px;
+                        tint: parent.foreground;
+                    }
+                }
             }
         }
     }
@@ -565,23 +748,23 @@ export component MainWindow inherits Window {
     background: AppTheme.page;
     icon: @image-url("../assets/icon_256.png");
     preferred-width: 880px;
-    min-width: 800px;
+    min-width: root.timer-mode ? 360px : 800px;
     preferred-height: 660px;
-    min-height: 600px;
+    min-height: root.timer-mode ? 240px : 600px;
     default-font-family: "Manrope";
     forward-focus: scope;
 
-    property <bool> on-top: false;
+    in-out property <bool> on-top: false;
     always-on-top: on-top;
+    // True while a countdown screen shows; allows the small window.
+    in property <bool> timer-mode: false;
 
     in-out property <bool> reduce-motion <=> AppMotion.reduced;
     page-fade := MotionProgress { duration: 180ms; }
-    finish-pulse := MotionProgress { duration: 600ms; }
 
     in property <string> current-time;
-    in property <string> meeting-title;
     in property <string> timer-end;
-    in property <float> timer-progress;
+    in property <int> finish-seed;
 
     in property     <duration> timer-time: 3s;
     in property     <bool>     running-state: false;
@@ -616,10 +799,7 @@ export component MainWindow inherits Window {
     callback close-finished();
     callback logout();
 
-    changed page => {
-        page-fade.restart();
-        if (page == Page.TimerFinished) { finish-pulse.restart(); }
-    }
+    changed page => { page-fade.restart(); }
 
     if is-macos: MenuBar {
 	Menu {
@@ -771,30 +951,15 @@ export component MainWindow inherits Window {
             height: root.height;
             timer-time: root.timer-time;
             running-state: root.running-state;
-            meeting-title: root.meeting-title;
             timer-end: root.timer-end;
-            progress: root.timer-progress;
             stop(stop-type) => { root.stop(stop-type); }
             tick => { root.tick(); }
         }
-        if page == Page.TimerFinished : VerticalLayout {
-            padding: 32px;
-            spacing: 24px;
-            alignment: center;
-            finish-message := PageTitle {
-                opacity: finish-pulse.active ? 1 - 0.08 * sin(180deg * finish-pulse.value) : 1;
-                text: "Congrats!\nScrum ceremony finished";
-                color: AppTheme.text-brand;
-                horizontal-alignment: center;
-            }
-            AppText { text: "Now get the fuck outta here"; font-size: 24px; horizontal-alignment: center; }
-            HorizontalLayout {
-                alignment: center;
-                PillButton {
-                    text: root.signed-in ? "Torna ai meeting" : "Torna agli orari";
-                    clicked => { root.close-finished(); }
-                }
-            }
+        if page == Page.TimerFinished : FinishedPage {
+            width: root.width;
+            height: root.height;
+            seed: root.finish-seed;
+            home => { root.close-finished(); }
         }
     }
     if on-top : Rectangle {
