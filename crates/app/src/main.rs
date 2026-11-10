@@ -208,6 +208,62 @@ fn main() -> anyhow::Result<()> {
         }
     });
 
+    main_window.on_set_daily({
+        let window_weak = main_window.as_weak();
+        let state = app_state.clone();
+
+        move |index, on| {
+            let Some(window) = window_weak.upgrade() else {
+                return;
+            };
+            let mut state = state.borrow_mut();
+            state.set_daily(index, on);
+            state.render(&window);
+        }
+    });
+
+    main_window.on_toggle_daily_pause({
+        let window_weak = main_window.as_weak();
+        let state = app_state.clone();
+
+        move || {
+            let Some(window) = window_weak.upgrade() else {
+                return;
+            };
+            let mut state = state.borrow_mut();
+            state.toggle_daily_pause();
+            state.render(&window);
+        }
+    });
+
+    main_window.on_next_daily_speaker({
+        let window_weak = main_window.as_weak();
+        let state = app_state.clone();
+
+        move || {
+            let Some(window) = window_weak.upgrade() else {
+                return;
+            };
+            let mut state = state.borrow_mut();
+            state.next_daily_speaker();
+            state.render(&window);
+        }
+    });
+
+    main_window.on_adjust_daily_time({
+        let window_weak = main_window.as_weak();
+        let state = app_state.clone();
+
+        move |value| {
+            let Some(window) = window_weak.upgrade() else {
+                return;
+            };
+            let mut state = state.borrow_mut();
+            state.adjust_daily_time(value);
+            state.render(&window);
+        }
+    });
+
     main_window.on_refresh_meetings({
         let session = session.clone();
 

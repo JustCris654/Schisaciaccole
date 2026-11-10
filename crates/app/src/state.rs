@@ -1,5 +1,6 @@
 //! Application state: the single source of truth that the Slint UI renders.
 
+use std::collections::HashMap;
 use std::fmt::Display;
 use std::rc::Rc;
 
@@ -7,10 +8,11 @@ use chrono::{DateTime, FixedOffset, Local, TimeZone};
 use log::{debug, error, info, warn};
 use schisaciaccole_core::api::{Me, Meeting};
 use schisaciaccole_core::{
-    DEFAULT_OPTION_COUNT, QuarterOption, SpeakingTurn, TickOutcome, TimeError, evaluate,
-    max_turn_minutes, participants, quarter_options,
+    DEFAULT_OPTION_COUNT, DailyRound, QuarterOption, SpeakingTurn, TickOutcome, TimeError,
+    abbreviate_name, evaluate, looks_daily, max_turn_minutes, participants, quarter_options,
+    shuffled,
 };
-use slint::{ComponentHandle, LogicalSize, ModelRc, SharedString, VecModel};
+use slint::{ComponentHandle, LogicalSize, Model, ModelRc, SharedString, VecModel};
 
 use crate::ui::{MainWindow, MeetingRow, Page, StopType, TimeOption, TurnView};
 
@@ -26,6 +28,8 @@ pub const LOGOUT_NOTICE: &str = "Disconnessione…";
 /// Minutes a speaking turn starts with.
 const DEFAULT_TURN_MINUTES: u32 = 5;
 const MINUTE_MS: i64 = 60_000;
+/// Name shown by the Daily screen once everybody has spoken.
+const DAILY_FINISHED_NAME: &str = "Tutti hanno parlato";
 
 /// Sound the caller must play after a state update.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,6 +120,13 @@ pub struct AppState {
     turn_minutes: u32,
     /// The running speaking turn; `Some` only in [`TurnView::Running`].
     turn: Option<SpeakingTurn>,
+    /// Daily switch set by the user, per calendar event id, for the events still listed.
+    daily_choices: HashMap<String, bool>,
+    /// The Daily round; `Some` only in [`TurnView::Daily`].
+    daily: Option<DailyRound>,
+    /// Chips last pushed to the window, to avoid rebuilding them every tick.
+    daily_chips: Vec<String>,
+    daily_chips_model: Rc<VecModel<SharedString>>,
     /// Random number the finished page turns into its first caption.
     finish_seed: i32,
     /// True while the window is in its countdown shape (small and on top).
@@ -158,6 +169,10 @@ impl AppState {
             turn_selected: 0,
             turn_minutes: DEFAULT_TURN_MINUTES,
             turn: None,
+            daily_choices: HashMap::new(),
+            daily: None,
+            daily_chips: Vec::new(),
+            daily_chips_model: Rc::new(VecModel::from(Vec::new())),
             timer_window: false,
             saved_window: None,
         })
@@ -239,8 +254,10 @@ impl AppState {
 
     /// Starts the countdown to the end of the meeting in row `index` and moves to the timer page.
     ///
-    /// Works for a meeting in progress and for one that has not started. The countdown is plain:
-    /// it shows the end time and has no speaking slots. Returns the sound of the first update (see [`AppState::tick`]), which is
+    /// Works for a meeting in progress and for one that has not started. With the Daily switch of
+    /// the row on and at least one participant the Daily screen starts (see
+    /// [`AppState::set_daily`]); otherwise the countdown is plain, with optional speaking turns.
+    /// Returns the sound of the first update (see [`AppState::tick`]), which is
     /// [`TickSound::MeetingEnd`] only if the end is reached at once.
     ///
     /// Edge cases: a negative `index` or one out of range is logged and ignored; the state does
@@ -261,11 +278,21 @@ impl AppState {
             meeting.end.with_timezone(&Local).format("%H:%M")
         );
         let target = meeting.end.with_timezone(&Local);
-        let names = participants(meeting)
+        let names: Vec<String> = participants(meeting)
             .into_iter()
             .map(|participant| participant.name)
             .collect();
-        self.reset_turns(names);
+        let use_daily = self.daily_on(meeting) && !names.is_empty();
+        self.reset_turns(names.clone());
+        if use_daily {
+            let round = DailyRound::new(
+                shuffled(names, random_u64()),
+                target.timestamp_millis(),
+                Local::now().timestamp_millis(),
+            );
+            self.daily = Some(round);
+            self.turn_view = TurnView::Daily;
+        }
         self.origin = Some(TimerOrigin::Meeting);
         self.page = Page::TimerPage;
         self.target = Some(target);
@@ -434,6 +461,69 @@ impl AppState {
         }
     }
 
+    /// Sets the Daily switch of the meeting in row `index` and remembers it for that calendar
+    /// event while the app runs.
+    ///
+    /// Edge cases: a negative or out of range `index` is logged and ignored.
+    pub fn set_daily(&mut self, index: i32, on: bool) {
+        let Ok(position) = usize::try_from(index) else {
+            warn!("set_daily: ignoring negative meeting index {index}");
+            return;
+        };
+        let Some(meeting) = self.shown.get(position) else {
+            warn!("set_daily: ignoring out of range meeting index {index}");
+            return;
+        };
+        self.daily_choices.insert(meeting.event_id.clone(), on);
+        let row = meeting_row(
+            meeting,
+            &Local::now().fixed_offset(),
+            &Local,
+            self.daily_choices.get(&meeting.event_id).copied(),
+        );
+        self.meetings_model.set_row_data(position, row);
+    }
+
+    /// True when the Daily switch of `meeting` is on: the user's choice when there is one,
+    /// otherwise whether the title looks like a daily.
+    fn daily_on(&self, meeting: &Meeting) -> bool {
+        match self.daily_choices.get(&meeting.event_id) {
+            Some(choice) => *choice,
+            None => looks_daily(&meeting.title),
+        }
+    }
+
+    /// Pauses the Daily speaker, or resumes them.
+    ///
+    /// Edge cases: ignored outside the Daily screen and when everybody has spoken.
+    pub fn toggle_daily_pause(&mut self) {
+        let now_ms = Local::now().timestamp_millis();
+        if let Some(round) = self.daily.as_mut() {
+            round.toggle_pause(now_ms);
+        }
+    }
+
+    /// Passes the word to the next Daily speaker.
+    ///
+    /// Edge cases: ignored outside the Daily screen and when everybody has spoken.
+    pub fn next_daily_speaker(&mut self) {
+        let now_ms = Local::now().timestamp_millis();
+        if let Some(round) = self.daily.as_mut() {
+            round.next(now_ms);
+        }
+    }
+
+    /// Adds `delta_minutes` (negative to remove) to the Daily speaker, within what the core round
+    /// allows.
+    ///
+    /// Edge cases: ignored outside the Daily screen and when everybody has spoken.
+    pub fn adjust_daily_time(&mut self, delta_minutes: i32) {
+        let now_ms = Local::now().timestamp_millis();
+        if let Some(round) = self.daily.as_mut() {
+            round.adjust(now_ms, i64::from(delta_minutes) * MINUTE_MS);
+        }
+    }
+
     /// Forgets every turn setting and installs `names` as the participants of a new countdown:
     /// plain view, first participant chosen, default minutes.
     fn reset_turns(&mut self, names: Vec<String>) {
@@ -444,6 +534,7 @@ impl AppState {
         self.turn_selected = 0;
         self.turn_minutes = DEFAULT_TURN_MINUTES;
         self.turn = None;
+        self.daily = None;
     }
 
     /// Current time and countdown end in milliseconds; `None` without a running countdown.
@@ -467,6 +558,16 @@ impl AppState {
             TurnView::Settings => {
                 self.turn_minutes = clamp_turn_minutes(self.turn_minutes, now_ms, end_ms);
                 TickSound::None
+            }
+            TurnView::Daily => {
+                let Some(round) = self.daily.as_mut() else {
+                    return TickSound::None;
+                };
+                if round.tick(now_ms) {
+                    TickSound::TurnEnd
+                } else {
+                    TickSound::None
+                }
             }
             TurnView::Running => {
                 let Some(turn) = self.turn.as_mut() else {
@@ -507,6 +608,8 @@ impl AppState {
 
     /// Replaces the meetings with those of a successful fetch and shows them.
     pub fn on_meetings_loaded(&mut self, meetings: Vec<Meeting>) {
+        self.daily_choices
+            .retain(|id, _| meetings.iter().any(|meeting| meeting.event_id == *id));
         self.meetings = meetings;
         self.meetings_loaded = true;
         self.meetings_status = MeetingsStatus::Ready;
@@ -539,7 +642,7 @@ impl AppState {
     }
 
     /// Pushes the turn view, the settings and the running turn to `window`.
-    fn render_turns(&self, window: &MainWindow) {
+    fn render_turns(&mut self, window: &MainWindow) {
         let (now_ms, end_ms) = self.turn_clock().unwrap_or((0, 0));
         window.set_turn_available(self.turns_available());
         window.set_turn_view(self.turn_view);
@@ -558,6 +661,39 @@ impl AppState {
         window.set_turn_speaker(name.into());
         window.set_turn_left(left);
         window.set_turn_can_add(can_add);
+        self.render_daily(window, now_ms);
+    }
+
+    /// Pushes the Daily screen to `window`; without a round everything is empty.
+    fn render_daily(&mut self, window: &MainWindow, now_ms: i64) {
+        let view = match &self.daily {
+            Some(round) => daily_view(round, now_ms),
+            None => DailyView {
+                name: String::new(),
+                short_name: String::new(),
+                left_ms: 0,
+                paused: false,
+                finished: false,
+                can_add: false,
+                can_remove: false,
+                chips: Vec::new(),
+                remaining: String::new(),
+            },
+        };
+        window.set_daily_name(view.name.as_str().into());
+        window.set_daily_short_name(view.short_name.as_str().into());
+        window.set_daily_left(view.left_ms);
+        window.set_daily_paused(view.paused);
+        window.set_daily_finished(view.finished);
+        window.set_daily_can_add(view.can_add);
+        window.set_daily_can_remove(view.can_remove);
+        window.set_daily_remaining(view.remaining.as_str().into());
+        if self.daily_chips != view.chips {
+            let rows: Vec<SharedString> =
+                view.chips.iter().map(|chip| chip.as_str().into()).collect();
+            self.daily_chips_model.set_vec(rows);
+            self.daily_chips = view.chips;
+        }
     }
 
     /// Shrinks the window to the countdown shape when the countdown screens open and restores it
@@ -632,7 +768,8 @@ impl AppState {
         let shown = visible_meetings(&self.meetings, &now.fixed_offset());
         let mut rows = Vec::with_capacity(shown.len());
         for meeting in &shown {
-            rows.push(meeting_row(meeting, &now.fixed_offset(), &Local));
+            let choice = self.daily_choices.get(&meeting.event_id).copied();
+            rows.push(meeting_row(meeting, &now.fixed_offset(), &Local, choice));
         }
         self.shown = shown;
         self.meetings_model.set_vec(rows);
@@ -722,6 +859,7 @@ impl AppState {
     /// Binds the shared participant names model to `window`; call once after creating the window.
     pub fn bind_turns(&self, window: &MainWindow) {
         window.set_turn_names(ModelRc::from(self.turn_names_model.clone()));
+        window.set_daily_chips(ModelRc::from(self.daily_chips_model.clone()));
     }
 
     /// Pushes page, running state, timer, account and status lines to `window`, and fits the
@@ -854,13 +992,92 @@ fn random_seed() -> i32 {
     i32::from(u16::from_le_bytes(bytes))
 }
 
-/// Builds the row of `meeting`: times in `tz` as `HH:MM–HH:MM`, the title and the meta line
-/// (see [`meeting_meta`]).
-fn meeting_row<Tz: TimeZone>(meeting: &Meeting, now: &DateTime<FixedOffset>, tz: &Tz) -> MeetingRow
+/// Random seed for the Daily speaking order; 0 when the system source of randomness fails (the
+/// order is then the same every time, but still a valid permutation).
+fn random_u64() -> u64 {
+    let mut bytes = [0u8; 8];
+    if getrandom::fill(&mut bytes).is_err() {
+        return 0;
+    }
+    u64::from_le_bytes(bytes)
+}
+
+/// What the Daily screen shows for a round at one instant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DailyView {
+    /// Full name of the speaker, or the finished text.
+    name: String,
+    /// Speaker name shortened for the compact layout.
+    short_name: String,
+    left_ms: i64,
+    paused: bool,
+    finished: bool,
+    can_add: bool,
+    can_remove: bool,
+    /// One "Name ~mm:ss" per upcoming person, in speaking order.
+    chips: Vec<String>,
+    /// Compact line under the speaker bar: "3 persone ~ 03:08", "Ultimo turno" or empty.
+    remaining: String,
+}
+
+/// Builds the [`DailyView`] of `round` at `now_ms`.
+///
+/// Edge cases: a finished round has the finished name, no chips, no remaining line and nothing
+/// enabled. The estimate is rounded to the nearest second.
+fn daily_view(round: &DailyRound, now_ms: i64) -> DailyView {
+    let share = format_minutes_seconds(round.share_ms());
+    let mut chips = Vec::with_capacity(round.upcoming().len());
+    for name in round.upcoming() {
+        chips.push(format!("{name} ~{share}"));
+    }
+    let remaining = match round.upcoming().len() {
+        0 if round.is_finished() => String::new(),
+        0 => "Ultimo turno".to_string(),
+        1 => format!("1 persona ~ {share}"),
+        count => format!("{count} persone ~ {share}"),
+    };
+    let (name, short_name) = match round.current() {
+        Some(name) => (name.to_string(), abbreviate_name(name, 1)),
+        None => (
+            DAILY_FINISHED_NAME.to_string(),
+            DAILY_FINISHED_NAME.to_string(),
+        ),
+    };
+    DailyView {
+        name,
+        short_name,
+        left_ms: round.current_left_ms(now_ms),
+        paused: round.is_paused(),
+        finished: round.is_finished(),
+        can_add: round.can_add(now_ms),
+        can_remove: round.can_remove(now_ms),
+        chips,
+        remaining,
+    }
+}
+
+/// Formats milliseconds as `MM:SS` rounded to the nearest second; minutes can pass 59.
+fn format_minutes_seconds(ms: i64) -> String {
+    let total = (ms.max(0) + 500) / 1000;
+    format!("{:02}:{:02}", total / 60, total % 60)
+}
+
+/// Builds the row of `meeting`: times in `tz` as `HH:MM–HH:MM`, the title, the meta line (see
+/// [`meeting_meta`]) and the Daily switch: `daily_choice` when the user set it, otherwise on for
+/// a title that looks like a daily. `daily_auto` tells that the title looks like a daily.
+fn meeting_row<Tz: TimeZone>(
+    meeting: &Meeting,
+    now: &DateTime<FixedOffset>,
+    tz: &Tz,
+    daily_choice: Option<bool>,
+) -> MeetingRow
 where
     Tz::Offset: Display,
 {
+    let daily_auto = looks_daily(&meeting.title);
     MeetingRow {
+        daily_on: daily_choice.unwrap_or(daily_auto),
+        daily_auto,
         time_range: time_range(meeting, tz).into(),
         title: meeting.title.as_str().into(),
         meta: meeting_meta(meeting, now).into(),
@@ -1100,7 +1317,7 @@ pub mod tests {
         let plus_two = FixedOffset::east_opt(2 * 3600).unwrap();
         let meeting = meeting("Daily", at(7, 5), at(7, 20));
 
-        let row = meeting_row(&meeting, &at(6, 0), &plus_two);
+        let row = meeting_row(&meeting, &at(6, 0), &plus_two, None);
 
         assert_eq!(row.time_range, "09:05–09:20");
         assert_eq!(row.title, "Daily");
@@ -1110,9 +1327,9 @@ pub mod tests {
     fn row_marks_the_meeting_in_progress() {
         let meeting = meeting("Daily", at(9, 0), at(10, 0));
 
-        assert!(meeting_row(&meeting, &at(9, 0), &Utc).in_progress);
-        assert!(!meeting_row(&meeting, &at(8, 59), &Utc).in_progress);
-        assert!(!meeting_row(&meeting, &at(10, 0), &Utc).in_progress);
+        assert!(meeting_row(&meeting, &at(9, 0), &Utc, None).in_progress);
+        assert!(!meeting_row(&meeting, &at(8, 59), &Utc, None).in_progress);
+        assert!(!meeting_row(&meeting, &at(10, 0), &Utc, None).in_progress);
     }
 
     fn meta(meeting: &Meeting, now: DateTime<FixedOffset>) -> String {
@@ -1803,6 +2020,303 @@ pub mod tests {
         assert_eq!(state.page, Page::TimerFinished);
         assert_eq!(state.turn_view, TurnView::Plain);
         assert!(state.turn.is_none());
+    }
+
+    /// State with one meeting of `names` that ends in 10 minutes, listed on the meetings page.
+    fn state_with_one_meeting(title: &str, names: &[&str]) -> AppState {
+        let now = Local::now().fixed_offset();
+        let mut state = sample_state();
+        state.on_signed_in(&me(None));
+        let mut talk = meeting(
+            title,
+            now - chrono::Duration::minutes(1),
+            now + chrono::Duration::minutes(10),
+        );
+        talk.attendees = names.iter().map(|name| person(name)).collect();
+        state.on_meetings_loaded(vec![talk]);
+        state
+    }
+
+    fn row(state: &AppState, index: usize) -> MeetingRow {
+        state.meetings_model.row_data(index).unwrap()
+    }
+
+    fn daily_state() -> AppState {
+        let mut state = state_with_one_meeting("Daily PMO", &["Zoe", "Ann", "Bob"]);
+        let _ = state.select_meeting(0);
+        state
+    }
+
+    fn round_of(names: &[&str]) -> DailyRound {
+        let order = names.iter().map(|name| name.to_string()).collect();
+        DailyRound::new(order, 600_000, 0)
+    }
+
+    #[test]
+    fn the_switch_starts_on_for_a_daily_title_only() {
+        let daily = state_with_one_meeting("Daily PMO", &["Ann"]);
+        let other = state_with_one_meeting("Retro", &["Ann"]);
+
+        assert!(row(&daily, 0).daily_on);
+        assert!(row(&daily, 0).daily_auto);
+        assert!(!row(&other, 0).daily_on);
+        assert!(!row(&other, 0).daily_auto);
+    }
+
+    #[test]
+    fn the_auto_badge_condition_survives_switching_off() {
+        let mut state = state_with_one_meeting("Daily PMO", &["Ann"]);
+
+        state.set_daily(0, false);
+
+        assert!(!row(&state, 0).daily_on);
+        assert!(row(&state, 0).daily_auto);
+    }
+
+    #[test]
+    fn the_user_choice_survives_a_refresh_of_the_list() {
+        let mut state = state_with_one_meeting("Retro", &["Ann"]);
+        state.set_daily(0, true);
+        let listed = state.meetings.clone();
+
+        state.on_meetings_loaded(listed);
+
+        assert!(row(&state, 0).daily_on);
+    }
+
+    #[test]
+    fn the_choice_is_dropped_when_the_event_is_no_longer_listed() {
+        let mut state = state_with_one_meeting("Retro", &["Ann"]);
+        state.set_daily(0, true);
+
+        state.on_meetings_loaded(Vec::new());
+
+        assert!(state.daily_choices.is_empty());
+    }
+
+    #[test]
+    fn setting_the_switch_of_an_invalid_row_is_ignored() {
+        let mut state = state_with_one_meeting("Retro", &["Ann"]);
+
+        state.set_daily(-1, true);
+        state.set_daily(5, true);
+
+        assert!(state.daily_choices.is_empty());
+    }
+
+    #[test]
+    fn starting_with_the_switch_on_opens_the_daily_screen() {
+        let state = daily_state();
+
+        assert_eq!(state.turn_view, TurnView::Daily);
+        assert_eq!(state.page, Page::TimerPage);
+        assert!(state.daily.is_some());
+    }
+
+    #[test]
+    fn starting_with_the_switch_on_but_nobody_to_hear_is_a_plain_timer() {
+        let mut state = state_with_one_meeting("Daily PMO", &[]);
+
+        let _ = state.select_meeting(0);
+
+        assert_eq!(state.turn_view, TurnView::Plain);
+        assert!(state.daily.is_none());
+    }
+
+    #[test]
+    fn starting_with_the_switch_off_is_a_plain_timer() {
+        let mut state = state_with_one_meeting("Daily PMO", &["Ann", "Bob"]);
+        state.set_daily(0, false);
+
+        let _ = state.select_meeting(0);
+
+        assert_eq!(state.turn_view, TurnView::Plain);
+        assert!(state.daily.is_none());
+        assert!(state.turns_available());
+    }
+
+    #[test]
+    fn the_switch_on_makes_a_non_daily_title_start_the_daily() {
+        let mut state = state_with_one_meeting("Retro", &["Ann", "Bob"]);
+        state.set_daily(0, true);
+
+        let _ = state.select_meeting(0);
+
+        assert_eq!(state.turn_view, TurnView::Daily);
+    }
+
+    #[test]
+    fn the_speaking_order_is_a_permutation_of_the_participants() {
+        let state = daily_state();
+        let round = state.daily.as_ref().unwrap();
+
+        let mut order = vec![round.current().unwrap().to_string()];
+        order.extend(round.upcoming().iter().cloned());
+        order.sort();
+
+        assert_eq!(order, vec!["Ann", "Bob", "Zoe"]);
+    }
+
+    #[test]
+    fn pause_and_resume_reach_the_round() {
+        let mut state = daily_state();
+
+        state.toggle_daily_pause();
+        assert!(state.daily.as_ref().unwrap().is_paused());
+
+        state.toggle_daily_pause();
+        assert!(!state.daily.as_ref().unwrap().is_paused());
+    }
+
+    #[test]
+    fn passing_the_word_moves_to_the_next_speaker() {
+        let mut state = daily_state();
+        let first = state.daily.as_ref().unwrap().current().unwrap().to_string();
+
+        state.next_daily_speaker();
+
+        let round = state.daily.as_ref().unwrap();
+        assert_ne!(round.current().unwrap(), first);
+        assert_eq!(round.upcoming().len(), 1);
+    }
+
+    #[test]
+    fn adjusting_the_time_changes_the_speaker_time() {
+        let mut state = daily_state();
+        let now = Local::now().timestamp_millis();
+        let before = state.daily.as_ref().unwrap().current_left_ms(now);
+
+        state.adjust_daily_time(-1);
+
+        let now = Local::now().timestamp_millis();
+        let after = state.daily.as_ref().unwrap().current_left_ms(now);
+        assert!(after < before);
+    }
+
+    #[test]
+    fn the_beep_plays_on_the_automatic_hand_over() {
+        let mut state = daily_state();
+        let now = Local::now().timestamp_millis();
+        let end_ms = state.target.unwrap().timestamp_millis();
+        let first = state.daily.as_ref().unwrap().current().unwrap().to_string();
+
+        let sound = state.tick_turns(now + 4 * MINUTE_MS, end_ms);
+
+        assert_eq!(sound, TickSound::TurnEnd);
+        assert_ne!(state.daily.as_ref().unwrap().current().unwrap(), first);
+    }
+
+    #[test]
+    fn no_beep_while_the_speaker_still_has_time() {
+        let mut state = daily_state();
+        let now = Local::now().timestamp_millis();
+        let end_ms = state.target.unwrap().timestamp_millis();
+
+        assert_eq!(state.tick_turns(now + 1_000, end_ms), TickSound::None);
+    }
+
+    #[test]
+    fn the_view_of_a_running_round_lists_the_upcoming_people() {
+        let round = round_of(&["Andrea Zanella", "Giulia Ferri", "Luca Rossi"]);
+
+        let view = daily_view(&round, 0);
+
+        assert_eq!(view.name, "Andrea Zanella");
+        assert_eq!(view.chips, vec!["Giulia Ferri ~03:20", "Luca Rossi ~03:20"]);
+        assert!(!view.finished);
+        assert!(!view.paused);
+        assert!(view.can_remove);
+    }
+
+    #[test]
+    fn the_compact_name_is_abbreviated_and_the_full_one_is_kept() {
+        let round = round_of(&["Andrea Zanella Rossi"]);
+
+        let view = daily_view(&round, 0);
+
+        assert_eq!(view.name, "Andrea Zanella Rossi");
+        assert_eq!(view.short_name, "Andrea Z. R.");
+    }
+
+    #[test]
+    fn the_remaining_line_counts_people() {
+        let three = daily_view(&round_of(&["a", "b", "c", "d"]), 0);
+        let one = daily_view(&round_of(&["a", "b"]), 0);
+
+        assert_eq!(three.remaining, "3 persone ~ 02:30");
+        assert_eq!(one.remaining, "1 persona ~ 05:00");
+    }
+
+    #[test]
+    fn the_last_speaker_sees_ultimo_turno() {
+        let view = daily_view(&round_of(&["a"]), 0);
+
+        assert_eq!(view.remaining, "Ultimo turno");
+        assert!(view.chips.is_empty());
+    }
+
+    #[test]
+    fn when_everybody_spoke_the_screen_says_so_and_disables_the_controls() {
+        let mut round = round_of(&["a"]);
+        round.next(0);
+
+        let view = daily_view(&round, 0);
+
+        assert_eq!(view.name, "Tutti hanno parlato");
+        assert_eq!(view.short_name, "Tutti hanno parlato");
+        assert!(view.finished);
+        assert_eq!(view.left_ms, 0);
+        assert!(!view.can_add);
+        assert!(!view.can_remove);
+        assert_eq!(view.remaining, "");
+        assert!(view.chips.is_empty());
+    }
+
+    #[test]
+    fn a_paused_round_is_reported_paused() {
+        let mut round = round_of(&["a", "b"]);
+        round.toggle_pause(0);
+
+        assert!(daily_view(&round, 1_000).paused);
+    }
+
+    #[test]
+    fn estimates_are_formatted_as_minutes_and_seconds() {
+        assert_eq!(format_minutes_seconds(0), "00:00");
+        assert_eq!(format_minutes_seconds(188_400), "03:08");
+        assert_eq!(format_minutes_seconds(3_660_000), "61:00");
+        assert_eq!(format_minutes_seconds(-5), "00:00");
+    }
+
+    #[test]
+    fn stopping_clears_the_daily_state() {
+        let mut state = daily_state();
+
+        state.stop(StopType::UserStopped);
+
+        assert!(state.daily.is_none());
+        assert_eq!(state.turn_view, TurnView::Plain);
+        assert_eq!(state.page, Page::MeetingsPage);
+    }
+
+    #[test]
+    fn the_meeting_ending_clears_the_daily_state() {
+        let mut state = daily_state();
+
+        state.stop(StopType::TimerFinished);
+
+        assert!(state.daily.is_none());
+        assert_eq!(state.turn_view, TurnView::Plain);
+        assert_eq!(state.page, Page::TimerFinished);
+    }
+
+    #[test]
+    fn turns_cannot_be_opened_from_the_daily_screen() {
+        let mut state = daily_state();
+
+        state.show_turns();
+
+        assert_eq!(state.turn_view, TurnView::Daily);
     }
 
     #[test]

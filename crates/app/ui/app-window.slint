@@ -1,5 +1,5 @@
 import { ListView, AboutSlint } from "std-widgets.slint";
-import { AppTheme, AppText, PageTitle, PageSub, PillButton, PillKind, PlayIcon, StopIcon, HomeIcon, PeopleIcon, EyeOffIcon, ChevronIcon, StepIcon, HelpIcon, DotsIcon, LogoutIcon, LogoMark, FadeFill, FocusRing, AppMotion, MotionProgress } from "theme.slint";
+import { AppTheme, AppText, PageTitle, PageSub, PillButton, PillKind, PlayIcon, StopIcon, PauseIcon, SkipIcon, HomeIcon, PeopleIcon, EyeOffIcon, ChevronIcon, StepIcon, HelpIcon, DotsIcon, LogoutIcon, LogoMark, FadeFill, FocusRing, AppMotion, MotionProgress } from "theme.slint";
 
 import "../assets/fonts/Manrope/static/Manrope-Regular.ttf";
 import "../assets/fonts/Manrope/static/Manrope-Medium.ttf";
@@ -9,7 +9,7 @@ import "../assets/fonts/Manrope/static/Manrope-ExtraBold.ttf";
 
 export enum Page { ManualPage, TimerPage, TimerFinished, LoadingPage, LoginPage, MeetingsPage }
 export enum StopType { TimerFinished, UserStopped }
-export enum TurnView { Plain, Settings, Running }
+export enum TurnView { Plain, Settings, Running, Daily }
 
 export struct TimeOption { time: string, minutes: string }
 export struct MeetingRow {
@@ -17,6 +17,8 @@ export struct MeetingRow {
     title: string,
     meta: string,
     in-progress: bool,
+    daily-on: bool,
+    daily-auto: bool,
 }
 
 component BrandMark inherits LogoMark {
@@ -361,12 +363,150 @@ component ManualPage inherits VerticalLayout {
     }
 }
 
+// Daily switch of a meeting row, with the AUTO badge and a tooltip above it.
+component DailySwitch inherits Rectangle {
+    in property <bool> on;
+    in property <bool> auto;
+    callback toggled();
+    private property <length> tip-height: root.auto ? 128px : 92px;
+    private property <string> tip: "Modalità Daily: il timer parte subito e il tempo del meeting viene ripartito in parti uguali tra i partecipanti accettati, chiamati a parlare in ordine casuale."
+        + (root.auto ? " Riconosciuto in automatico dal titolo: puoi comunque cambiarlo." : "");
+    forward-focus: focus;
+    preferred-width: content.preferred-width;
+    min-width: content.min-width;
+    horizontal-stretch: 0;
+
+    accessible-role: switch;
+    accessible-checkable: true;
+    accessible-checked: root.on;
+    accessible-label: "Daily";
+    accessible-description: root.tip;
+    accessible-action-default => { root.toggled(); }
+
+    content := HorizontalLayout {
+        spacing: 10px;
+        alignment: center;
+        if root.on && root.auto : VerticalLayout {
+            alignment: center;
+            Rectangle {
+                height: 20px;
+                width: auto-text.preferred-width + 16px;
+                border-radius: 10px;
+                background: AppTheme.page;
+                border-width: 1px;
+                border-color: AppTheme.border-subtle;
+                auto-text := Text {
+                    text: "AUTO";
+                    font-size: 11px;
+                    font-weight: 700;
+                    letter-spacing: 0.66px;
+                    color: AppTheme.text-brand;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    width: parent.width;
+                    height: parent.height;
+                }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            track := Rectangle {
+                width: 44px;
+                height: 26px;
+                border-radius: 13px;
+                background: root.on ? AppTheme.brand : AppTheme.border-subtle;
+                animate background { duration: AppMotion.reduced ? 0ms : 150ms; }
+                Rectangle {
+                    y: 3px;
+                    x: root.on ? 21px : 3px;
+                    width: 20px;
+                    height: 20px;
+                    border-radius: 10px;
+                    background: #FFFFFF;
+                    drop-shadow-blur: 3px;
+                    drop-shadow-offset-y: 1px;
+                    drop-shadow-color: #1E1A2640;
+                    animate x { duration: AppMotion.reduced ? 0ms : 150ms; }
+                }
+                if focus.has-focus : FocusRing { host-width: track.width; host-height: track.height; corner-radius: 13px; }
+            }
+        }
+        Text {
+            text: "Daily";
+            font-size: 15px;
+            font-weight: 700;
+            color: AppTheme.text;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+    }
+
+    touch := TouchArea {
+        clicked => { root.toggled(); }
+        changed has-hover => {
+            if (self.has-hover) { tooltip.show(); } else if (!focus.has-focus) { tooltip.close(); }
+        }
+    }
+    focus := FocusScope {
+        width: 0px;
+        key-pressed(event) => {
+            if (event.text == Key.Space || event.text == Key.Return) {
+                root.toggled();
+                return accept;
+            }
+            return reject;
+        }
+        changed has-focus => {
+            if (self.has-focus) { tooltip.show(); } else { tooltip.close(); }
+        }
+    }
+
+    tooltip := PopupWindow {
+        close-policy: PopupClosePolicy.no-auto-close;
+        x: root.width - 280px;
+        y: -(root.tip-height + 6px) - 4px;
+        width: 280px;
+        height: root.tip-height + 6px;
+        Rectangle {
+            height: root.tip-height;
+            border-radius: AppTheme.radius-item;
+            background: AppTheme.danger;
+            drop-shadow-blur: 24px;
+            drop-shadow-offset-y: 8px;
+            drop-shadow-color: #1E1A2633;
+            Text {
+                x: 12px;
+                y: 10px;
+                width: parent.width - 24px;
+                height: parent.height - 20px;
+                text: root.tip;
+                font-size: 13px;
+                font-weight: 500;
+                color: AppTheme.on-danger;
+                wrap: word-wrap;
+                vertical-alignment: top;
+            }
+        }
+        Path {
+            x: 280px - 18px - 12px;
+            y: root.tip-height;
+            width: 12px;
+            height: 6px;
+            viewbox-width: 12;
+            viewbox-height: 6;
+            fill: AppTheme.danger;
+            commands: "M0 0H12L6 6z";
+        }
+    }
+}
+
 component MeetingsPage inherits VerticalLayout {
     in property <string> account-name;
     in property <[MeetingRow]> meetings;
     in property <bool> loading;
     in property <string> error;
     callback select(int);
+    callback set-daily(int, bool);
     callback refresh();
     padding-left: 32px;
     padding-right: 32px;
@@ -454,6 +594,14 @@ component MeetingsPage inherits VerticalLayout {
                     }
                     VerticalLayout {
                         alignment: center;
+                        DailySwitch {
+                            on: row.daily-on;
+                            auto: row.daily-auto;
+                            toggled => { root.set-daily(index, !row.daily-on); }
+                        }
+                    }
+                    VerticalLayout {
+                        alignment: center;
                         PillButton {
                             text: "Avvia";
                             clicked => { root.select(index); }
@@ -524,14 +672,16 @@ component MiniClock inherits HorizontalLayout {
     in property <int> seconds;
     in property <length> size;
     in property <color> tint;
+    // Shows --:-- instead of the digits.
+    in property <bool> dashes;
     private property <int> minutes: min(99, floor(root.seconds / 60));
     private property <int> secs: mod(root.seconds, 60);
     spacing: 0px;
-    ClockCell { glyph: floor(root.minutes / 10); size: root.size; tint: root.tint; }
-    ClockCell { glyph: mod(root.minutes, 10); size: root.size; tint: root.tint; }
+    ClockCell { glyph: root.dashes ? "-" : floor(root.minutes / 10); size: root.size; tint: root.tint; }
+    ClockCell { glyph: root.dashes ? "-" : mod(root.minutes, 10); size: root.size; tint: root.tint; }
     ClockCell { glyph: ":"; colon: true; size: root.size; tint: root.tint; }
-    ClockCell { glyph: floor(root.secs / 10); size: root.size; tint: root.tint; }
-    ClockCell { glyph: mod(root.secs, 10); size: root.size; tint: root.tint; }
+    ClockCell { glyph: root.dashes ? "-" : floor(root.secs / 10); size: root.size; tint: root.tint; }
+    ClockCell { glyph: root.dashes ? "-" : mod(root.secs, 10); size: root.size; tint: root.tint; }
 }
 
 component StopPill inherits PillButton {
@@ -634,24 +784,27 @@ component Stepper inherits Rectangle {
 // Round soft button; the icon is a child sized by `icon-size` and colored by `icon-color`.
 component SoftRoundButton inherits Rectangle {
     in property <bool> compact;
+    in property <bool> enabled: true;
     in property <string> label;
     out property <length> icon-size: root.compact ? 14px : 22px;
-    out property <color> icon-color: touch.has-hover ? #FFFFFF : AppTheme.orange;
+    out property <color> icon-color: touch.has-hover && root.enabled ? #FFFFFF : AppTheme.orange;
     callback clicked();
     forward-focus: focus;
     width: root.compact ? 30px : 46px;
     height: root.compact ? 30px : 46px;
     horizontal-stretch: 0;
     vertical-stretch: 0;
+    opacity: root.enabled ? 1 : 0.4;
     accessible-role: button;
     accessible-label: root.label;
-    accessible-action-default => { root.clicked(); }
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if (root.enabled) { root.clicked(); } }
 
     FadeFill {
         width: parent.width;
         height: parent.height;
         border-radius: self.height / 2;
-        target: touch.has-hover ? AppTheme.orange : AppTheme.orange-tint;
+        target: touch.has-hover && root.enabled ? AppTheme.orange : AppTheme.orange-tint;
     }
     HorizontalLayout {
         alignment: center;
@@ -660,9 +813,13 @@ component SoftRoundButton inherits Rectangle {
             @children
         }
     }
-    touch := TouchArea { clicked => { root.clicked(); } }
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
     focus := FocusScope {
         width: 0px;
+        enabled: root.enabled;
         key-pressed(event) => {
             if (event.text == Key.Space || event.text == Key.Return) {
                 root.clicked();
@@ -883,14 +1040,19 @@ component TurnBar inherits Rectangle {
     }
 }
 
-// Running turn: speaker, remaining time with one minute steps, and the end button.
+// Speaker bar: name, remaining time with one minute steps, and the buttons given as children.
+// While `paused` the name and time are dimmed and a badge sits on the top edge.
 component PersonBar inherits Rectangle {
     in property <bool> compact;
     in property <string> speaker;
     in property <duration> left;
     in property <bool> can-add;
+    in property <bool> can-remove;
+    in property <bool> dashes;
+    in property <bool> paused;
+    in property <duration> warn-under: 60s;
+    in property <length> name-max: 260px;
     callback time-delta(int);
-    callback finish();
     background: AppTheme.orange-soft;
     border-radius: root.compact ? 12px : AppTheme.radius-card;
     preferred-width: row.preferred-width;
@@ -906,17 +1068,18 @@ component PersonBar inherits Rectangle {
         spacing: root.compact ? 6px : 12px;
         alignment: center;
         Text {
-            width: min(self.preferred-width, root.compact ? 92px : 260px);
+            width: min(self.preferred-width, root.name-max);
             text: root.speaker;
             font-size: root.compact ? 13px : 18px;
             font-weight: 700;
             color: AppTheme.text;
             vertical-alignment: center;
             overflow: elide;
+            opacity: root.paused ? 0.45 : 1;
         }
         Stepper {
             compact: root.compact;
-            can-minus: root.seconds > 0;
+            can-minus: root.can-remove;
             can-plus: root.can-add;
             minus-label: "Togli un minuto";
             plus-label: "Aggiungi un minuto";
@@ -924,24 +1087,40 @@ component PersonBar inherits Rectangle {
             plus => { root.time-delta(1); }
             Rectangle {
                 min-width: root.compact ? 50px : 66px;
+                opacity: root.paused ? 0.45 : 1;
                 VerticalLayout {
                     alignment: center;
                     HorizontalLayout {
                         alignment: center;
                         MiniClock {
                             seconds: root.seconds;
+                            dashes: root.dashes;
                             size: root.compact ? 13px : 18px;
-                            tint: root.left < 60s ? AppTheme.orange : AppTheme.text;
+                            tint: root.left < root.warn-under && !root.dashes ? AppTheme.orange : AppTheme.text;
                         }
                     }
                 }
             }
         }
-        SoftRoundButton {
-            compact: root.compact;
-            label: "Fine turno";
-            clicked => { root.finish(); }
-            StopIcon { width: parent.icon-size; height: parent.icon-size; tint: parent.icon-color; }
+        @children
+    }
+    if root.paused : Rectangle {
+        x: (root.width - self.width) / 2;
+        y: root.compact ? -8px : -12px;
+        width: badge-text.preferred-width + (root.compact ? 14px : 20px);
+        height: badge-text.preferred-height + (root.compact ? 4px : 8px);
+        border-radius: self.height / 2;
+        background: AppTheme.danger;
+        badge-text := Text {
+            text: "IN PAUSA";
+            font-size: root.compact ? 9px : 11px;
+            font-weight: 700;
+            letter-spacing: root.compact ? 0.72px : 0.88px;
+            color: AppTheme.on-danger;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            width: parent.width;
+            height: parent.height;
         }
     }
 }
@@ -960,6 +1139,15 @@ component TimerPage inherits Rectangle {
     in property <string> turn-speaker;
     in property <duration> turn-left;
     in property <bool> turn-can-add;
+    in property <string> daily-name;
+    in property <string> daily-short-name;
+    in property <duration> daily-left;
+    in property <bool> daily-paused;
+    in property <bool> daily-finished;
+    in property <bool> daily-can-add;
+    in property <bool> daily-can-remove;
+    in property <string> daily-remaining;
+    in property <[string]> daily-chips;
     callback stop(StopType);
     callback tick();
     callback show-turns();
@@ -969,6 +1157,9 @@ component TimerPage inherits Rectangle {
     callback start-turn();
     callback adjust-turn-time(int);
     callback end-turn();
+    callback toggle-daily-pause();
+    callback next-daily-speaker();
+    callback adjust-daily-time(int);
     // Compact rules below about 560px of width, large rules above.
     private property <bool> compact: root.width < 560px;
     private property <length> side: root.compact ? 16px : 32px;
@@ -1025,10 +1216,88 @@ component TimerPage inherits Rectangle {
                 speaker: root.turn-speaker;
                 left: root.turn-left;
                 can-add: root.turn-can-add;
+                can-remove: root.turn-left > 0s;
+                name-max: root.compact ? 92px : 260px;
                 time-delta(delta) => { root.adjust-turn-time(delta); }
-                finish => { root.end-turn(); }
+                SoftRoundButton {
+                    compact: root.compact;
+                    label: "Fine turno";
+                    clicked => { root.end-turn(); }
+                    StopIcon { width: parent.icon-size; height: parent.icon-size; tint: parent.icon-color; }
+                }
             }
         }
+        if root.turn-view == TurnView.Daily : HorizontalLayout {
+            alignment: center;
+            VerticalLayout {
+                spacing: root.compact ? 6px : 12px;
+                horizontal-stretch: 0;
+                PersonBar {
+                    compact: root.compact;
+                    speaker: root.compact ? root.daily-short-name : root.daily-name;
+                    left: root.daily-left;
+                    can-add: root.daily-can-add;
+                    can-remove: root.daily-can-remove;
+                    dashes: root.daily-finished;
+                    paused: root.daily-paused;
+                    warn-under: 30s;
+                    name-max: root.compact ? 84px : 260px;
+                    time-delta(delta) => { root.adjust-daily-time(delta); }
+                    SoftRoundButton {
+                        compact: root.compact;
+                        enabled: !root.daily-finished;
+                        label: root.daily-paused ? "Riprendi" : "Pausa";
+                        clicked => { root.toggle-daily-pause(); }
+                        if root.daily-paused : PlayIcon { width: parent.icon-size; height: parent.icon-size; tint: parent.icon-color; }
+                        if !root.daily-paused : PauseIcon { width: parent.icon-size; height: parent.icon-size; tint: parent.icon-color; }
+                    }
+                    SoftRoundButton {
+                        compact: root.compact;
+                        enabled: !root.daily-finished;
+                        label: "Passa la parola";
+                        clicked => { root.next-daily-speaker(); }
+                        SkipIcon { width: parent.icon-size; height: parent.icon-size; tint: parent.icon-color; }
+                    }
+                }
+                if !root.compact : Rectangle {
+                    height: 28px;
+                    clip: true;
+                    min-width: 0px;
+                    preferred-width: 0px;
+                    horizontal-stretch: 1;
+                    HorizontalLayout {
+                        alignment: center;
+                        spacing: 6px;
+                        for chip in root.daily-chips : Rectangle {
+                            width: chip-text.preferred-width + 22px;
+                            height: 26px;
+                            border-radius: 13px;
+                            background: AppTheme.page;
+                            border-width: 1px;
+                            border-color: AppTheme.border-subtle;
+                            chip-text := Text {
+                                x: 11px;
+                                width: parent.width - 22px;
+                                height: parent.height;
+                                text: chip;
+                                font-size: 12px;
+                                font-weight: 500;
+                                color: AppTheme.text-secondary;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                        }
+                    }
+                }
+                if root.compact && root.daily-remaining != "" : Text {
+                    text: root.daily-remaining;
+                    font-size: 12px;
+                    color: AppTheme.text-secondary;
+                    horizontal-alignment: center;
+                }
+            }
+        }
+        if root.turn-view == TurnView.Daily && !root.compact : Rectangle { height: 16px; }
         HorizontalLayout {
             alignment: center;
             spacing: 12px;
@@ -1259,6 +1528,15 @@ export component MainWindow inherits Window {
     in property <string> turn-speaker;
     in property <duration> turn-left;
     in property <bool> turn-can-add;
+    in property <string> daily-name;
+    in property <string> daily-short-name;
+    in property <duration> daily-left;
+    in property <bool> daily-paused;
+    in property <bool> daily-finished;
+    in property <bool> daily-can-add;
+    in property <bool> daily-can-remove;
+    in property <string> daily-remaining;
+    in property <[string]> daily-chips;
 
     in property     <duration> timer-time: 3s;
     in property     <bool>     running-state: false;
@@ -1299,6 +1577,10 @@ export component MainWindow inherits Window {
     callback start-turn();
     callback adjust-turn-time(int);
     callback end-turn();
+    callback set-daily(int, bool);
+    callback toggle-daily-pause();
+    callback next-daily-speaker();
+    callback adjust-daily-time(int);
 
     changed page => { page-fade.restart(); }
 
@@ -1392,6 +1674,7 @@ export component MainWindow inherits Window {
                 loading: root.meetings-loading;
                 error: root.meetings-error;
                 select(index) => { root.select-meeting(index); }
+                set-daily(index, on) => { root.set-daily(index, on); }
                 refresh => { root.refresh-meetings(); }
             }
         }
@@ -1469,6 +1752,18 @@ export component MainWindow inherits Window {
             start-turn => { root.start-turn(); }
             adjust-turn-time(delta) => { root.adjust-turn-time(delta); }
             end-turn => { root.end-turn(); }
+            daily-name: root.daily-name;
+            daily-short-name: root.daily-short-name;
+            daily-left: root.daily-left;
+            daily-paused: root.daily-paused;
+            daily-finished: root.daily-finished;
+            daily-can-add: root.daily-can-add;
+            daily-can-remove: root.daily-can-remove;
+            daily-remaining: root.daily-remaining;
+            daily-chips: root.daily-chips;
+            toggle-daily-pause => { root.toggle-daily-pause(); }
+            next-daily-speaker => { root.next-daily-speaker(); }
+            adjust-daily-time(delta) => { root.adjust-daily-time(delta); }
             stop(stop-type) => { root.stop(stop-type); }
             tick => { root.tick(); }
         }

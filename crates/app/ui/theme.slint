@@ -211,6 +211,22 @@ export component StepIcon inherits Path {
     commands: root.plus ? "M4 10h6V4h4v6h6v4h-6v6h-4v-6H4z" : "M4 10h16v4H4z";
 }
 
+export component PauseIcon inherits Path {
+    in property <color> tint: AppTheme.orange;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    fill: root.tint;
+    commands: "M6.5 4H8.5A1.5 1.5 0 0 1 10 5.5V18.5A1.5 1.5 0 0 1 8.5 20H6.5A1.5 1.5 0 0 1 5 18.5V5.5A1.5 1.5 0 0 1 6.5 4z M15.5 4H17.5A1.5 1.5 0 0 1 19 5.5V18.5A1.5 1.5 0 0 1 17.5 20H15.5A1.5 1.5 0 0 1 14 18.5V5.5A1.5 1.5 0 0 1 15.5 4z";
+}
+
+export component SkipIcon inherits Path {
+    in property <color> tint: AppTheme.orange;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    fill: root.tint;
+    commands: "M5 4.5v15a1 1 0 0 0 1.52 0.86L15 13.3v6.2a1 1 0 0 0 1.6 0.8l0.4-0.3V4a1 1 0 0 0-2-0.1v6.8L6.52 3.64A1 1 0 0 0 5 4.5z";
+}
+
 export component LogoutIcon inherits Path {
     in property <color> tint: AppTheme.text;
     viewbox-width: 24;
