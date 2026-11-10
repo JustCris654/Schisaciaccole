@@ -27,9 +27,9 @@ up to *2 hours*.
   reaches zero.
 - When a countdown starts the window shrinks to a compact 360x240 size and
   stays on top of the other windows. It shows the countdown, the end time
-  ("Fine alle HH:MM") and a *Stop* button. In the last 5 minutes the countdown
-  turns orange. The previous window size and on-top state are restored when the
-  countdown screens are left.
+  ("Fine alle HH:MM") and a *Stop* button. In the last 2 minutes and 30
+  seconds the countdown turns orange. The previous window size and on-top state
+  are restored when the countdown screens are left.
 - Press *Stop* to end early: you go back to the page the timer was started from.
 - At zero the finished screen says "Meeting terminato!", with rotating captions
   and confetti. *Torna alla home* goes back to the page the timer was started

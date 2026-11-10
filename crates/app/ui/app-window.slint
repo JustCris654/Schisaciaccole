@@ -1182,7 +1182,7 @@ component TimerPage inherits Rectangle {
             seconds: max(0, ceil(root.timer-time / 1s));
             size: root.compact && !root.plain ? 54px : (root.compact ? 84px : clamp(72px, root.width * 0.16, 160px));
             avail: root.width - 2 * root.side;
-            tint: root.timer-time < 300s ? AppTheme.orange : AppTheme.text-brand;
+            tint: root.timer-time < 150s ? AppTheme.orange : AppTheme.text-brand;
         }
         if root.plain : Rectangle { height: root.compact ? 4px : 12px; }
         if root.plain : Text {
