@@ -41,6 +41,7 @@ fn main() -> anyhow::Result<()> {
     let mut app_state = AppState::new().context("failed to compute the initial time options")?;
     app_state.bind_options(&main_window);
     app_state.bind_meetings(&main_window);
+    app_state.bind_turns(&main_window);
     let session = connect_session(&mut app_state);
     app_state.render(&main_window);
     let app_state = Rc::new(RefCell::new(app_state));
@@ -106,6 +107,104 @@ fn main() -> anyhow::Result<()> {
             let tick_sound = state.select_meeting(index);
             state.render(&window);
             play_for(tick_sound);
+        }
+    });
+
+    main_window.on_show_turns({
+        let window_weak = main_window.as_weak();
+        let state = app_state.clone();
+
+        move || {
+            let Some(window) = window_weak.upgrade() else {
+                return;
+            };
+            let mut state = state.borrow_mut();
+            state.show_turns();
+            state.render(&window);
+        }
+    });
+
+    main_window.on_hide_turns({
+        let window_weak = main_window.as_weak();
+        let state = app_state.clone();
+
+        move || {
+            let Some(window) = window_weak.upgrade() else {
+                return;
+            };
+            let mut state = state.borrow_mut();
+            state.hide_turns();
+            state.render(&window);
+        }
+    });
+
+    main_window.on_select_turner({
+        let window_weak = main_window.as_weak();
+        let state = app_state.clone();
+
+        move |value| {
+            let Some(window) = window_weak.upgrade() else {
+                return;
+            };
+            let mut state = state.borrow_mut();
+            state.select_turner(value);
+            state.render(&window);
+        }
+    });
+
+    main_window.on_adjust_turn_minutes({
+        let window_weak = main_window.as_weak();
+        let state = app_state.clone();
+
+        move |value| {
+            let Some(window) = window_weak.upgrade() else {
+                return;
+            };
+            let mut state = state.borrow_mut();
+            state.adjust_turn_minutes(value);
+            state.render(&window);
+        }
+    });
+
+    main_window.on_start_turn({
+        let window_weak = main_window.as_weak();
+        let state = app_state.clone();
+
+        move || {
+            let Some(window) = window_weak.upgrade() else {
+                return;
+            };
+            let mut state = state.borrow_mut();
+            state.start_turn();
+            state.render(&window);
+        }
+    });
+
+    main_window.on_adjust_turn_time({
+        let window_weak = main_window.as_weak();
+        let state = app_state.clone();
+
+        move |value| {
+            let Some(window) = window_weak.upgrade() else {
+                return;
+            };
+            let mut state = state.borrow_mut();
+            state.adjust_turn_time(value);
+            state.render(&window);
+        }
+    });
+
+    main_window.on_end_turn({
+        let window_weak = main_window.as_weak();
+        let state = app_state.clone();
+
+        move || {
+            let Some(window) = window_weak.upgrade() else {
+                return;
+            };
+            let mut state = state.borrow_mut();
+            state.end_turn();
+            state.render(&window);
         }
     });
 
@@ -329,6 +428,7 @@ fn play_for(tick_sound: TickSound) {
     match tick_sound {
         TickSound::None => {}
         TickSound::MeetingEnd => sound::play_sound(),
+        TickSound::TurnEnd => sound::play_beep(),
     }
 }
 

@@ -92,7 +92,6 @@ pub fn play_sound() {
 ///
 /// Every failure (no audio device) is logged and the beep is skipped; nothing is reported to the
 /// caller. Calls made while a beep is playing overlap instead of queueing.
-#[allow(dead_code)]
 pub fn play_beep() {
     thread::spawn(|| {
         let mut sink_handle = match DeviceSinkBuilder::open_default_sink() {

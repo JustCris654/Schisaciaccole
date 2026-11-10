@@ -1,5 +1,5 @@
 import { ListView, AboutSlint } from "std-widgets.slint";
-import { AppTheme, AppText, PageTitle, PageSub, PillButton, PillKind, PlayIcon, StopIcon, HomeIcon, HelpIcon, DotsIcon, LogoutIcon, LogoMark, FadeFill, FocusRing, AppMotion, MotionProgress } from "theme.slint";
+import { AppTheme, AppText, PageTitle, PageSub, PillButton, PillKind, PlayIcon, StopIcon, HomeIcon, PeopleIcon, EyeOffIcon, ChevronIcon, StepIcon, HelpIcon, DotsIcon, LogoutIcon, LogoMark, FadeFill, FocusRing, AppMotion, MotionProgress } from "theme.slint";
 
 import "../assets/fonts/Manrope/static/Manrope-Regular.ttf";
 import "../assets/fonts/Manrope/static/Manrope-Medium.ttf";
@@ -9,6 +9,7 @@ import "../assets/fonts/Manrope/static/Manrope-ExtraBold.ttf";
 
 export enum Page { ManualPage, TimerPage, TimerFinished, LoadingPage, LoginPage, MeetingsPage }
 export enum StopType { TimerFinished, UserStopped }
+export enum TurnView { Plain, Settings, Running }
 
 export struct TimeOption { time: string, minutes: string }
 export struct MeetingRow {
@@ -518,16 +519,460 @@ component ClockText inherits Rectangle {
     }
 }
 
-// Countdown screen. Children go between the end line and the Stop button.
+// Speaker time as MM:SS in fixed-width cells.
+component MiniClock inherits HorizontalLayout {
+    in property <int> seconds;
+    in property <length> size;
+    in property <color> tint;
+    private property <int> minutes: min(99, floor(root.seconds / 60));
+    private property <int> secs: mod(root.seconds, 60);
+    spacing: 0px;
+    ClockCell { glyph: floor(root.minutes / 10); size: root.size; tint: root.tint; }
+    ClockCell { glyph: mod(root.minutes, 10); size: root.size; tint: root.tint; }
+    ClockCell { glyph: ":"; colon: true; size: root.size; tint: root.tint; }
+    ClockCell { glyph: floor(root.secs / 10); size: root.size; tint: root.tint; }
+    ClockCell { glyph: mod(root.secs, 10); size: root.size; tint: root.tint; }
+}
+
+component StopPill inherits PillButton {
+    text: "Stop";
+    kind: PillKind.outline;
+    StopIcon {
+        width: root.compact ? 12px : 16px;
+        height: root.compact ? 12px : 16px;
+        tint: parent.foreground;
+    }
+}
+
+component StepButton inherits Rectangle {
+    in property <bool> plus;
+    in property <bool> enabled: true;
+    in property <bool> compact;
+    in property <string> label;
+    callback clicked();
+    forward-focus: focus;
+    width: root.compact ? 26px : 42px;
+    opacity: root.enabled ? 1 : 0.4;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if (root.enabled) { root.clicked(); } }
+
+    FadeFill {
+        width: parent.width;
+        height: parent.height;
+        target: touch.has-hover && root.enabled ? AppTheme.orange-soft : AppTheme.orange-soft.transparentize(1);
+    }
+    StepIcon {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: root.compact ? 14px : 24px;
+        height: root.compact ? 14px : 24px;
+        plus: root.plus;
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+    focus := FocusScope {
+        width: 0px;
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if (!root.enabled) { return reject; }
+            if (event.text == Key.Space || event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    if focus.has-focus : FocusRing { host-width: root.width; host-height: root.height; corner-radius: 4px; }
+}
+
+// Pill with a minus and a plus button around the children.
+component Stepper inherits Rectangle {
+    in property <bool> compact;
+    in property <bool> can-minus: true;
+    in property <bool> can-plus: true;
+    in property <string> minus-label;
+    in property <string> plus-label;
+    callback minus();
+    callback plus();
+    height: root.compact ? 30px : 46px;
+    border-radius: self.height / 2;
+    background: AppTheme.page;
+    clip: true;
+    preferred-width: row.preferred-width;
+    min-width: row.min-width;
+    horizontal-stretch: 0;
+
+    row := HorizontalLayout {
+        StepButton {
+            compact: root.compact;
+            enabled: root.can-minus;
+            label: root.minus-label;
+            clicked => { root.minus(); }
+        }
+        @children
+        StepButton {
+            plus: true;
+            compact: root.compact;
+            enabled: root.can-plus;
+            label: root.plus-label;
+            clicked => { root.plus(); }
+        }
+    }
+    Rectangle {
+        width: parent.width;
+        height: parent.height;
+        border-radius: self.height / 2;
+        border-width: 2px;
+        border-color: AppTheme.orange-tint;
+    }
+}
+
+// Round soft button; the icon is a child sized by `icon-size` and colored by `icon-color`.
+component SoftRoundButton inherits Rectangle {
+    in property <bool> compact;
+    in property <string> label;
+    out property <length> icon-size: root.compact ? 14px : 22px;
+    out property <color> icon-color: touch.has-hover ? #FFFFFF : AppTheme.orange;
+    callback clicked();
+    forward-focus: focus;
+    width: root.compact ? 30px : 46px;
+    height: root.compact ? 30px : 46px;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => { root.clicked(); }
+
+    FadeFill {
+        width: parent.width;
+        height: parent.height;
+        border-radius: self.height / 2;
+        target: touch.has-hover ? AppTheme.orange : AppTheme.orange-tint;
+    }
+    HorizontalLayout {
+        alignment: center;
+        VerticalLayout {
+            alignment: center;
+            @children
+        }
+    }
+    touch := TouchArea { clicked => { root.clicked(); } }
+    focus := FocusScope {
+        width: 0px;
+        key-pressed(event) => {
+            if (event.text == Key.Space || event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    if focus.has-focus : FocusRing { host-width: root.width; host-height: root.height; corner-radius: root.height / 2; }
+}
+
+// Participant dropdown: a pill that opens a list in a popup.
+component TurnSelect inherits Rectangle {
+    in property <[string]> names;
+    in property <int> selected;
+    in property <bool> compact;
+    callback picked(int);
+    private property <length> item-height: root.compact ? 28px : 40px;
+    private property <int> highlight;
+    private property <string> current: root.selected >= 0 && root.selected < root.names.length ? root.names[root.selected] : "";
+    forward-focus: focus;
+    height: root.compact ? 30px : 46px;
+    min-width: root.compact ? 104px : 170px;
+    max-width: root.compact ? 124px : 200px;
+    preferred-width: root.compact ? 124px : 200px;
+    horizontal-stretch: 0;
+    border-radius: self.height / 2;
+    background: AppTheme.page;
+
+    accessible-role: combobox;
+    accessible-label: "Partecipante";
+    accessible-value: root.current;
+    accessible-action-default => { popup.show(); }
+
+    function open() {
+        root.highlight = root.selected;
+        popup.show();
+    }
+
+    Rectangle {
+        width: parent.width;
+        height: parent.height;
+        border-radius: self.height / 2;
+        border-width: 2px;
+        border-color: AppTheme.orange-tint;
+    }
+    Text {
+        x: root.compact ? 10px : 14px;
+        width: parent.width - (root.compact ? 34px : 52px);
+        height: parent.height;
+        text: root.current;
+        font-size: root.compact ? 12px : 16px;
+        font-weight: 600;
+        color: AppTheme.text;
+        vertical-alignment: center;
+        overflow: elide;
+        accessible-role: none;
+    }
+    ChevronIcon {
+        x: parent.width - (root.compact ? 8px : 14px) - self.width;
+        y: (parent.height - self.height) / 2;
+        width: root.compact ? 14px : 18px;
+        height: root.compact ? 14px : 18px;
+    }
+    touch := TouchArea { clicked => { root.open(); } }
+    focus := FocusScope {
+        width: 0px;
+        key-pressed(event) => {
+            if (event.text == Key.DownArrow) {
+                if (root.selected < root.names.length - 1) { root.picked(root.selected + 1); }
+                return accept;
+            }
+            if (event.text == Key.UpArrow) {
+                if (root.selected > 0) { root.picked(root.selected - 1); }
+                return accept;
+            }
+            if (event.text == Key.Space || event.text == Key.Return) {
+                root.open();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    if focus.has-focus : FocusRing { host-width: root.width; host-height: root.height; corner-radius: root.height / 2; }
+
+    popup := PopupWindow {
+        forward-focus: keys;
+        x: 0px;
+        y: root.height + 4px;
+        width: root.width;
+        height: min(root.names.length, 6) * root.item-height + 12px;
+        Rectangle {
+            background: AppTheme.page;
+            border-radius: AppTheme.radius-item;
+            border-width: 1px;
+            border-color: AppTheme.border-subtle;
+            drop-shadow-blur: 24px;
+            drop-shadow-offset-y: 8px;
+            drop-shadow-color: #1E1A2629;
+            keys := FocusScope {
+                key-pressed(event) => {
+                    if (event.text == Key.DownArrow) {
+                        root.highlight = min(root.highlight + 1, root.names.length - 1);
+                        return accept;
+                    }
+                    if (event.text == Key.UpArrow) {
+                        root.highlight = max(root.highlight - 1, 0);
+                        return accept;
+                    }
+                    if (event.text == Key.Return) {
+                        root.picked(root.highlight);
+                        popup.close();
+                        return accept;
+                    }
+                    if (event.text == Key.Escape) {
+                        popup.close();
+                        return accept;
+                    }
+                    return reject;
+                }
+                ListView {
+                    x: 6px;
+                    y: 6px;
+                    width: parent.width - 12px;
+                    height: parent.height - 12px;
+                    for name[i] in root.names : Rectangle {
+                        height: root.item-height;
+                        border-radius: root.compact ? 8px : AppTheme.radius-item;
+                        background: item-touch.has-hover || i == root.highlight ? AppTheme.surface : #FFFFFF00;
+                        accessible-role: list-item;
+                        accessible-label: name;
+                        Text {
+                            x: root.compact ? 8px : 12px;
+                            width: parent.width - 2 * self.x;
+                            height: parent.height;
+                            text: name;
+                            font-size: root.compact ? 12px : 15px;
+                            font-weight: i == root.selected ? 700 : 500;
+                            color: AppTheme.text;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            accessible-role: none;
+                        }
+                        item-touch := TouchArea { clicked => { root.picked(i); } }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Turn settings: who speaks, for how long, and the start button.
+component TurnBar inherits Rectangle {
+    in property <bool> compact;
+    in property <[string]> names;
+    in property <int> selected;
+    in property <int> minutes;
+    in property <int> max-minutes;
+    callback picked(int);
+    callback minutes-delta(int);
+    callback start();
+    background: AppTheme.orange-soft;
+    border-radius: root.compact ? 12px : AppTheme.radius-card;
+    preferred-width: row.preferred-width;
+    min-width: row.min-width;
+    horizontal-stretch: 0;
+
+    row := HorizontalLayout {
+        padding: root.compact ? 6px : 16px;
+        padding-left: root.compact ? 8px : 16px;
+        padding-right: root.compact ? 8px : 16px;
+        spacing: root.compact ? 6px : 12px;
+        alignment: center;
+        TurnSelect {
+            compact: root.compact;
+            names: root.names;
+            selected: root.selected;
+            picked(index) => { root.picked(index); }
+        }
+        Stepper {
+            compact: root.compact;
+            can-minus: root.minutes > 1;
+            can-plus: root.minutes < root.max-minutes;
+            minus-label: "Meno un minuto";
+            plus-label: "Più un minuto";
+            minus => { root.minutes-delta(-1); }
+            plus => { root.minutes-delta(1); }
+            Rectangle {
+                min-width: root.compact ? 34px : 46px;
+                HorizontalLayout {
+                    alignment: center;
+                    spacing: 2px;
+                    padding-left: 2px;
+                    padding-right: 2px;
+                    Text {
+                        text: root.minutes;
+                        font-size: root.compact ? 12px : 16px;
+                        font-weight: 800;
+                        color: AppTheme.text;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: "min";
+                        font-size: root.compact ? 10px : 13px;
+                        font-weight: 600;
+                        color: AppTheme.text-secondary;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+        SoftRoundButton {
+            compact: root.compact;
+            label: "Avvia il turno";
+            clicked => { root.start(); }
+            PlayIcon { width: parent.icon-size; height: parent.icon-size; tint: parent.icon-color; }
+        }
+    }
+}
+
+// Running turn: speaker, remaining time with one minute steps, and the end button.
+component PersonBar inherits Rectangle {
+    in property <bool> compact;
+    in property <string> speaker;
+    in property <duration> left;
+    in property <bool> can-add;
+    callback time-delta(int);
+    callback finish();
+    background: AppTheme.orange-soft;
+    border-radius: root.compact ? 12px : AppTheme.radius-card;
+    preferred-width: row.preferred-width;
+    min-width: row.min-width;
+    horizontal-stretch: 0;
+    private property <int> seconds: max(0, ceil(root.left / 1s));
+
+    row := HorizontalLayout {
+        padding-top: root.compact ? 6px : 12px;
+        padding-bottom: root.compact ? 6px : 12px;
+        padding-left: root.compact ? 8px : 16px;
+        padding-right: root.compact ? 8px : 16px;
+        spacing: root.compact ? 6px : 12px;
+        alignment: center;
+        Text {
+            width: min(self.preferred-width, root.compact ? 92px : 260px);
+            text: root.speaker;
+            font-size: root.compact ? 13px : 18px;
+            font-weight: 700;
+            color: AppTheme.text;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        Stepper {
+            compact: root.compact;
+            can-minus: root.seconds > 0;
+            can-plus: root.can-add;
+            minus-label: "Togli un minuto";
+            plus-label: "Aggiungi un minuto";
+            minus => { root.time-delta(-1); }
+            plus => { root.time-delta(1); }
+            Rectangle {
+                min-width: root.compact ? 50px : 66px;
+                VerticalLayout {
+                    alignment: center;
+                    HorizontalLayout {
+                        alignment: center;
+                        MiniClock {
+                            seconds: root.seconds;
+                            size: root.compact ? 13px : 18px;
+                            tint: root.left < 60s ? AppTheme.orange : AppTheme.text;
+                        }
+                    }
+                }
+            }
+        }
+        SoftRoundButton {
+            compact: root.compact;
+            label: "Fine turno";
+            clicked => { root.finish(); }
+            StopIcon { width: parent.icon-size; height: parent.icon-size; tint: parent.icon-color; }
+        }
+    }
+}
+
+// Countdown screen with its three views: plain, turn settings and running turn.
 component TimerPage inherits Rectangle {
     in property <duration> timer-time;
     in property <bool> running-state;
     in property <string> timer-end;
+    in property <bool> turn-available;
+    in property <TurnView> turn-view;
+    in property <[string]> turn-names;
+    in property <int> turn-selected;
+    in property <int> turn-minutes;
+    in property <int> turn-max-minutes;
+    in property <string> turn-speaker;
+    in property <duration> turn-left;
+    in property <bool> turn-can-add;
     callback stop(StopType);
     callback tick();
+    callback show-turns();
+    callback hide-turns();
+    callback select-turner(int);
+    callback adjust-turn-minutes(int);
+    callback start-turn();
+    callback adjust-turn-time(int);
+    callback end-turn();
     // Compact rules below about 560px of width, large rules above.
     private property <bool> compact: root.width < 560px;
     private property <length> side: root.compact ? 16px : 32px;
+    private property <bool> plain: root.turn-view == TurnView.Plain;
 
     Timer {
         interval: 0.25s;
@@ -541,37 +986,77 @@ component TimerPage inherits Rectangle {
         padding-top: root.compact ? 12px : 32px;
         padding-bottom: root.compact ? 12px : 40px;
         alignment: center;
+        spacing: root.plain ? 0px : (root.compact ? 8px : 24px);
         ClockText {
             seconds: max(0, ceil(root.timer-time / 1s));
-            size: root.compact ? 84px : clamp(72px, root.width * 0.16, 160px);
+            size: root.compact && !root.plain ? 54px : (root.compact ? 84px : clamp(72px, root.width * 0.16, 160px));
             avail: root.width - 2 * root.side;
             tint: root.timer-time < 300s ? AppTheme.orange : AppTheme.text-brand;
         }
-        Rectangle { height: root.compact ? 4px : 12px; }
-        Text {
+        if root.plain : Rectangle { height: root.compact ? 4px : 12px; }
+        if root.plain : Text {
             text: "Fine alle " + root.timer-end;
             font-size: root.compact ? 13px : 19px;
             color: AppTheme.text-secondary;
             horizontal-alignment: center;
         }
-        @children
-        Rectangle {
+        if root.plain : Rectangle {
             min-height: root.compact ? 24px : 16px;
             max-height: root.compact ? 32px : 112px;
             vertical-stretch: 1;
         }
+        if root.turn-view == TurnView.Settings : HorizontalLayout {
+            alignment: center;
+            TurnBar {
+                compact: root.compact;
+                names: root.turn-names;
+                selected: root.turn-selected;
+                minutes: root.turn-minutes;
+                max-minutes: root.turn-max-minutes;
+                picked(index) => { root.select-turner(index); }
+                minutes-delta(delta) => { root.adjust-turn-minutes(delta); }
+                start => { root.start-turn(); }
+            }
+        }
+        if root.turn-view == TurnView.Running : HorizontalLayout {
+            alignment: center;
+            PersonBar {
+                compact: root.compact;
+                speaker: root.turn-speaker;
+                left: root.turn-left;
+                can-add: root.turn-can-add;
+                time-delta(delta) => { root.adjust-turn-time(delta); }
+                finish => { root.end-turn(); }
+            }
+        }
         HorizontalLayout {
             alignment: center;
-            PillButton {
-                text: "Stop";
+            spacing: 12px;
+            if root.plain && root.turn-available : PillButton {
+                text: root.compact ? "Turni" : "Turni di parola";
                 kind: PillKind.outline;
                 compact: root.compact;
-                clicked => { root.stop(StopType.UserStopped); }
-                StopIcon {
+                clicked => { root.show-turns(); }
+                PeopleIcon {
                     width: root.compact ? 12px : 16px;
                     height: root.compact ? 12px : 16px;
                     tint: parent.foreground;
                 }
+            }
+            if root.turn-view == TurnView.Settings : PillButton {
+                text: "Nascondi";
+                kind: PillKind.outline;
+                compact: root.compact;
+                clicked => { root.hide-turns(); }
+                EyeOffIcon {
+                    width: root.compact ? 12px : 16px;
+                    height: root.compact ? 12px : 16px;
+                    tint: parent.foreground;
+                }
+            }
+            StopPill {
+                compact: root.compact;
+                clicked => { root.stop(StopType.UserStopped); }
             }
         }
     }
@@ -765,6 +1250,15 @@ export component MainWindow inherits Window {
     in property <string> current-time;
     in property <string> timer-end;
     in property <int> finish-seed;
+    in property <bool> turn-available;
+    in property <TurnView> turn-view;
+    in property <[string]> turn-names;
+    in property <int> turn-selected;
+    in property <int> turn-minutes;
+    in property <int> turn-max-minutes;
+    in property <string> turn-speaker;
+    in property <duration> turn-left;
+    in property <bool> turn-can-add;
 
     in property     <duration> timer-time: 3s;
     in property     <bool>     running-state: false;
@@ -798,6 +1292,13 @@ export component MainWindow inherits Window {
     callback set-meetings-page();
     callback close-finished();
     callback logout();
+    callback show-turns();
+    callback hide-turns();
+    callback select-turner(int);
+    callback adjust-turn-minutes(int);
+    callback start-turn();
+    callback adjust-turn-time(int);
+    callback end-turn();
 
     changed page => { page-fade.restart(); }
 
@@ -952,6 +1453,22 @@ export component MainWindow inherits Window {
             timer-time: root.timer-time;
             running-state: root.running-state;
             timer-end: root.timer-end;
+            turn-available: root.turn-available;
+            turn-view: root.turn-view;
+            turn-names: root.turn-names;
+            turn-selected: root.turn-selected;
+            turn-minutes: root.turn-minutes;
+            turn-max-minutes: root.turn-max-minutes;
+            turn-speaker: root.turn-speaker;
+            turn-left: root.turn-left;
+            turn-can-add: root.turn-can-add;
+            show-turns => { root.show-turns(); }
+            hide-turns => { root.hide-turns(); }
+            select-turner(index) => { root.select-turner(index); }
+            adjust-turn-minutes(delta) => { root.adjust-turn-minutes(delta); }
+            start-turn => { root.start-turn(); }
+            adjust-turn-time(delta) => { root.adjust-turn-time(delta); }
+            end-turn => { root.end-turn(); }
             stop(stop-type) => { root.stop(stop-type); }
             tick => { root.tick(); }
         }

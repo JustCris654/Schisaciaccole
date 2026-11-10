@@ -7,12 +7,12 @@ use chrono::{DateTime, FixedOffset, Local, TimeZone};
 use log::{debug, error, info, warn};
 use schisaciaccole_core::api::{Me, Meeting};
 use schisaciaccole_core::{
-    DEFAULT_OPTION_COUNT, QuarterOption, TickOutcome, TimeError, evaluate, participants,
-    quarter_options,
+    DEFAULT_OPTION_COUNT, QuarterOption, SpeakingTurn, TickOutcome, TimeError, evaluate,
+    max_turn_minutes, participants, quarter_options,
 };
-use slint::{ComponentHandle, LogicalSize, ModelRc, VecModel};
+use slint::{ComponentHandle, LogicalSize, ModelRc, SharedString, VecModel};
 
-use crate::ui::{MainWindow, MeetingRow, Page, StopType, TimeOption};
+use crate::ui::{MainWindow, MeetingRow, Page, StopType, TimeOption, TurnView};
 
 /// Login page status while the browser login is in progress.
 pub const LOGIN_WAITING_STATUS: &str = "Completa l'accesso nel browser…";
@@ -23,6 +23,10 @@ pub const LOCAL_MODE_NOTICE: &str = "Accesso non disponibile: modalità locale";
 /// Manual page notice while the logout runs.
 pub const LOGOUT_NOTICE: &str = "Disconnessione…";
 
+/// Minutes a speaking turn starts with.
+const DEFAULT_TURN_MINUTES: u32 = 5;
+const MINUTE_MS: i64 = 60_000;
+
 /// Sound the caller must play after a state update.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TickSound {
@@ -30,6 +34,8 @@ pub enum TickSound {
     None,
     /// The meeting or countdown finished: the finish sound.
     MeetingEnd,
+    /// The running speaking turn ran out: the soft beep.
+    TurnEnd,
 }
 
 /// What the meetings page shows besides the rows.
@@ -99,6 +105,17 @@ pub struct AppState {
     meetings_status: MeetingsStatus,
     /// Origin of the running countdown, kept while the finished page shows.
     origin: Option<TimerOrigin>,
+    /// View of the meeting countdown: plain, turn settings or a running turn.
+    turn_view: TurnView,
+    /// Names of the participants of the running meeting countdown, in the select order.
+    turn_names: Vec<String>,
+    turn_names_model: Rc<VecModel<SharedString>>,
+    /// Position of the chosen participant in `turn_names`.
+    turn_selected: usize,
+    /// Minutes the next turn will last.
+    turn_minutes: u32,
+    /// The running speaking turn; `Some` only in [`TurnView::Running`].
+    turn: Option<SpeakingTurn>,
     /// Random number the finished page turns into its first caption.
     finish_seed: i32,
     /// True while the window is in its countdown shape (small and on top).
@@ -135,6 +152,12 @@ impl AppState {
             meetings_status: MeetingsStatus::Loading,
             origin: None,
             finish_seed: 0,
+            turn_view: TurnView::Plain,
+            turn_names: Vec::new(),
+            turn_names_model: Rc::new(VecModel::from(Vec::new())),
+            turn_selected: 0,
+            turn_minutes: DEFAULT_TURN_MINUTES,
+            turn: None,
             timer_window: false,
             saved_window: None,
         })
@@ -208,6 +231,7 @@ impl AppState {
 
         self.selected = None;
         self.origin = Some(TimerOrigin::Manual);
+        self.reset_turns(Vec::new());
         self.page = Page::TimerPage;
         self.target = Some(target);
         self.tick()
@@ -237,6 +261,11 @@ impl AppState {
             meeting.end.with_timezone(&Local).format("%H:%M")
         );
         let target = meeting.end.with_timezone(&Local);
+        let names = participants(meeting)
+            .into_iter()
+            .map(|participant| participant.name)
+            .collect();
+        self.reset_turns(names);
         self.origin = Some(TimerOrigin::Meeting);
         self.page = Page::TimerPage;
         self.target = Some(target);
@@ -249,6 +278,9 @@ impl AppState {
     /// been reached, stops with [`StopType::TimerFinished`] and returns [`TickSound::MeetingEnd`].
     /// When it passed more than the grace period ago (e.g. after a suspend), stops with
     /// [`StopType::UserStopped`] without sound.
+    ///
+    /// While a turn runs, also checks whether it ran out and returns [`TickSound::TurnEnd`] once;
+    /// in the turn settings it keeps the minutes within the time the meeting has left.
     ///
     /// Edge cases: without a running countdown nothing changes and [`TickSound::None`] is
     /// returned.
@@ -263,7 +295,7 @@ impl AppState {
             TickOutcome::Running { remaining_ms } => {
                 self.timer_ms = remaining_ms;
                 debug!("Remaining: {remaining_ms}");
-                TickSound::None
+                self.tick_turns(now.timestamp_millis(), target.timestamp_millis())
             }
             TickOutcome::Finished => {
                 self.stop(StopType::TimerFinished);
@@ -288,12 +320,164 @@ impl AppState {
         self.refresh_options();
         self.target = None;
         self.timer_ms = 0;
+        self.reset_turns(Vec::new());
         match stop_type {
             StopType::TimerFinished => {
                 self.finish_seed = random_seed();
                 self.page = Page::TimerFinished;
             }
             StopType::UserStopped => self.show_home(),
+        }
+    }
+
+    /// True when the running countdown is a meeting with at least one participant, so speaking
+    /// turns can be used.
+    pub fn turns_available(&self) -> bool {
+        self.target.is_some()
+            && self.origin == Some(TimerOrigin::Meeting)
+            && !self.turn_names.is_empty()
+    }
+
+    /// Opens the turn settings from the plain countdown view.
+    ///
+    /// Edge cases: ignored when turns are not available or the view is not the plain one.
+    pub fn show_turns(&mut self) {
+        if !self.turns_available() || self.turn_view != TurnView::Plain {
+            return;
+        }
+        self.turn_view = TurnView::Settings;
+        self.fit_turn_minutes();
+    }
+
+    /// Hides the turn settings and goes back to the plain countdown view; the countdown keeps
+    /// running.
+    ///
+    /// Edge cases: ignored outside the turn settings (a running turn is ended with
+    /// [`AppState::end_turn`]).
+    pub fn hide_turns(&mut self) {
+        if self.turn_view == TurnView::Settings {
+            self.turn_view = TurnView::Plain;
+        }
+    }
+
+    /// Chooses the participant at `index` for the next turn.
+    ///
+    /// Edge cases: a negative or out of range `index` is logged and ignored.
+    pub fn select_turner(&mut self, index: i32) {
+        let position = usize::try_from(index).unwrap_or(usize::MAX);
+        if position >= self.turn_names.len() {
+            warn!("select_turner: ignoring participant index {index}");
+            return;
+        }
+        self.turn_selected = position;
+    }
+
+    /// Moves the minutes of the next turn by `delta`, between 1 and the longest turn that fits in
+    /// the meeting (see [`max_turn_minutes`]).
+    ///
+    /// Edge cases: ignored outside the turn settings or without a running countdown.
+    pub fn adjust_turn_minutes(&mut self, delta: i32) {
+        let Some((now_ms, end_ms)) = self.turn_clock() else {
+            return;
+        };
+        if self.turn_view != TurnView::Settings {
+            return;
+        }
+        let moved = i64::from(self.turn_minutes).saturating_add(i64::from(delta));
+        let moved = u32::try_from(moved.max(1)).unwrap_or(u32::MAX);
+        self.turn_minutes = clamp_turn_minutes(moved, now_ms, end_ms);
+    }
+
+    /// Starts a turn of the chosen participant and the chosen minutes, capped at the meeting end.
+    ///
+    /// Edge cases: ignored outside the turn settings or without a running countdown.
+    pub fn start_turn(&mut self) {
+        let Some((now_ms, end_ms)) = self.turn_clock() else {
+            return;
+        };
+        if self.turn_view != TurnView::Settings {
+            return;
+        }
+        let Some(name) = self.turn_names.get(self.turn_selected) else {
+            return;
+        };
+        self.turn = Some(SpeakingTurn::new(
+            name.clone(),
+            self.turn_minutes,
+            now_ms,
+            end_ms,
+        ));
+        self.turn_view = TurnView::Running;
+    }
+
+    /// Adds `delta_minutes` (negative to remove) to the running turn, never past the meeting end
+    /// and never below zero. Adding time re-arms the end-of-turn beep.
+    ///
+    /// Edge cases: ignored when no turn runs.
+    pub fn adjust_turn_time(&mut self, delta_minutes: i32) {
+        let Some((now_ms, end_ms)) = self.turn_clock() else {
+            return;
+        };
+        if let Some(turn) = self.turn.as_mut() {
+            turn.adjust(i64::from(delta_minutes) * MINUTE_MS, now_ms, end_ms);
+        }
+    }
+
+    /// Ends the running turn and goes back to the turn settings.
+    ///
+    /// Edge cases: ignored when no turn runs.
+    pub fn end_turn(&mut self) {
+        if self.turn_view == TurnView::Running {
+            self.turn = None;
+            self.turn_view = TurnView::Settings;
+            self.fit_turn_minutes();
+        }
+    }
+
+    /// Forgets every turn setting and installs `names` as the participants of a new countdown:
+    /// plain view, first participant chosen, default minutes.
+    fn reset_turns(&mut self, names: Vec<String>) {
+        let rows: Vec<SharedString> = names.iter().map(|name| name.as_str().into()).collect();
+        self.turn_names_model.set_vec(rows);
+        self.turn_names = names;
+        self.turn_view = TurnView::Plain;
+        self.turn_selected = 0;
+        self.turn_minutes = DEFAULT_TURN_MINUTES;
+        self.turn = None;
+    }
+
+    /// Current time and countdown end in milliseconds; `None` without a running countdown.
+    fn turn_clock(&self) -> Option<(i64, i64)> {
+        let target = self.target?;
+        Some((Local::now().timestamp_millis(), target.timestamp_millis()))
+    }
+
+    /// Lowers the minutes of the next turn to what the meeting still allows.
+    fn fit_turn_minutes(&mut self) {
+        if let Some((now_ms, end_ms)) = self.turn_clock() {
+            self.turn_minutes = clamp_turn_minutes(self.turn_minutes, now_ms, end_ms);
+        }
+    }
+
+    /// Turn part of a tick: keeps the settings minutes valid, or checks whether the running turn
+    /// ran out.
+    fn tick_turns(&mut self, now_ms: i64, end_ms: i64) -> TickSound {
+        match self.turn_view {
+            TurnView::Plain => TickSound::None,
+            TurnView::Settings => {
+                self.turn_minutes = clamp_turn_minutes(self.turn_minutes, now_ms, end_ms);
+                TickSound::None
+            }
+            TurnView::Running => {
+                let Some(turn) = self.turn.as_mut() else {
+                    return TickSound::None;
+                };
+                if turn.tick(now_ms, end_ms) {
+                    TickSound::TurnEnd
+                } else {
+                    TickSound::None
+                }
+            }
         }
     }
 
@@ -341,6 +525,7 @@ impl AppState {
         self.target = None;
         self.timer_ms = 0;
         self.origin = None;
+        self.reset_turns(Vec::new());
         self.on_login_required(status);
     }
 
@@ -351,6 +536,28 @@ impl AppState {
         self.meetings_model.set_vec(Vec::new());
         self.meetings_loaded = false;
         self.meetings_status = MeetingsStatus::Loading;
+    }
+
+    /// Pushes the turn view, the settings and the running turn to `window`.
+    fn render_turns(&self, window: &MainWindow) {
+        let (now_ms, end_ms) = self.turn_clock().unwrap_or((0, 0));
+        window.set_turn_available(self.turns_available());
+        window.set_turn_view(self.turn_view);
+        window.set_turn_selected(i32::try_from(self.turn_selected).unwrap_or(0));
+        window.set_turn_minutes(i32::try_from(self.turn_minutes).unwrap_or(i32::MAX));
+        let max = max_turn_minutes(now_ms, end_ms);
+        window.set_turn_max_minutes(i32::try_from(max).unwrap_or(i32::MAX));
+        let (name, left, can_add) = match &self.turn {
+            Some(turn) => (
+                turn.name(),
+                turn.left_ms(now_ms, end_ms),
+                turn.can_add(end_ms),
+            ),
+            None => ("", 0, false),
+        };
+        window.set_turn_speaker(name.into());
+        window.set_turn_left(left);
+        window.set_turn_can_add(can_add);
     }
 
     /// Shrinks the window to the countdown shape when the countdown screens open and restores it
@@ -495,6 +702,7 @@ impl AppState {
         self.target = None;
         self.timer_ms = 0;
         self.origin = None;
+        self.reset_turns(Vec::new());
         self.notice = "";
         self.on_login_required("");
     }
@@ -511,6 +719,11 @@ impl AppState {
         window.set_meetings(ModelRc::from(self.meetings_model.clone()));
     }
 
+    /// Binds the shared participant names model to `window`; call once after creating the window.
+    pub fn bind_turns(&self, window: &MainWindow) {
+        window.set_turn_names(ModelRc::from(self.turn_names_model.clone()));
+    }
+
     /// Pushes page, running state, timer, account and status lines to `window`, and fits the
     /// window shape to the page (see [`window_step`]).
     pub fn render(&mut self, window: &MainWindow) {
@@ -524,6 +737,7 @@ impl AppState {
             .map_or_else(String::new, |target| target.format("%H:%M").to_string());
         window.set_timer_end(end.into());
         window.set_finish_seed(self.finish_seed);
+        self.render_turns(window);
         window.set_selected_slot(self.selected_index());
         window.set_signed_in(self.account.is_some());
         window.set_account_name(self.account.as_deref().unwrap_or_default().into());
@@ -595,6 +809,12 @@ fn visible_meetings(meetings: &[Meeting], now: &DateTime<FixedOffset>) -> Vec<Me
     }
     shown.sort_by_key(|meeting| (!is_in_progress(meeting, now), meeting.start));
     shown
+}
+
+/// Longest value `minutes` can take for a turn started at `now_ms` in a meeting ending at
+/// `end_ms`: it is lowered to [`max_turn_minutes`] and never goes below 1.
+fn clamp_turn_minutes(minutes: u32, now_ms: i64, end_ms: i64) -> u32 {
+    minutes.min(max_turn_minutes(now_ms, end_ms)).max(1)
 }
 
 /// True for the pages that show a countdown: the running one and the finished one.
@@ -1304,6 +1524,285 @@ pub mod tests {
     #[test]
     fn random_seed_is_never_negative() {
         assert!(random_seed() >= 0);
+    }
+
+    fn person(name: &str) -> Attendee {
+        Attendee {
+            email: format!("{}@x.it", name.to_lowercase()),
+            name: name.to_string(),
+            is_self: false,
+            optional: false,
+            response: ResponseStatus::Accepted,
+        }
+    }
+
+    /// State whose meeting timer runs for a meeting of Zoe, Ann and Bob that ends in 10 minutes.
+    fn state_with_turns() -> AppState {
+        let now = Local::now().fixed_offset();
+        let mut state = sample_state();
+        state.on_signed_in(&me(None));
+        let mut talk = meeting(
+            "Planning",
+            now - chrono::Duration::minutes(1),
+            now + chrono::Duration::minutes(10),
+        );
+        talk.attendees = vec![person("Zoe"), person("Ann"), person("Bob")];
+        state.on_meetings_loaded(vec![talk]);
+        let _ = state.select_meeting(0);
+        state
+    }
+
+    fn ends_in(state: &mut AppState, minutes: i64, seconds: i64) {
+        state.target = Some(
+            Local::now() + chrono::Duration::minutes(minutes) + chrono::Duration::seconds(seconds),
+        );
+    }
+
+    #[test]
+    fn turns_are_not_available_for_a_manual_timer() {
+        let mut state = sample_state();
+        state.select_slot(1);
+        let _ = state.start_selected();
+
+        assert!(!state.turns_available());
+        state.show_turns();
+        assert_eq!(state.turn_view, TurnView::Plain);
+    }
+
+    #[test]
+    fn turns_are_not_available_without_participants() {
+        let mut state = state_with_meetings();
+        let _ = state.select_meeting(0);
+
+        assert!(!state.turns_available());
+        state.show_turns();
+        assert_eq!(state.turn_view, TurnView::Plain);
+    }
+
+    #[test]
+    fn turns_are_available_for_a_meeting_with_participants() {
+        let state = state_with_turns();
+
+        assert!(state.turns_available());
+        assert_eq!(state.turn_names, vec!["Ann", "Bob", "Zoe"]);
+        assert_eq!(state.turn_names_model.row_count(), 3);
+    }
+
+    #[test]
+    fn a_new_meeting_timer_starts_plain_with_defaults() {
+        let mut state = state_with_turns();
+        state.show_turns();
+        state.select_turner(2);
+        state.adjust_turn_minutes(2);
+        state.start_turn();
+        state.stop(StopType::UserStopped);
+
+        let _ = state.select_meeting(0);
+
+        assert_eq!(state.turn_view, TurnView::Plain);
+        assert_eq!(state.turn_selected, 0);
+        assert_eq!(state.turn_minutes, DEFAULT_TURN_MINUTES);
+        assert!(state.turn.is_none());
+    }
+
+    #[test]
+    fn showing_the_settings_keeps_the_defaults_and_hiding_goes_back_to_plain() {
+        let mut state = state_with_turns();
+
+        state.show_turns();
+
+        assert_eq!(state.turn_view, TurnView::Settings);
+        assert_eq!(state.turn_selected, 0);
+        assert_eq!(state.turn_minutes, 5);
+
+        state.hide_turns();
+
+        assert_eq!(state.turn_view, TurnView::Plain);
+        assert!(state.target.is_some());
+    }
+
+    #[test]
+    fn the_chosen_participant_is_remembered_across_hiding() {
+        let mut state = state_with_turns();
+        state.show_turns();
+        state.select_turner(2);
+
+        state.hide_turns();
+        state.show_turns();
+
+        assert_eq!(state.turn_selected, 2);
+    }
+
+    #[test]
+    fn choosing_an_invalid_participant_is_ignored() {
+        let mut state = state_with_turns();
+        state.show_turns();
+        state.select_turner(1);
+
+        state.select_turner(-1);
+        state.select_turner(3);
+
+        assert_eq!(state.turn_selected, 1);
+    }
+
+    #[test]
+    fn minutes_stay_between_one_and_the_time_left() {
+        let mut state = state_with_turns();
+        ends_in(&mut state, 7, 30);
+        state.show_turns();
+
+        state.adjust_turn_minutes(10);
+        assert_eq!(state.turn_minutes, 7);
+
+        state.adjust_turn_minutes(-10);
+        assert_eq!(state.turn_minutes, 1);
+    }
+
+    #[test]
+    fn showing_the_settings_lowers_the_default_to_the_time_left() {
+        let mut state = state_with_turns();
+        ends_in(&mut state, 3, 30);
+
+        state.show_turns();
+
+        assert_eq!(state.turn_minutes, 3);
+    }
+
+    #[test]
+    fn minutes_follow_the_meeting_running_out() {
+        let mut state = state_with_turns();
+        state.show_turns();
+        let now = Local::now().timestamp_millis();
+
+        let sound = state.tick_turns(now, now + 2 * MINUTE_MS + 10_000);
+
+        assert_eq!(sound, TickSound::None);
+        assert_eq!(state.turn_minutes, 2);
+    }
+
+    #[test]
+    fn minutes_cannot_change_outside_the_settings() {
+        let mut state = state_with_turns();
+
+        state.adjust_turn_minutes(1);
+
+        assert_eq!(state.turn_minutes, 5);
+    }
+
+    #[test]
+    fn starting_a_turn_uses_the_chosen_participant_and_minutes() {
+        let mut state = state_with_turns();
+        state.show_turns();
+        state.select_turner(1);
+        state.adjust_turn_minutes(-2);
+
+        state.start_turn();
+
+        assert_eq!(state.turn_view, TurnView::Running);
+        let turn = state.turn.as_ref().unwrap();
+        assert_eq!(turn.name(), "Bob");
+        let end_ms = state.target.unwrap().timestamp_millis();
+        let left = turn.left_ms(Local::now().timestamp_millis(), end_ms);
+        assert!(left > 2 * MINUTE_MS + 50_000 && left <= 3 * MINUTE_MS);
+    }
+
+    #[test]
+    fn a_turn_cannot_start_from_the_plain_view() {
+        let mut state = state_with_turns();
+
+        state.start_turn();
+
+        assert_eq!(state.turn_view, TurnView::Plain);
+        assert!(state.turn.is_none());
+    }
+
+    #[test]
+    fn turn_time_moves_a_minute_at_a_time_within_bounds() {
+        let mut state = state_with_turns();
+        state.show_turns();
+        state.adjust_turn_minutes(-4);
+        state.start_turn();
+        let end_ms = state.target.unwrap().timestamp_millis();
+
+        state.adjust_turn_time(-1);
+        let now_ms = Local::now().timestamp_millis();
+        assert!(state.turn.as_ref().unwrap().left_ms(now_ms, end_ms) < 1_000);
+
+        state.adjust_turn_time(60);
+        let now_ms = Local::now().timestamp_millis();
+        let left = state.turn.as_ref().unwrap().left_ms(now_ms, end_ms);
+        assert!(left <= end_ms - now_ms);
+        assert!(!state.turn.as_ref().unwrap().can_add(end_ms));
+    }
+
+    #[test]
+    fn the_beep_plays_once_and_again_after_adding_time() {
+        let mut state = state_with_turns();
+        state.show_turns();
+        state.adjust_turn_minutes(-4);
+        state.start_turn();
+        let now = Local::now().timestamp_millis();
+        let end_ms = state.target.unwrap().timestamp_millis();
+
+        assert_eq!(state.tick_turns(now + 30_000, end_ms), TickSound::None);
+        assert_eq!(state.tick_turns(now + 61_000, end_ms), TickSound::TurnEnd);
+        assert_eq!(state.tick_turns(now + 62_000, end_ms), TickSound::None);
+
+        state.adjust_turn_time(1);
+
+        assert_eq!(state.tick_turns(now + 63_000, end_ms), TickSound::None);
+        assert_eq!(state.tick_turns(now + 121_000, end_ms), TickSound::TurnEnd);
+    }
+
+    #[test]
+    fn no_beep_when_the_meeting_is_over() {
+        let mut state = state_with_turns();
+        state.show_turns();
+        state.start_turn();
+        let end_ms = state.target.unwrap().timestamp_millis();
+
+        assert_eq!(state.tick_turns(end_ms, end_ms), TickSound::None);
+    }
+
+    #[test]
+    fn ending_a_turn_returns_to_the_settings() {
+        let mut state = state_with_turns();
+        state.show_turns();
+        state.select_turner(2);
+        state.start_turn();
+
+        state.end_turn();
+
+        assert_eq!(state.turn_view, TurnView::Settings);
+        assert!(state.turn.is_none());
+        assert_eq!(state.turn_selected, 2);
+    }
+
+    #[test]
+    fn stopping_resets_the_turns() {
+        let mut state = state_with_turns();
+        state.show_turns();
+        state.start_turn();
+
+        state.stop(StopType::UserStopped);
+
+        assert_eq!(state.turn_view, TurnView::Plain);
+        assert!(state.turn.is_none());
+        assert!(state.turn_names.is_empty());
+        assert!(!state.turns_available());
+    }
+
+    #[test]
+    fn the_meeting_ending_resets_the_turns() {
+        let mut state = state_with_turns();
+        state.show_turns();
+        state.start_turn();
+
+        state.stop(StopType::TimerFinished);
+
+        assert_eq!(state.page, Page::TimerFinished);
+        assert_eq!(state.turn_view, TurnView::Plain);
+        assert!(state.turn.is_none());
     }
 
     #[test]
