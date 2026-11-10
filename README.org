@@ -10,46 +10,78 @@ that moment.
 
 * How it works
 
-When you launch the app it shows the *next 8 quarter-hour marks* (00, 15, 30,
+The app has a navbar with two tabs, *Manuale* and *I miei meeting* (the
+second one only with a backend), a help button and, once signed in, a menu with
+*Logout*. The interface uses the Manrope font and a purple and amber theme,
+with a dark variant.
+
+On the *Manuale* tab the app shows the *next 8 quarter-hour marks* (00, 15, 30,
 45 past the hour) starting from the upcoming quarter. That covers meetings of
 up to *2 hours*.
 
 - The options refresh automatically every 3 seconds, so they are always
   accurate even if the app sits open for a while before the meeting starts.
-- Pick the slot when the ceremony has to end.
+- Pick the slot when the ceremony has to end. Picking a slot does not start
+  anything: press *Avvia timer* when you are ready.
 - The timer counts down to exactly that time and plays a sound when it
   reaches zero.
-- Press *Stop* to end early and go back to the selection screen.
+- When a countdown starts the window shrinks to a compact 360x240 size and
+  stays on top of the other windows. It shows the countdown, the end time
+  ("Fine alle HH:MM") and a *Stop* button. In the last 5 minutes the countdown
+  turns orange. The previous window size and on-top state are restored when the
+  countdown screens are left.
+- Press *Stop* to end early: you go back to the page the timer was started from.
+- At zero the finished screen says "Meeting terminato!", with rotating captions
+  and confetti. *Torna alla home* goes back to the page the timer was started
+  from.
 
 Example: it's 09:07 and the daily stand-up must wrap by 09:15. Open the app,
-tap =09:15=, and the timer ends precisely at 09:15 — not 15 minutes from when
-you pressed the button.
+tap =09:15=, press *Avvia timer*, and the timer ends precisely at 09:15, not 15
+minutes from when you pressed the button.
 
-** Meetings and speaking slots (with a backend)
+Keyboard shortcuts (also listed in the help window): =Q= quits, =M= toggles
+full screen, =Esc= leaves full screen, =T= keeps the window on top, =H= shows
+the help.
+
+** Meetings, speaking turns and Daily (with a backend)
 
 When the app is built against a backend (see
 [[#building-the-app-against-a-backend][Building the app against a backend]])
-and you sign in with Google, it lists today's remaining meetings from your
-calendar.
+and you sign in with Google, the *I miei meeting* tab lists today's remaining
+meetings from your calendar.
 
-- Click a meeting to count down to its end. The time left is split into
-  speaking slots, one per participant; a short beep marks the end of each
-  slot and *Avanti* (or =N=) moves to the next one.
-- The *Editor* button on a meeting opens the slot editor: change names,
-  minutes and speaking order, exclude people, add rows by hand, then *Avvia*
-  to start or *Salva come preferenza* to save it.
-- A saved preference belongs to you and to the meeting title (case and
-  spacing ignored). The next meeting with the same title reuses it, rescaled
-  to its duration and to who is invited; meetings with a preference show
-  "slot salvati" in the list.
-- If the backend cannot be reached when a meeting starts, the timer still
-  runs with equal slots.
+- Every meeting has an *Avvia* button, also the ones that have not started yet:
+  it starts the countdown to the end of the meeting, in the same compact
+  always-on-top window as the manual timer.
+- Every meeting has a *Daily* switch. It is on by default when the title
+  contains =daily=, =standup=, =stand-up= or =scrum= as a whole word (case is
+  ignored), and you can change it for each meeting.
+- Only the participants who have not declined are considered.
+- *Turni di parola* (normal meeting timer): choose a participant and the
+  minutes, then start the turn. During the turn you can add or remove a minute,
+  a soft beep marks its end, and *Fine turno* goes back to the picker. *Nascondi*
+  hides the picker and leaves the plain countdown. A turn never goes past the
+  end of the meeting.
+- *Daily* mode (switch on and at least one participant): the participants are
+  called in random order and the time left is split equally among those who
+  still have to speak. The current speaker can be paused, given or taken a
+  minute, or skipped with *Passa la parola*. When a speaker's time is over the
+  app hands over to the next one by itself with a soft beep. Adding time to the
+  current speaker leaves at least one minute for each person still to speak.
+
+The server still keeps its slot templates and plans (see its routes), but the
+desktop app no longer uses them: there is no slot editor and nothing is saved
+per meeting title.
 
 * Screenshots
 
-| End time                               | Today's meetings                       | Speaking slots                                 |
-|----------------------------------------+----------------------------------------+------------------------------------------------|
-| [[assets/screenshot_end_time.png]]     | [[assets/screenshot_meetings.png]]     | [[assets/screenshot_speaking_slots.png]]       |
+| Manuale: end time picked              | Today's meetings                       |
+|---------------------------------------+----------------------------------------|
+| [[assets/screenshot_end_time.png]]    | [[assets/screenshot_meetings.png]]     |
+
+| Turni di parola                              | Daily mode                          |
+|----------------------------------------------+-------------------------------------|
+| [[assets/screenshot_speaking_slots.png]]     | [[assets/screenshot_daily.png]]     |
 
 | Meeting timer                           | Timer                               |
 |-----------------------------------------+-------------------------------------|
@@ -71,7 +103,8 @@ The repo is a Cargo workspace:
 - =crates/app= — the =schisaciaccole= binary: Slint desktop app (=ui/=), =build.rs=,
   assets (=assets/=: icons, sound, font) and the bundle metadata.
 - =crates/server= — the =schisaciaccole-server= binary: axum backend with Google
-  login, app sessions, meetings from Google Calendar and saved slot preferences.
+  login, app sessions, meetings from Google Calendar and slot templates and plans
+  (not used by the desktop app).
 - =deploy/= — =Dockerfile= for the server and =docker-compose.yml= (server and
   PostgreSQL 17).
 - =assets/= — screenshots used by this README.
@@ -339,7 +372,7 @@ The app uses =env_logger=. Control verbosity with the =RUST_LOG= environment
 variable (default is =warn=):
 
 #+begin_src sh
-RUST_LOG=info cargo run -p schisaciaccole     # callback events: selection, start/pause, stop, sound
+RUST_LOG=info cargo run -p schisaciaccole     # callback events: selection, start, stop, sound
 RUST_LOG=debug cargo run -p schisaciaccole    # also the periodic option refresh
 #+end_src
 
