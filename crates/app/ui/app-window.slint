@@ -1,9 +1,11 @@
 import { ListView, AboutSlint } from "std-widgets.slint";
 import { AppTheme, AppText, ThemedButton, CompactButton, ThemedField, ScrollList, AppMotion, MotionProgress } from "theme.slint";
 
-import "../assets/fonts/Plus_Jakarta_Sans/static/PlusJakartaSans-Regular.ttf";
-import "../assets/fonts/Plus_Jakarta_Sans/static/PlusJakartaSans-Medium.ttf";
-import "../assets/fonts/Plus_Jakarta_Sans/static/PlusJakartaSans-Bold.ttf";
+import "../assets/fonts/Manrope/static/Manrope-Regular.ttf";
+import "../assets/fonts/Manrope/static/Manrope-Medium.ttf";
+import "../assets/fonts/Manrope/static/Manrope-SemiBold.ttf";
+import "../assets/fonts/Manrope/static/Manrope-Bold.ttf";
+import "../assets/fonts/Manrope/static/Manrope-ExtraBold.ttf";
 
 export enum Page { SelectionPage, TimerPage, TimerFinished, LoadingPage, LoginPage, MeetingsPage, EditorPage }
 export enum StopType { TimerFinished, UserStopped }
@@ -557,7 +559,7 @@ export component MainWindow inherits Window {
     min-width: 720px;
     preferred-height: 516px;
     min-height: 500px;
-    default-font-family: "Plus Jakarta Sans";
+    default-font-family: "Manrope";
     forward-focus: scope;
 
     property <bool> on-top: false;
@@ -900,7 +902,7 @@ export component Help inherits Window {
     min-width: 600px;
     min-height: 380px;
     always-on-top: true;
-    default-font-family: "Plus Jakarta Sans";
+    default-font-family: "Manrope";
 
     VerticalLayout {
         padding: 32px;

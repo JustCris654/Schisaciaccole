@@ -59,8 +59,8 @@ calendar.
 
 - [[https://www.rust-lang.org/tools/install][Rust]] (stable toolchain, =cargo=)
 
-The font (*Plus Jakarta Sans*, under
-=crates/app/assets/fonts/Plus_Jakarta_Sans/=) is embedded in the binary at
+The font (*Manrope*, under
+=crates/app/assets/fonts/Manrope/=) is embedded in the binary at
 build time — no extra setup needed.
 
 * Project layout
