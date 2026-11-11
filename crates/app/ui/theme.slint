@@ -2,14 +2,15 @@ import { Palette } from "std-widgets.slint";
 
 export global AppTheme {
     out property <bool> dark: Palette.color-scheme == ColorScheme.dark;
-    out property <color> page: dark ? #17141D : #FFFFFF;
-    out property <color> surface: dark ? #262033 : #F1ECFA;
+    out property <color> page: dark ? #222228 : #FFFFFF;
+    out property <color> surface: dark ? #35353E : #F1ECFA;
     out property <color> brand: #6B2FBF;
+    out property <color> timer-title: #C682F5;
     out property <color> on-brand: #FFFFFF;
-    out property <color> text: dark ? #F3EFF9 : #1E1A26;
-    out property <color> text-secondary: dark ? #A79FB8 : #6A6378;
-    out property <color> text-brand: dark ? #B892F5 : #6B2FBF;
-    out property <color> border-subtle: dark ? #3D3350 : #DCD0F2;
+    out property <color> text: dark ? #F3F1F7 : #1E1A26;
+    out property <color> text-secondary: dark ? #C1BECA : #6A6378;
+    out property <color> text-brand: dark ? #C7B0EE : #6B2FBF;
+    out property <color> border-subtle: dark ? #52525F : #DCD0F2;
     out property <color> orange: dark ? #F29A2E : #E07B00;
     out property <color> orange-soft: dark ? #33250F : #FDF1E1;
     out property <color> orange-tint: dark ? #5C3F14 : #F8D7A8;
@@ -17,11 +18,6 @@ export global AppTheme {
     out property <color> notice: dark ? #F29A2E : #A85A00;
     out property <color> danger: dark ? #3D3350 : #1E1A26;
     out property <color> on-danger: #FFFFFF;
-    out property <color> nav-tab-text: #FFFFFFCC;
-    out property <color> nav-tab-hover: #FFFFFF29;
-    out property <color> nav-icon-hover: #FFFFFF24;
-    out property <color> nav-selected: #FFFFFF;
-    out property <color> nav-selected-hover: #F1ECFA;
     out property <length> radius-card: 18px;
     out property <length> radius-item: 12px;
 }
@@ -101,7 +97,7 @@ export component AppText inherits Text {
 export component PageTitle inherits Text {
     color: AppTheme.text;
     font-size: 34px;
-    font-weight: 800;
+    font-weight: 400;
     letter-spacing: -0.68px;
     overflow: elide;
 }
@@ -343,7 +339,7 @@ export component PillButton inherits Rectangle {
         Text {
             text: root.text;
             font-size: root.link ? 15px : (root.outline ? (root.compact ? 11px : 14px) : 17px);
-            font-weight: root.link ? 600 : 700;
+            font-weight: 400;
             color: root.foreground;
             vertical-alignment: center;
             horizontal-alignment: center;

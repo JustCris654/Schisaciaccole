@@ -1,11 +1,7 @@
 import { ListView, AboutSlint } from "std-widgets.slint";
-import { AppTheme, AppText, PageTitle, PageSub, PillButton, PillKind, PlayIcon, StopIcon, PauseIcon, SkipIcon, HomeIcon, PeopleIcon, EyeOffIcon, ChevronIcon, StepIcon, HelpIcon, DotsIcon, LogoutIcon, LogoMark, FadeFill, FocusRing, AppMotion, MotionProgress } from "theme.slint";
+import { AppTheme, AppText, PageTitle, PageSub, PillButton, PillKind, PlayIcon, StopIcon, PauseIcon, SkipIcon, HomeIcon, PeopleIcon, EyeOffIcon, ChevronIcon, StepIcon, DotsIcon, LogoutIcon, LogoMark, FadeFill, FocusRing, AppMotion, MotionProgress } from "theme.slint";
 
-import "../assets/fonts/Manrope/static/Manrope-Regular.ttf";
-import "../assets/fonts/Manrope/static/Manrope-Medium.ttf";
-import "../assets/fonts/Manrope/static/Manrope-SemiBold.ttf";
-import "../assets/fonts/Manrope/static/Manrope-Bold.ttf";
-import "../assets/fonts/Manrope/static/Manrope-ExtraBold.ttf";
+import "../assets/fonts/MomoTrustDisplay/MomoTrustDisplay-Regular.ttf";
 
 export enum Page { ManualPage, TimerPage, TimerFinished, LoadingPage, LoginPage, MeetingsPage }
 export enum StopType { TimerFinished, UserStopped }
@@ -40,32 +36,29 @@ component NavTab inherits Rectangle {
     opacity: root.enabled ? 1 : 0.4;
 
     accessible-role: tab;
+    accessible-checkable: true;
+    accessible-checked: root.selected;
     accessible-label: root.text;
     accessible-enabled: root.enabled;
     accessible-action-default => { if (root.enabled) { root.clicked(); } }
 
-    FadeFill {
-        width: parent.width;
-        height: parent.height;
-        border-radius: self.height / 2;
-        target: root.selected
-            ? (touch.has-hover ? AppTheme.nav-selected-hover : AppTheme.nav-selected)
-            : (touch.has-hover ? AppTheme.nav-tab-hover : #FFFFFF00);
-    }
     content := HorizontalLayout {
-        padding-left: 16px;
-        padding-right: 16px;
-        padding-top: 8px;
-        padding-bottom: 8px;
+        padding-top: 10px;
+        padding-bottom: 10px;
         Text {
             text: root.text;
-            font-size: 17px;
-            font-weight: 700;
-            letter-spacing: 0.51px;
+            font-size: 14px;
+            font-weight: 400;
             vertical-alignment: center;
-            color: root.selected ? AppTheme.brand : (touch.has-hover ? #FFFFFF : AppTheme.nav-tab-text);
+            color: root.selected || touch.has-hover ? AppTheme.text : AppTheme.text-secondary;
             accessible-role: none;
         }
+    }
+    Rectangle {
+        y: parent.height - 2px;
+        width: parent.width;
+        height: 2px;
+        background: root.selected ? AppTheme.text-brand : AppTheme.page;
     }
     touch := TouchArea {
         enabled: root.enabled;
@@ -100,9 +93,11 @@ component NavIconButton inherits Rectangle {
         width: parent.width;
         height: parent.height;
         border-radius: self.height / 2;
-        target: touch.has-hover ? AppTheme.nav-icon-hover : #FFFFFF00;
+        target: touch.has-hover ? AppTheme.surface : AppTheme.surface.transparentize(1);
     }
     Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
         width: 26px;
         height: 26px;
         @children
@@ -127,70 +122,52 @@ component Navigation inherits Rectangle {
     callback manual();
     callback meetings();
     callback logout();
-    callback help();
-    background: AppTheme.brand;
-    height: 64px;
+    private property <bool> narrow: root.width < 820px;
+    private property <length> side: root.narrow ? 20px : 24px;
+    background: AppTheme.page;
+    height: root.narrow ? 110px : 76px;
 
+    Text {
+        x: (root.width - self.width) / 2;
+        y: root.narrow ? 18px : (root.height - self.height) / 2;
+        width: self.preferred-width;
+        height: self.preferred-height;
+        text: "Schisaciaccole";
+        color: AppTheme.text;
+        font-size: 22px;
+        font-weight: 400;
+        letter-spacing: -0.66px;
+        horizontal-alignment: center;
+    }
     HorizontalLayout {
-        padding-left: 32px;
-        padding-right: 32px;
-        padding-top: 12px;
-        padding-bottom: 12px;
-        spacing: 24px;
-
-        HorizontalLayout {
-            horizontal-stretch: 1;
-            alignment: start;
-            spacing: 32px;
-            HorizontalLayout {
-                spacing: 10px;
-                VerticalLayout {
-                    alignment: center;
-                    LogoMark { width: 38px; height: 38px; }
-                }
-                Text {
-                    text: "Schisaciaccole";
-                    color: #FFFFFF;
-                    font-size: 22px;
-                    font-weight: 800;
-                    letter-spacing: -0.66px;
-                    vertical-alignment: center;
-                }
-            }
-            HorizontalLayout {
-                spacing: 8px;
-                NavTab {
-                    text: "MANUALE";
-                    selected: !root.meetings-page;
-                    clicked => { root.manual(); }
-                }
-                NavTab {
-                    text: "I MIEI MEETING";
-                    selected: root.meetings-page;
-                    enabled: root.signed-in;
-                    clicked => { root.meetings(); }
-                }
-            }
+        x: root.side;
+        y: root.narrow ? 59px : 18px;
+        width: self.preferred-width;
+        height: 40px;
+        spacing: 20px;
+        NavTab {
+            text: "Manuale";
+            selected: !root.meetings-page;
+            clicked => { root.manual(); }
         }
-
-        HorizontalLayout {
-            spacing: 8px;
-            NavIconButton {
-                accessible-name: "Aiuto";
-                clicked => { root.help(); }
-                HelpIcon { width: parent.width; height: parent.height; }
-            }
-            if root.signed-in : NavIconButton {
-                accessible-name: "Altre azioni";
-                clicked => { menu.show(); }
-                DotsIcon { width: parent.width; height: parent.height; }
-            }
+        NavTab {
+            text: "I miei meeting";
+            selected: root.meetings-page;
+            enabled: root.signed-in;
+            clicked => { root.meetings(); }
         }
+    }
+    if root.signed-in : NavIconButton {
+        x: root.width - root.side - self.width;
+        y: root.narrow ? 59px : 18px;
+        accessible-name: "Menu account";
+        clicked => { menu.show(); }
+        DotsIcon { width: parent.width; height: parent.height; tint: AppTheme.text; }
     }
 
     menu := PopupWindow {
-        x: root.width - 32px - 200px;
-        y: root.height - 6px;
+        x: root.width - root.side - 200px;
+        y: root.narrow ? 107px : 66px;
         width: 200px;
         height: 65px;
         Rectangle {
@@ -225,7 +202,7 @@ component Navigation inherits Rectangle {
                             text: "Logout";
                             color: AppTheme.text;
                             font-size: 15px;
-                            font-weight: 500;
+                            font-weight: 400;
                             vertical-alignment: center;
                             accessible-role: none;
                         }
@@ -264,8 +241,9 @@ component SlotCard inherits Rectangle {
         width: parent.width;
         height: parent.height;
         border-radius: AppTheme.radius-card;
-        border-width: 2px;
-        border-color: touch.has-hover ? AppTheme.border-subtle : #FFFFFF00;
+        border-width: 1px;
+        border-color: root.selected ? AppTheme.brand
+            : (touch.has-hover ? AppTheme.text-brand : AppTheme.border-subtle);
     }
     VerticalLayout {
         alignment: center;
@@ -273,7 +251,7 @@ component SlotCard inherits Rectangle {
         Text {
             text: root.time;
             font-size: 30px;
-            font-weight: 800;
+            font-weight: 400;
             letter-spacing: -0.6px;
             horizontal-alignment: center;
             color: root.selected ? AppTheme.on-brand : AppTheme.text;
@@ -282,11 +260,25 @@ component SlotCard inherits Rectangle {
         Text {
             text: "tra " + root.minutes + " min";
             font-size: 15px;
-            font-weight: 500;
+            font-weight: 400;
             horizontal-alignment: center;
-            color: root.selected ? #FFFFFFD9 : AppTheme.text-secondary;
+            color: root.selected ? #F1E8FF : AppTheme.text-secondary;
             accessible-role: none;
         }
+    }
+    if root.selected : Path {
+        x: parent.width - 26px;
+        y: 9px;
+        width: 15px;
+        height: 15px;
+        viewbox-width: 16;
+        viewbox-height: 16;
+        stroke: AppTheme.on-brand;
+        stroke-width: 2px;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+        commands: "M3 8l3 3 7-7";
+        accessible-role: none;
     }
     touch := TouchArea { clicked => { root.clicked(); } }
     focus := FocusScope {
@@ -316,13 +308,13 @@ component ManualPage inherits VerticalLayout {
 
     VerticalLayout {
         spacing: 12px;
-        PageTitle { text: "Quando finisce il meeting?"; }
+        PageTitle { text: "Quando finisce il meeting?"; color: AppTheme.timer-title; }
         HorizontalLayout {
             alignment: start;
             spacing: 5px;
             PageSub { text: "Sono le"; }
             HorizontalLayout {
-                PageSub { text: root.current-time; color: AppTheme.text; font-weight: 700; }
+                PageSub { text: root.current-time; color: AppTheme.text; font-weight: 400; }
                 PageSub { text: ". Scegli l’orario di fine."; }
             }
         }
@@ -398,7 +390,7 @@ component DailySwitch inherits Rectangle {
                 auto-text := Text {
                     text: "AUTO";
                     font-size: 11px;
-                    font-weight: 700;
+                    font-weight: 400;
                     letter-spacing: 0.66px;
                     color: AppTheme.text-brand;
                     horizontal-alignment: center;
@@ -434,7 +426,7 @@ component DailySwitch inherits Rectangle {
         Text {
             text: "Daily";
             font-size: 15px;
-            font-weight: 700;
+            font-weight: 400;
             color: AppTheme.text;
             vertical-alignment: center;
             accessible-role: none;
@@ -481,7 +473,7 @@ component DailySwitch inherits Rectangle {
                 height: parent.height - 20px;
                 text: root.tip;
                 font-size: 13px;
-                font-weight: 500;
+                font-weight: 400;
                 color: AppTheme.on-danger;
                 wrap: word-wrap;
                 vertical-alignment: top;
@@ -518,7 +510,7 @@ component MeetingsPage inherits VerticalLayout {
 
     VerticalLayout {
         spacing: 12px;
-        PageTitle { text: "I meeting di oggi"; }
+        PageTitle { text: "I meeting di oggi"; color: AppTheme.timer-title; }
         PageSub { text: "Google Calendar · " + root.account-name; overflow: elide; }
     }
     if root.loading : VerticalLayout {
@@ -558,7 +550,7 @@ component MeetingsPage inherits VerticalLayout {
                         width: 150px;
                         text: row.time-range;
                         font-size: 21px;
-                        font-weight: 700;
+                        font-weight: 400;
                         color: AppTheme.text;
                         vertical-alignment: center;
                     }
@@ -569,7 +561,7 @@ component MeetingsPage inherits VerticalLayout {
                         Text {
                             text: row.title;
                             font-size: 21px;
-                            font-weight: 700;
+                            font-weight: 400;
                             color: AppTheme.text;
                             overflow: elide;
                         }
@@ -627,7 +619,7 @@ component ClockCell inherits Rectangle {
         height: parent.height;
         text: root.glyph;
         font-size: root.size;
-        font-weight: 800;
+        font-weight: 400;
         color: root.tint;
         horizontal-alignment: center;
         vertical-alignment: center;
@@ -872,7 +864,7 @@ component TurnSelect inherits Rectangle {
         height: parent.height;
         text: root.current;
         font-size: root.compact ? 12px : 16px;
-        font-weight: 600;
+        font-weight: 400;
         color: AppTheme.text;
         vertical-alignment: center;
         overflow: elide;
@@ -957,7 +949,7 @@ component TurnSelect inherits Rectangle {
                             height: parent.height;
                             text: name;
                             font-size: root.compact ? 12px : 15px;
-                            font-weight: i == root.selected ? 700 : 500;
+                            font-weight: 400;
                             color: AppTheme.text;
                             vertical-alignment: center;
                             overflow: elide;
@@ -1017,14 +1009,14 @@ component TurnBar inherits Rectangle {
                     Text {
                         text: root.minutes;
                         font-size: root.compact ? 12px : 16px;
-                        font-weight: 800;
+                        font-weight: 400;
                         color: AppTheme.text;
                         vertical-alignment: center;
                     }
                     Text {
                         text: "min";
                         font-size: root.compact ? 10px : 13px;
-                        font-weight: 600;
+                        font-weight: 400;
                         color: AppTheme.text-secondary;
                         vertical-alignment: center;
                     }
@@ -1071,7 +1063,7 @@ component PersonBar inherits Rectangle {
             width: min(self.preferred-width, root.name-max);
             text: root.speaker;
             font-size: root.compact ? 13px : 18px;
-            font-weight: 700;
+            font-weight: 400;
             color: AppTheme.text;
             vertical-alignment: center;
             overflow: elide;
@@ -1114,7 +1106,7 @@ component PersonBar inherits Rectangle {
         badge-text := Text {
             text: "IN PAUSA";
             font-size: root.compact ? 9px : 11px;
-            font-weight: 700;
+            font-weight: 400;
             letter-spacing: root.compact ? 0.72px : 0.88px;
             color: AppTheme.on-danger;
             horizontal-alignment: center;
@@ -1182,7 +1174,7 @@ component TimerPage inherits Rectangle {
             seconds: max(0, ceil(root.timer-time / 1s));
             size: root.compact && !root.plain ? 54px : (root.compact ? 84px : clamp(72px, root.width * 0.16, 160px));
             avail: root.width - 2 * root.side;
-            tint: root.timer-time < 150s ? AppTheme.orange : AppTheme.text-brand;
+            tint: root.timer-time < 150s ? AppTheme.orange : AppTheme.timer-title;
         }
         if root.plain : Rectangle { height: root.compact ? 4px : 12px; }
         if root.plain : Text {
@@ -1281,7 +1273,7 @@ component TimerPage inherits Rectangle {
                                 height: parent.height;
                                 text: chip;
                                 font-size: 12px;
-                                font-weight: 500;
+                                font-weight: 400;
                                 color: AppTheme.text-secondary;
                                 vertical-alignment: center;
                                 overflow: elide;
@@ -1442,7 +1434,7 @@ component FinishedPage inherits Rectangle {
         Text {
             text: "Meeting terminato!";
             font-size: root.compact ? 30px : clamp(34px, root.width * 0.06, 56px);
-            font-weight: 800;
+            font-weight: 400;
             letter-spacing: -0.03 * self.font-size;
             color: AppTheme.text-brand;
             horizontal-alignment: center;
@@ -1461,7 +1453,7 @@ component FinishedPage inherits Rectangle {
                     height: parent.height;
                     text: root.captions[swap.active && swap.value < 0.43 ? root.previous : root.current];
                     font-size: root.compact ? 12px : 18px;
-                    font-weight: 600;
+                    font-weight: 400;
                     color: AppTheme.text-secondary;
                     horizontal-alignment: center;
                     vertical-alignment: center;
@@ -1505,7 +1497,7 @@ export component MainWindow inherits Window {
     min-width: root.timer-mode ? 360px : 800px;
     preferred-height: 660px;
     min-height: root.timer-mode ? 240px : 600px;
-    default-font-family: "Manrope";
+    default-font-family: "Momo Trust Display";
     forward-focus: scope;
 
     in-out property <bool> on-top: false;
@@ -1658,7 +1650,6 @@ export component MainWindow inherits Window {
                     }
                 }
                 logout => { root.logout(); }
-                help => { root.help(); }
             }
             if page == Page.ManualPage : ManualPage {
                 current-time: root.current-time;
@@ -1794,7 +1785,7 @@ component KeyChip inherits Rectangle {
         text: root.key;
         color: AppTheme.text-brand;
         font-size: 16px;
-        font-weight: 700;
+        font-weight: 400;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -1808,7 +1799,7 @@ export component Help inherits Window {
     min-width: 600px;
     min-height: 420px;
     always-on-top: true;
-    default-font-family: "Manrope";
+    default-font-family: "Momo Trust Display";
 
     VerticalLayout {
         padding: 32px;
