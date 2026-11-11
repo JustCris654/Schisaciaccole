@@ -10,10 +10,11 @@ that moment.
 
 * How it works
 
-The app has a navbar with two tabs, *Manuale* and *I miei meeting* (the
-second one only with a backend), a help button and, once signed in, a menu with
-*Logout*. The interface uses the Manrope font and a purple and amber theme,
-with a dark variant.
+The app has a minimal header with two tabs, *Manuale* and *I miei meeting* (the
+second one only with a backend). The app name is centered; when signed in,
+*Logout* is available from the dots menu on the right. The =H= keyboard shortcut
+opens help. The interface uses the Momo Trust Display Regular font and a dark,
+neutral background with purple and lilac accents and amber warnings.
 
 On the *Manuale* tab the app shows the *next 8 quarter-hour marks* (00, 15, 30,
 45 past the hour) starting from the upcoming quarter. That covers meetings of
@@ -91,9 +92,9 @@ per meeting title.
 
 - [[https://www.rust-lang.org/tools/install][Rust]] (stable toolchain, =cargo=)
 
-The font (*Manrope*, under
-=crates/app/assets/fonts/Manrope/=) is embedded in the binary at
-build time — no extra setup needed.
+The font (*Momo Trust Display Regular*, under
+=crates/app/assets/fonts/MomoTrustDisplay/=, licensed under the SIL Open Font
+License) is embedded in the binary at build time — no extra setup needed.
 
 * Project layout
 
