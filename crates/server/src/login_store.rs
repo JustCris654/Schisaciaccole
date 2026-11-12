@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::net::IpAddr;
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -23,6 +24,9 @@ pub const APP_CODE_TTL: Duration = Duration::from_secs(60);
 /// Maximum number of pending logins kept at the same time.
 pub const MAX_PENDING_LOGINS: usize = 10_000;
 
+/// Maximum number of pending logins of one client kept at the same time.
+pub const MAX_PENDING_LOGINS_PER_CLIENT: usize = 20;
+
 /// Maximum number of one-time app codes kept at the same time.
 pub const MAX_APP_CODES: usize = 10_000;
 
@@ -30,6 +34,18 @@ pub const MAX_APP_CODES: usize = 10_000;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[error("login store is full")]
 pub struct StoreFull;
+
+/// Why [`LoginStore::insert_pending`] refused a pending login.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum PendingLoginRefused {
+    /// The client already has [`MAX_PENDING_LOGINS_PER_CLIENT`] pending
+    /// logins.
+    #[error("too many logins in progress for this client")]
+    ClientLimit,
+    /// The store holds [`MAX_PENDING_LOGINS`] pending logins.
+    #[error(transparent)]
+    StoreFull(#[from] StoreFull),
+}
 
 /// A login started by `GET /auth/login`, waiting for the Google callback.
 pub struct PendingLogin {
@@ -43,6 +59,9 @@ pub struct PendingLogin {
     pub google_pkce_verifier: PkceCodeVerifier,
     /// Nonce expected in the Google ID token.
     pub nonce: Nonce,
+    /// IP address of the client that started the login; `None` when it is
+    /// unknown. All unknown clients share one quota.
+    pub client: Option<IpAddr>,
 }
 
 /// A one-time code handed to the app, exchanged by `POST /auth/token`.
@@ -80,14 +99,19 @@ impl<V> ExpiringMap<V> {
     /// `max_entries` entries and `key` is not one of them; `value` is
     /// dropped.
     fn insert(&mut self, key: String, value: V, now: Instant) -> Result<(), StoreFull> {
-        let ttl = self.ttl;
-        self.entries
-            .retain(|_, (created, _)| !is_expired(ttl, *created, now));
+        self.purge_expired(now);
         if self.entries.len() >= self.max_entries && !self.entries.contains_key(&key) {
             return Err(StoreFull);
         }
         self.entries.insert(key, (now, value));
         Ok(())
+    }
+
+    /// Drops every entry expired at `now`.
+    fn purge_expired(&mut self, now: Instant) {
+        let ttl = self.ttl;
+        self.entries
+            .retain(|_, (created, _)| !is_expired(ttl, *created, now));
     }
 
     /// Removes the entry for `key` and returns it if not expired at `now`.
@@ -118,8 +142,8 @@ pub struct LoginStore {
 
 impl LoginStore {
     /// Creates an empty store with the [`PENDING_LOGIN_TTL`] and
-    /// [`APP_CODE_TTL`] lifetimes and the [`MAX_PENDING_LOGINS`] and
-    /// [`MAX_APP_CODES`] caps.
+    /// [`APP_CODE_TTL`] lifetimes and the [`MAX_PENDING_LOGINS`],
+    /// [`MAX_PENDING_LOGINS_PER_CLIENT`] and [`MAX_APP_CODES`] caps.
     pub fn new() -> Self {
         Self {
             pending: Mutex::new(ExpiringMap::new(PENDING_LOGIN_TTL, MAX_PENDING_LOGINS)),
@@ -130,18 +154,37 @@ impl LoginStore {
     /// Stores a pending login under the Google `state`, replacing any login
     /// with the same state. Expired pending logins are purged first.
     ///
+    /// The per-client quota counts the valid logins whose
+    /// [`PendingLogin::client`] equals `login.client`, except the one stored
+    /// under `google_state`; logins removed by [`Self::take_pending`] or
+    /// expired no longer count.
+    ///
     /// # Errors
     ///
-    /// Returns [`StoreFull`] when [`MAX_PENDING_LOGINS`] logins are still
-    /// valid at `now` and `google_state` is not one of them.
+    /// Returns, checked in this order and dropping `login`:
+    /// - [`PendingLoginRefused::ClientLimit`] when
+    ///   [`MAX_PENDING_LOGINS_PER_CLIENT`] logins of the same client are
+    ///   valid at `now`;
+    /// - [`PendingLoginRefused::StoreFull`] when [`MAX_PENDING_LOGINS`]
+    ///   logins are valid at `now` and `google_state` is not one of them.
     pub fn insert_pending(
         &self,
         google_state: String,
         login: PendingLogin,
         now: Instant,
-    ) -> Result<(), StoreFull> {
+    ) -> Result<(), PendingLoginRefused> {
         let mut pending = self.pending.lock().unwrap_or_else(PoisonError::into_inner);
-        pending.insert(google_state, login, now)
+        pending.purge_expired(now);
+        let client_logins = pending
+            .entries
+            .iter()
+            .filter(|(state, (_, other))| *state != &google_state && other.client == login.client)
+            .count();
+        if client_logins >= MAX_PENDING_LOGINS_PER_CLIENT {
+            return Err(PendingLoginRefused::ClientLimit);
+        }
+        pending.insert(google_state, login, now)?;
+        Ok(())
     }
 
     /// Removes and returns the pending login for `google_state`.
@@ -192,12 +235,30 @@ mod tests {
     use super::*;
 
     fn pending(port: u16) -> PendingLogin {
+        pending_from(port, None)
+    }
+
+    fn pending_from(port: u16, client: Option<IpAddr>) -> PendingLogin {
         PendingLogin {
             app_port: port,
             app_state: "app-state".to_string(),
             app_challenge: "challenge".to_string(),
             google_pkce_verifier: PkceCodeVerifier::new("verifier".to_string()),
             nonce: Nonce::new("nonce".to_string()),
+            client,
+        }
+    }
+
+    fn client(text: &str) -> Option<IpAddr> {
+        Some(text.parse().unwrap())
+    }
+
+    /// Fills the quota of `who` with logins `{prefix}0..` created at `now`.
+    fn fill_client_quota(store: &LoginStore, prefix: &str, who: Option<IpAddr>, now: Instant) {
+        for i in 0..MAX_PENDING_LOGINS_PER_CLIENT {
+            store
+                .insert_pending(format!("{prefix}{i}"), pending_from(5000, who), now)
+                .unwrap();
         }
     }
 
@@ -343,19 +404,119 @@ mod tests {
         assert_eq!(map.insert("b".to_string(), 2, later), Ok(()));
     }
 
+    // Each login comes from its own client, so only the global cap applies.
     #[test]
     fn insert_pending_refuses_login_at_cap() {
         let store = LoginStore::new();
         let now = Instant::now();
         for i in 0..MAX_PENDING_LOGINS {
+            let who = Some(IpAddr::from(u32::try_from(i).unwrap().to_be_bytes()));
             store
-                .insert_pending(format!("s{i}"), pending(5000), now)
+                .insert_pending(format!("s{i}"), pending_from(5000, who), now)
                 .unwrap();
         }
 
         let result = store.insert_pending("extra".to_string(), pending(5000), now);
 
-        assert_eq!(result, Err(StoreFull));
+        assert_eq!(result, Err(PendingLoginRefused::StoreFull(StoreFull)));
+    }
+
+    #[test]
+    fn insert_pending_refuses_client_over_its_quota() {
+        let store = LoginStore::new();
+        let now = Instant::now();
+        let who = client("203.0.113.1");
+        fill_client_quota(&store, "s", who, now);
+
+        let result = store.insert_pending("extra".to_string(), pending_from(5000, who), now);
+
+        assert_eq!(result, Err(PendingLoginRefused::ClientLimit));
+    }
+
+    #[test]
+    fn client_quota_does_not_affect_other_clients() {
+        let store = LoginStore::new();
+        let now = Instant::now();
+        fill_client_quota(&store, "s", client("203.0.113.1"), now);
+
+        let result = store.insert_pending(
+            "other".to_string(),
+            pending_from(5000, client("203.0.113.2")),
+            now,
+        );
+
+        assert_eq!(result, Ok(()));
+    }
+
+    #[test]
+    fn taken_login_frees_client_quota() {
+        let store = LoginStore::new();
+        let now = Instant::now();
+        let who = client("203.0.113.1");
+        fill_client_quota(&store, "s", who, now);
+        store.take_pending("s0", now).unwrap();
+
+        let result = store.insert_pending("extra".to_string(), pending_from(5000, who), now);
+
+        assert_eq!(result, Ok(()));
+    }
+
+    #[test]
+    fn expired_logins_free_client_quota() {
+        let store = LoginStore::new();
+        let now = Instant::now();
+        let who = client("203.0.113.1");
+        fill_client_quota(&store, "s", who, now);
+
+        let later = now + PENDING_LOGIN_TTL;
+        let result = store.insert_pending("extra".to_string(), pending_from(5000, who), later);
+
+        assert_eq!(result, Ok(()));
+    }
+
+    // Logins of unknown clients share one quota.
+    #[test]
+    fn unknown_clients_share_one_quota() {
+        let store = LoginStore::new();
+        let now = Instant::now();
+        fill_client_quota(&store, "s", None, now);
+
+        let result = store.insert_pending("extra".to_string(), pending(5000), now);
+
+        assert_eq!(result, Err(PendingLoginRefused::ClientLimit));
+    }
+
+    #[test]
+    fn unknown_client_quota_does_not_affect_known_clients() {
+        let store = LoginStore::new();
+        let now = Instant::now();
+        fill_client_quota(&store, "s", None, now);
+
+        let result = store.insert_pending(
+            "extra".to_string(),
+            pending_from(5000, client("203.0.113.1")),
+            now,
+        );
+
+        assert_eq!(result, Ok(()));
+    }
+
+    // A replacement does not grow the client's logins, so it is allowed at
+    // the quota.
+    #[test]
+    fn insert_pending_replaces_existing_state_at_client_quota() {
+        let store = LoginStore::new();
+        let now = Instant::now();
+        let who = client("203.0.113.1");
+        fill_client_quota(&store, "s", who, now);
+
+        let result = store.insert_pending("s0".to_string(), pending_from(6000, who), now);
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(
+            store.take_pending("s0", now).map(|p| p.app_port),
+            Some(6000)
+        );
     }
 
     #[test]

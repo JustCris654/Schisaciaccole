@@ -11,6 +11,7 @@
 pub mod app;
 pub mod auth;
 pub mod calendar;
+pub mod client_ip;
 pub mod config;
 pub mod crypto;
 pub mod db;

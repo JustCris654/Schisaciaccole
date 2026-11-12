@@ -14,11 +14,11 @@ use serde::Serialize;
 use sqlx::PgPool;
 use tower_governor::GovernorLayer;
 use tower_governor::governor::GovernorConfigBuilder;
-use tower_governor::key_extractor::SmartIpKeyExtractor;
 use tower_http::trace::TraceLayer;
 use tracing::info_span;
 
 use crate::auth;
+use crate::client_ip::ClientIpKeyExtractor;
 use crate::config::Config;
 use crate::google::GoogleOidc;
 use crate::google_tokens::GoogleTokenCache;
@@ -96,13 +96,15 @@ pub fn router(state: AppState) -> Router {
 /// Builds the router like [`router`], with `auth_limit` as the per-IP rate
 /// limit of the `/auth/*` routes, or no limit when it is `None`.
 ///
-/// The client IP is read from `X-Forwarded-For`, `X-Real-IP` or `Forwarded`,
-/// then from the peer address, so the server must run behind a proxy that
-/// sets those headers itself; otherwise a client could pick its own IP. A
-/// request with none of them and no peer address (the server not started
-/// with connect info) is answered with a 500. Requests over the limit get a
-/// 429 with a `Retry-After` header. `/healthz` and `/api/v1/*` are not
-/// limited.
+/// The client IP is resolved by
+/// [`resolve_client_ip`](crate::client_ip::resolve_client_ip) with the
+/// `trusted_proxy_hops` of `state.config`: with 0 hops it is the peer
+/// address and forwarding headers are ignored; with n hops it is the n-th
+/// `X-Forwarded-For` entry from the right, or the peer address when that
+/// entry is missing or invalid. A request with no resolvable IP (no usable
+/// entry and the server not started with connect info) is answered with a
+/// 500. Requests over the limit get a 429 with a `Retry-After` header.
+/// `/healthz` and `/api/v1/*` are not limited.
 ///
 /// Request spans record the method and the path only: query strings carry
 /// login states and codes, which must never be logged.
@@ -124,7 +126,7 @@ pub fn router_with_limit(state: AppState, auth_limit: Option<AuthRateLimit>) -> 
         .route(AUTH_REFRESH_PATH, post(auth::refresh))
         .route(AUTH_LOGOUT_PATH, post(auth::logout));
     if let Some(limit) = auth_limit {
-        auth_routes = with_rate_limit(auth_routes, limit);
+        auth_routes = with_rate_limit(auth_routes, limit, state.config.trusted_proxy_hops);
     }
     Router::new()
         .route(HEALTH_PATH, get(health))
@@ -138,12 +140,17 @@ pub fn router_with_limit(state: AppState, auth_limit: Option<AuthRateLimit>) -> 
         .with_state(state)
 }
 
-/// Adds the per-IP rate limit to `routes` and starts the task that
-/// periodically drops the limiter entries of idle IPs.
+/// Adds the per-IP rate limit to `routes`, keyed by [`ClientIpKeyExtractor`]
+/// with `trusted_hops`, and starts the task that periodically drops the
+/// limiter entries of idle IPs.
 ///
 /// A `limit` with a zero burst or a zero period is replaced by the default
 /// limit.
-fn with_rate_limit(routes: Router<AppState>, limit: AuthRateLimit) -> Router<AppState> {
+fn with_rate_limit(
+    routes: Router<AppState>,
+    limit: AuthRateLimit,
+    trusted_hops: u8,
+) -> Router<AppState> {
     let limit = if limit.burst == 0 || limit.replenish_every.is_zero() {
         AuthRateLimit::default()
     } else {
@@ -152,7 +159,7 @@ fn with_rate_limit(routes: Router<AppState>, limit: AuthRateLimit) -> Router<App
     let config = GovernorConfigBuilder::default()
         .period(limit.replenish_every)
         .burst_size(limit.burst)
-        .key_extractor(SmartIpKeyExtractor)
+        .key_extractor(ClientIpKeyExtractor { trusted_hops })
         .finish();
     let Some(config) = config else {
         return routes;
@@ -174,7 +181,10 @@ async fn health() -> Json<Health> {
 
 #[cfg(test)]
 mod tests {
+    use std::net::SocketAddr;
+
     use axum::body::Body;
+    use axum::extract::ConnectInfo;
     use axum::http::{Request, StatusCode};
     use http_body_util::BodyExt;
     use sqlx::postgres::PgPoolOptions;
@@ -183,6 +193,10 @@ mod tests {
     use super::*;
 
     fn test_state() -> AppState {
+        test_state_with_hops("0")
+    }
+
+    fn test_state_with_hops(hops: &'static str) -> AppState {
         let config = Config::from_lookup(|name| match name {
             "DATABASE_URL" => Some("postgres://u:p@localhost/x".to_string()),
             "PUBLIC_BASE_URL" => Some("http://localhost:8080".to_string()),
@@ -191,6 +205,7 @@ mod tests {
             "ALLOWED_HD" => Some("example.com".to_string()),
             "TOKEN_ENC_KEY" => Some("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=".to_string()),
             "JWT_SIGNING_KEY" => Some("0123456789abcdef0123456789abcdef".to_string()),
+            "TRUSTED_PROXY_HOPS" => Some(hops.to_string()),
             _ => None,
         })
         .unwrap();
@@ -238,12 +253,23 @@ mod tests {
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
-    async fn login_status_from(app: &Router, ip: &str) -> StatusCode {
-        let request = Request::get(AUTH_LOGIN_PATH)
-            .header("x-forwarded-for", ip)
-            .body(Body::empty())
-            .unwrap();
+    /// Sends `GET /auth/login` from the peer `peer` (no connect info when
+    /// `None`) with `X-Forwarded-For: xff` (no header when `None`).
+    async fn login_status(app: &Router, peer: Option<&str>, xff: Option<&str>) -> StatusCode {
+        let mut builder = Request::get(AUTH_LOGIN_PATH);
+        if let Some(xff) = xff {
+            builder = builder.header("x-forwarded-for", xff);
+        }
+        let mut request = builder.body(Body::empty()).unwrap();
+        if let Some(peer) = peer {
+            let addr: SocketAddr = format!("{peer}:40000").parse().unwrap();
+            request.extensions_mut().insert(ConnectInfo(addr));
+        }
         app.clone().oneshot(request).await.unwrap().status()
+    }
+
+    async fn login_status_from(app: &Router, peer: &str) -> StatusCode {
+        login_status(app, Some(peer), None).await
     }
 
     // Without parameters /auth/login answers 400, so a 400 means the request
@@ -275,6 +301,57 @@ mod tests {
         assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 
+    // With no trusted proxy, rotating X-Forwarded-For does not open new
+    // buckets.
+    #[tokio::test]
+    async fn zero_hops_ignores_rotated_x_forwarded_for() {
+        let app = router(test_state());
+        for i in 0..10 {
+            let xff = format!("198.51.100.{i}");
+            login_status(&app, Some("203.0.113.1"), Some(&xff)).await;
+        }
+
+        let status = login_status(&app, Some("203.0.113.1"), Some("198.51.100.99")).await;
+
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    // Behind one proxy the rightmost entry is the client: a spoofed leftmost
+    // entry does not open new buckets.
+    #[tokio::test]
+    async fn one_hop_keys_on_the_rightmost_entry() {
+        let app = router(test_state_with_hops("1"));
+        for i in 0..10 {
+            let xff = format!("6.6.6.{i}, 198.51.100.7");
+            login_status(&app, Some("10.0.0.1"), Some(&xff)).await;
+        }
+
+        let status = login_status(&app, Some("10.0.0.1"), Some("6.6.6.99, 198.51.100.7")).await;
+
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn one_hop_gives_each_rightmost_entry_its_own_bucket() {
+        let app = router(test_state_with_hops("1"));
+        for _ in 0..11 {
+            login_status(&app, Some("10.0.0.1"), Some("198.51.100.7")).await;
+        }
+
+        let status = login_status(&app, Some("10.0.0.1"), Some("198.51.100.8")).await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn auth_route_without_any_client_ip_is_500() {
+        let app = router(test_state());
+
+        let status = login_status(&app, None, Some("198.51.100.7")).await;
+
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
     #[tokio::test]
     async fn healthz_is_not_rate_limited() {
         let app = router(test_state());
@@ -282,10 +359,9 @@ mod tests {
             login_status_from(&app, "203.0.113.1").await;
         }
 
-        let request = Request::get(HEALTH_PATH)
-            .header("x-forwarded-for", "203.0.113.1")
-            .body(Body::empty())
-            .unwrap();
+        let mut request = Request::get(HEALTH_PATH).body(Body::empty()).unwrap();
+        let addr: SocketAddr = "203.0.113.1:40000".parse().unwrap();
+        request.extensions_mut().insert(ConnectInfo(addr));
         let response = app.oneshot(request).await.unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
