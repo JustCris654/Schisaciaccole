@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::Request;
+use axum::http::StatusCode;
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use schisaciaccole_core::api::{
@@ -14,6 +15,7 @@ use serde::Serialize;
 use sqlx::PgPool;
 use tower_governor::GovernorLayer;
 use tower_governor::governor::GovernorConfigBuilder;
+use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 use tracing::info_span;
 
@@ -82,11 +84,17 @@ impl Default for AuthRateLimit {
     }
 }
 
+/// Longest time the server spends on a request, reading its body included.
+/// A request still in handling after this time is answered with 408 Request
+/// Timeout and its handler is dropped.
+pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// How often the rate limiter forgets the IPs that are back to a full burst.
 const RATE_LIMIT_CLEANUP_PERIOD: Duration = Duration::from_secs(60);
 
-/// Builds the router with all routes, the tracing layer and the default
-/// [`AuthRateLimit`] on the `/auth/*` routes.
+/// Builds the router with all routes, the tracing layer, the
+/// [`REQUEST_TIMEOUT`] and the default [`AuthRateLimit`] on the `/auth/*`
+/// routes.
 ///
 /// Must be called inside a Tokio runtime. See [`router_with_limit`].
 pub fn router(state: AppState) -> Router {
@@ -102,9 +110,11 @@ pub fn router(state: AppState) -> Router {
 /// address and forwarding headers are ignored; with n hops it is the n-th
 /// `X-Forwarded-For` entry from the right, or the peer address when that
 /// entry is missing or invalid. A request with no resolvable IP (no usable
-/// entry and the server not started with connect info) is answered with a
-/// 500. Requests over the limit get a 429 with a `Retry-After` header.
+/// entry and no [`ConnectInfo`](axum::extract::ConnectInfo) extension, which
+/// [`serve`](crate::serve::serve) always adds) is answered with a 500. Requests over the limit get a 429 with a `Retry-After` header.
 /// `/healthz` and `/api/v1/*` are not limited.
+///
+/// Every route is subject to [`REQUEST_TIMEOUT`], inside the request span.
 ///
 /// Request spans record the method and the path only: query strings carry
 /// login states and codes, which must never be logged.
@@ -136,6 +146,10 @@ pub fn router_with_limit(state: AppState, auth_limit: Option<AuthRateLimit>) -> 
         .route(MEETING_PLAN_ROUTE, get(meeting_plan::get_meeting_plan))
         .route(TEMPLATES_PATH, put(templates::put_template))
         .route(TEMPLATE_ROUTE, delete(templates::delete_template))
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            REQUEST_TIMEOUT,
+        ))
         .layer(trace)
         .with_state(state)
 }
@@ -377,5 +391,40 @@ mod tests {
         let status = login_status_from(&app, "203.0.113.1").await;
 
         assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    /// Request body that never yields a frame, like a client that stops
+    /// sending halfway through the body.
+    struct StalledBody;
+
+    impl hyper::body::Body for StalledBody {
+        type Data = axum::body::Bytes;
+        type Error = std::convert::Infallible;
+
+        fn poll_frame(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Result<hyper::body::Frame<Self::Data>, Self::Error>>> {
+            std::task::Poll::Pending
+        }
+    }
+
+    // With the clock paused, Tokio jumps to the request timeout as soon as
+    // the handler is stuck reading the body.
+    #[tokio::test(start_paused = true)]
+    async fn answers_408_when_the_body_stalls_past_the_request_timeout() {
+        let request = Request::post(AUTH_REFRESH_PATH)
+            .header("content-type", "application/json")
+            .body(Body::new(StalledBody))
+            .unwrap();
+        let started = tokio::time::Instant::now();
+
+        let response = router_with_limit(test_state(), None)
+            .oneshot(request)
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::REQUEST_TIMEOUT);
+        assert!(started.elapsed() >= REQUEST_TIMEOUT);
     }
 }

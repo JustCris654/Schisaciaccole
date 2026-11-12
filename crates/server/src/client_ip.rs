@@ -55,8 +55,8 @@ pub fn resolve_client_ip(
 }
 
 /// Peer IP address of `request`, from the [`ConnectInfo`] extension that
-/// `into_make_service_with_connect_info::<SocketAddr>` adds. `None` when the
-/// server was not started with connect info.
+/// [`serve`](crate::serve::serve) adds to every request. `None` when the
+/// extension is missing (a request that did not come through `serve`).
 pub fn peer_ip<T>(request: &Request<T>) -> Option<IpAddr> {
     request
         .extensions()
