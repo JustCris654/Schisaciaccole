@@ -97,3 +97,7 @@ glossary file in the same format and an entry in `glossary/Glossario.md`.
 - Atomics for flags and counters (`AtomicBool`, `AtomicUsize`), not a `Mutex`; choose the memory ordering on purpose.
 - When more than one lock is taken, take them always in the same order.
 - `std::sync::LazyLock` / `OnceLock` instead of `lazy_static!` / `once_cell`; `thiserror` for library/service errors and `anyhow` for binaries.
+
+## Project agent context
+
+Read [.agents/project.md](.agents/project.md) and [.agents/rules/common.md](.agents/rules/common.md) before project work. Load matching domain rules using the routing in project.md; [.agents/rules/model-routing.md](.agents/rules/model-routing.md) follows the model choices above. Domain and generic profiles are in `.codex/agents/`; their permissions inherit the session.

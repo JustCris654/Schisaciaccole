@@ -8,6 +8,8 @@ Schisaciaccole is a Slint desktop countdown for time-boxed Scrum ceremonies. Wor
 
 Do not open these for unrelated work. Claude Code also loads them from `.claude/rules/` only when a matching file is in play.
 
+- Shared agent instructions: [.claude/rules/common.md](.claude/rules/common.md). Domain profiles live in `.claude/agents/`.
+- Server/core/desktop/database/deployment/CI: read the matching `api.md`, `core.md`, `desktop.md`, `database.md`, `deploy.md` or `ci-versioning.md` in `.claude/rules/` when those paths are in play.
 - Rust (`*.rs`, `Cargo.toml`): [.claude/rules/rust.md](.claude/rules/rust.md)
 - A change that alters a documented behavior, route, env var, config key, Compose service or volume, workflow, deploy step, or operational procedure: [.claude/rules/docs.md](.claude/rules/docs.md)
 
