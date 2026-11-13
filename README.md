@@ -10,17 +10,17 @@ that moment.
 
 ## Screenshots
 
-| Manuale: end time picked | Today's meetings |
+| Google sign-in | Today's meetings |
 | --- | --- |
-| ![Manuale: end time picked](assets/screenshot_end_time.png) | ![Today's meetings](assets/screenshot_meetings.png) |
+| ![Google sign-in](assets/screenshot_google_sign_in.png) | ![Today's meetings](assets/screenshot_meetings.png) |
 
-| Turni di parola | Daily mode |
+| Meeting timer | Turni di parola |
 | --- | --- |
-| ![Turni di parola](assets/screenshot_speaking_slots.png) | ![Daily mode](assets/screenshot_daily.png) |
+| ![Meeting timer](assets/screenshot_meeting_timer.png) | ![Turni di parola](assets/screenshot_speaking_slots.png) |
 
-| Meeting timer | Timer |
+| Manuale: end time picked | Daily mode |
 | --- | --- |
-| ![Meeting timer](assets/screenshot_meeting_timer.png) | ![Timer](assets/screenshot_timer.png) |
+| ![Manuale: end time picked](assets/screenshot_end_time.png) | ![Daily mode](assets/screenshot_daily.png) |
 
 ## Requirements
 
