@@ -3,15 +3,20 @@
 
 mod common;
 
+use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
+use axum::extract::ConnectInfo;
 use axum::http::{StatusCode, header};
+use axum::response::Response;
 use openidconnect::{Nonce, PkceCodeVerifier};
 use schisaciaccole_core::api::{
     AUTH_CALLBACK_PATH, AUTH_LOGIN_PATH, AUTH_TOKEN_PATH, ME_PATH, Me, TokenResponse,
 };
 use schisaciaccole_server::crypto;
-use schisaciaccole_server::login_store::{PENDING_LOGIN_TTL, PendingLogin};
+use schisaciaccole_server::login_store::{
+    MAX_PENDING_LOGINS_PER_CLIENT, PENDING_LOGIN_TTL, PendingLogin,
+};
 use schisaciaccole_server::store;
 use serde_json::json;
 use sqlx::PgPool;
@@ -309,6 +314,7 @@ async fn expired_pending_login_shows_expired_page(pool: PgPool) {
         app_challenge: app_challenge(),
         google_pkce_verifier: PkceCodeVerifier::new("verifier".to_string()),
         nonce: Nonce::new("nonce".to_string()),
+        client: None,
     };
     h.state
         .logins
@@ -378,6 +384,45 @@ async fn login_rejects_plain_challenge_method(pool: PgPool) {
     let response = h.send(get(&uri)).await;
 
     assert_api_error(response, StatusCode::BAD_REQUEST, "invalid_request").await;
+}
+
+/// Sends a valid `GET /auth/login` from the peer address `peer`.
+async fn login_from(h: &Harness, peer: &str) -> Response {
+    let uri = format!(
+        "{AUTH_LOGIN_PATH}?port={APP_PORT}&state={APP_STATE}&code_challenge={}&code_challenge_method=S256",
+        app_challenge()
+    );
+    let mut request = get(&uri);
+    let addr: SocketAddr = format!("{peer}:40000").parse().unwrap();
+    request.extensions_mut().insert(ConnectInfo(addr));
+    h.send(request).await
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn login_over_client_quota_is_too_many_requests(pool: PgPool) {
+    let h = harness(pool).await;
+    for _ in 0..MAX_PENDING_LOGINS_PER_CLIENT {
+        assert_eq!(
+            login_from(&h, "203.0.113.1").await.status(),
+            StatusCode::FOUND
+        );
+    }
+
+    let response = login_from(&h, "203.0.113.1").await;
+
+    assert_api_error(response, StatusCode::TOO_MANY_REQUESTS, "too_many_requests").await;
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn client_quota_does_not_block_other_clients(pool: PgPool) {
+    let h = harness(pool).await;
+    for _ in 0..=MAX_PENDING_LOGINS_PER_CLIENT {
+        login_from(&h, "203.0.113.1").await;
+    }
+
+    let response = login_from(&h, "203.0.113.2").await;
+
+    assert_eq!(response.status(), StatusCode::FOUND);
 }
 
 #[sqlx::test(migrations = "./migrations")]

@@ -1,13 +1,13 @@
 //! Entry point of the Schisaciaccole server.
 
 use anyhow::Context;
-use std::net::SocketAddr;
 
 use schisaciaccole_core::api::AUTH_CALLBACK_PATH;
 use schisaciaccole_server::app::{AppState, router};
 use schisaciaccole_server::config::Config;
 use schisaciaccole_server::db;
 use schisaciaccole_server::google::GoogleOidc;
+use schisaciaccole_server::serve::{ServeConfig, serve};
 use tokio::net::TcpListener;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -40,13 +40,7 @@ async fn main() -> anyhow::Result<()> {
         .with_context(|| format!("cannot bind {bind_addr}"))?;
     info!(%bind_addr, "server listening");
 
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .with_graceful_shutdown(shutdown_signal())
-    .await
-    .context("server error")?;
+    serve(listener, app, ServeConfig::default(), shutdown_signal()).await;
     info!("server stopped");
     Ok(())
 }

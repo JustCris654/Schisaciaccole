@@ -40,6 +40,11 @@ pub enum ApiFailure {
     #[error("Google credentials missing, revoked or without Calendar scope")]
     GoogleReauthRequired,
 
+    /// The client has too much in progress, for example too many pending
+    /// logins: 429 `too_many_requests`.
+    #[error("too many requests: {0}")]
+    TooManyRequests(String),
+
     /// Google answered with an unexpected error or could not be reached:
     /// 502 `internal`.
     #[error("Google request failed: {0}")]
@@ -95,6 +100,11 @@ impl ApiFailure {
                 StatusCode::UNAUTHORIZED,
                 error_codes::GOOGLE_REAUTH_REQUIRED,
                 "Google access must be granted again".to_string(),
+            ),
+            Self::TooManyRequests(message) => (
+                StatusCode::TOO_MANY_REQUESTS,
+                error_codes::TOO_MANY_REQUESTS,
+                message.clone(),
             ),
             Self::BadGateway(_) => (
                 StatusCode::BAD_GATEWAY,
@@ -181,6 +191,15 @@ mod tests {
 
         assert_eq!(status, StatusCode::UNAUTHORIZED);
         assert_eq!(body.code, "google_reauth_required");
+    }
+
+    #[tokio::test]
+    async fn too_many_requests_is_429_with_message() {
+        let (status, body) = body_of(ApiFailure::TooManyRequests("slow down".to_string())).await;
+
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(body.code, "too_many_requests");
+        assert_eq!(body.message, "slow down");
     }
 
     #[tokio::test]

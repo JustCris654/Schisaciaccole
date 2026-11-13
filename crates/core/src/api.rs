@@ -56,6 +56,8 @@ pub mod error_codes {
     pub const FORBIDDEN_DOMAIN: &str = "forbidden_domain";
     /// The resource does not exist or belongs to another user.
     pub const NOT_FOUND: &str = "not_found";
+    /// The client sent too many requests; retry later.
+    pub const TOO_MANY_REQUESTS: &str = "too_many_requests";
     /// Unexpected server failure.
     pub const INTERNAL: &str = "internal";
 }

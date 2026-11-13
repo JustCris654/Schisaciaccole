@@ -8,14 +8,15 @@
 //! (plus its PKCE verifier) at `POST /auth/token` for an access token and a
 //! refresh token.
 
+use std::net::SocketAddr;
 use std::time::Instant;
 
-use axum::Json;
 use axum::extract::rejection::{JsonRejection, QueryRejection};
-use axum::extract::{FromRequestParts, Query, State};
+use axum::extract::{ConnectInfo, FromRequestParts, Query, State};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
+use axum::{Extension, Json};
 use chrono::{DateTime, Days, Utc};
 use openidconnect::{Nonce, PkceCodeVerifier};
 use schisaciaccole_core::api::{Me, RefreshRequest, TokenRequest, TokenResponse, error_codes};
@@ -26,11 +27,12 @@ use url::form_urlencoded;
 use uuid::Uuid;
 
 use crate::app::AppState;
+use crate::client_ip::resolve_client_ip;
 use crate::config::Config;
 use crate::crypto::{self, CryptoError};
 use crate::error::ApiFailure;
 use crate::google::GoogleError;
-use crate::login_store::{AppCode, PendingLogin, StoreFull};
+use crate::login_store::{AppCode, PendingLogin, PendingLoginRefused, StoreFull};
 use crate::store;
 use crate::tokens::{self, ACCESS_TOKEN_TTL_SECS};
 
@@ -125,13 +127,22 @@ impl FromRequestParts<AppState> for AuthUser {
 /// `GET /auth/login`: validates the app's parameters, remembers them and
 /// redirects (302) to Google's authorization endpoint.
 ///
+/// The login is counted against the client IP resolved by
+/// [`resolve_client_ip`] with the configured trusted proxy hops; without
+/// connect info and a usable `X-Forwarded-For` entry the client is unknown,
+/// and all unknown clients share one quota.
+///
 /// # Errors
 ///
-/// Returns 400 `invalid_request` when a parameter is missing or invalid
-/// (see [`validate_login_params`]), and 503 `internal` when too many logins
-/// are already in progress.
+/// - 400 `invalid_request` when a parameter is missing or invalid (see
+///   [`validate_login_params`]);
+/// - 429 `too_many_requests` when the client already has the maximum number
+///   of logins in progress;
+/// - 503 `internal` when too many logins are in progress overall.
 pub async fn login(
     State(state): State<AppState>,
+    headers: HeaderMap,
+    connect_info: Option<Extension<ConnectInfo<SocketAddr>>>,
     query: Result<Query<LoginQuery>, QueryRejection>,
 ) -> Result<Response, ApiFailure> {
     let Query(query) =
@@ -139,6 +150,8 @@ pub async fn login(
     let params = validate_login_params(&query)?;
 
     let config = &state.config;
+    let peer = connect_info.map(|Extension(ConnectInfo(addr))| addr.ip());
+    let client = resolve_client_ip(&headers, peer, config.trusted_proxy_hops);
     let request = state
         .google
         .authorize_request(&google_scopes(config), &config.allowed_hd);
@@ -148,13 +161,25 @@ pub async fn login(
         app_challenge: params.code_challenge,
         google_pkce_verifier: request.pkce_verifier,
         nonce: request.nonce,
+        client,
     };
-    state
-        .logins
-        .insert_pending(request.state.secret().clone(), pending, Instant::now())
-        .map_err(|_| {
-            ApiFailure::Unavailable("too many logins in progress, retry later".to_string())
-        })?;
+    let inserted =
+        state
+            .logins
+            .insert_pending(request.state.secret().clone(), pending, Instant::now());
+    match inserted {
+        Ok(()) => {}
+        Err(PendingLoginRefused::ClientLimit) => {
+            return Err(ApiFailure::TooManyRequests(
+                "too many logins in progress from this client, retry later".to_string(),
+            ));
+        }
+        Err(PendingLoginRefused::StoreFull(_)) => {
+            return Err(ApiFailure::Unavailable(
+                "too many logins in progress, retry later".to_string(),
+            ));
+        }
+    }
     Ok(found(request.url.as_str()))
 }
 
@@ -195,6 +220,7 @@ pub async fn google_callback(
         app_challenge,
         google_pkce_verifier,
         nonce,
+        client: _,
     } = pending;
     let outcome = finish_login(
         &state,

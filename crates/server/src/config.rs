@@ -2,6 +2,7 @@
 
 use std::fmt;
 use std::net::{AddrParseError, SocketAddr};
+use std::num::ParseIntError;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -12,6 +13,8 @@ const DEFAULT_GOOGLE_ISSUER_URL: &str = "https://accounts.google.com";
 const DEFAULT_GOOGLE_CALENDAR_BASE_URL: &str = "https://www.googleapis.com/calendar/v3";
 const DEFAULT_GOOGLE_CALENDAR_SCOPE: &str =
     "https://www.googleapis.com/auth/calendar.events.owned.readonly";
+
+const DEFAULT_TRUSTED_PROXY_HOPS: u8 = 0;
 
 const TOKEN_ENC_KEY_LEN: usize = 32;
 const JWT_SIGNING_KEY_MIN_LEN: usize = 32;
@@ -28,6 +31,13 @@ pub enum ConfigError {
     BadBindAddr {
         var: &'static str,
         source: AddrParseError,
+    },
+
+    /// `TRUSTED_PROXY_HOPS` is not an integer from 0 to 255.
+    #[error("{var}: must be an integer from 0 to 255: {source}")]
+    BadProxyHops {
+        var: &'static str,
+        source: ParseIntError,
     },
 
     /// A key variable is not valid standard base64.
@@ -81,6 +91,9 @@ pub struct Config {
     pub google_calendar_base_url: String,
     /// OAuth scope requested for Google Calendar access.
     pub google_calendar_scope: String,
+    /// Number of reverse proxies in front of the server that append the
+    /// client address to `X-Forwarded-For`; 0 ignores forwarding headers.
+    pub trusted_proxy_hops: u8,
 }
 
 impl Config {
@@ -100,13 +113,16 @@ impl Config {
     /// missing, an optional one falls back to its default. `PUBLIC_BASE_URL`
     /// has its trailing slashes removed. `JWT_SIGNING_KEY` is used as raw
     /// UTF-8 bytes; `TOKEN_ENC_KEY` is decoded from standard base64. URLs
-    /// are not checked beyond being non-empty.
+    /// are not checked beyond being non-empty. `TRUSTED_PROXY_HOPS` defaults
+    /// to 0 and is not trimmed.
     ///
     /// # Errors
     ///
     /// Returns `Err` when:
     /// - a required variable is unset or empty (`ConfigError::Missing`);
     /// - `BIND_ADDR` is not a socket address (`ConfigError::BadBindAddr`);
+    /// - `TRUSTED_PROXY_HOPS` is not an integer from 0 to 255
+    ///   (`ConfigError::BadProxyHops`);
     /// - `TOKEN_ENC_KEY` is not base64 (`ConfigError::BadBase64`);
     /// - `TOKEN_ENC_KEY` does not decode to 32 bytes (`ConfigError::WrongKeyLength`);
     /// - `JWT_SIGNING_KEY` is shorter than 32 bytes (`ConfigError::KeyTooShort`).
@@ -130,6 +146,15 @@ impl Config {
                 var: "BIND_ADDR",
                 source,
             })?;
+        let trusted_proxy_hops = match lookup("TRUSTED_PROXY_HOPS") {
+            Some(value) if !value.is_empty() => {
+                value.parse().map_err(|source| ConfigError::BadProxyHops {
+                    var: "TRUSTED_PROXY_HOPS",
+                    source,
+                })?
+            }
+            _ => DEFAULT_TRUSTED_PROXY_HOPS,
+        };
         let public_base_url = required("PUBLIC_BASE_URL")?
             .trim_end_matches('/')
             .to_string();
@@ -149,6 +174,7 @@ impl Config {
                 DEFAULT_GOOGLE_CALENDAR_BASE_URL,
             ),
             google_calendar_scope: optional("GOOGLE_CALENDAR_SCOPE", DEFAULT_GOOGLE_CALENDAR_SCOPE),
+            trusted_proxy_hops,
         })
     }
 }
@@ -204,6 +230,7 @@ impl fmt::Debug for Config {
             .field("google_issuer_url", &self.google_issuer_url)
             .field("google_calendar_base_url", &self.google_calendar_base_url)
             .field("google_calendar_scope", &self.google_calendar_scope)
+            .field("trusted_proxy_hops", &self.trusted_proxy_hops)
             .finish()
     }
 }
@@ -343,6 +370,75 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn trusted_proxy_hops_defaults_to_zero() {
+        let config = load(&base_vars()).unwrap();
+
+        assert_eq!(config.trusted_proxy_hops, 0);
+    }
+
+    #[test]
+    fn reads_trusted_proxy_hops() {
+        let mut vars = base_vars();
+        vars.insert("TRUSTED_PROXY_HOPS", "1".to_string());
+
+        let config = load(&vars).unwrap();
+
+        assert_eq!(config.trusted_proxy_hops, 1);
+    }
+
+    #[test]
+    fn treats_empty_trusted_proxy_hops_as_default() {
+        let mut vars = base_vars();
+        vars.insert("TRUSTED_PROXY_HOPS", String::new());
+
+        let config = load(&vars).unwrap();
+
+        assert_eq!(config.trusted_proxy_hops, 0);
+    }
+
+    #[test]
+    fn rejects_non_numeric_trusted_proxy_hops() {
+        let mut vars = base_vars();
+        vars.insert("TRUSTED_PROXY_HOPS", "one".to_string());
+
+        let err = load(&vars).unwrap_err();
+
+        assert!(matches!(err, ConfigError::BadProxyHops { .. }));
+        assert!(err.to_string().contains("TRUSTED_PROXY_HOPS"));
+    }
+
+    #[test]
+    fn rejects_negative_trusted_proxy_hops() {
+        let mut vars = base_vars();
+        vars.insert("TRUSTED_PROXY_HOPS", "-1".to_string());
+
+        let err = load(&vars).unwrap_err();
+
+        assert!(matches!(err, ConfigError::BadProxyHops { .. }));
+    }
+
+    #[test]
+    fn rejects_trusted_proxy_hops_above_255() {
+        let mut vars = base_vars();
+        vars.insert("TRUSTED_PROXY_HOPS", "256".to_string());
+
+        let err = load(&vars).unwrap_err();
+
+        assert!(matches!(err, ConfigError::BadProxyHops { .. }));
+    }
+
+    #[test]
+    fn debug_output_shows_trusted_proxy_hops() {
+        let mut vars = base_vars();
+        vars.insert("TRUSTED_PROXY_HOPS", "2".to_string());
+        let config = load(&vars).unwrap();
+
+        let debug = format!("{config:?}");
+
+        assert!(debug.contains("trusted_proxy_hops: 2"));
     }
 
     #[test]

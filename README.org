@@ -363,9 +363,21 @@ SERVER_TAG=<version> docker compose -f deploy/docker-compose.yml up -d
 - The =server= service uses =ghcr.io/justcris654/schisaciaccole-server:${SERVER_TAG}=
   (=latest= if =SERVER_TAG= is unset) and publishes port 8080. Its
   =DATABASE_URL= is overridden to point to the =db= service.
-- Behind a reverse proxy with HTTPS, the proxy must overwrite =X-Forwarded-For=,
-  because the rate limit on =/auth= trusts that header.
+- =TRUSTED_PROXY_HOPS= tells the server how many reverse proxies sit in front
+  of it, for the per-client rate limit on =/auth= and the per-client cap on
+  logins in progress. Leave it at =0= (the default) when the server is exposed
+  directly: forwarding headers are ignored and the client is the peer address.
+  Set it to =1= behind one reverse proxy with HTTPS that appends the client
+  address to =X-Forwarded-For= (nginx =$proxy_add_x_forwarded_for=): the last
+  entry of the header is the client. Never set it higher than the number of
+  proxies, or clients can pick their own address.
 - =PUBLIC_BASE_URL= must be the public HTTPS URL of the server.
+- The server serves at most 1024 connections at once and stops accepting
+  while at the cap. It closes a connection that does not send complete
+  request headers within 10 seconds or stays 10 seconds with no request in
+  handling, and answers 408 to a request (body included) that takes more
+  than 30 seconds. On =SIGTERM= it waits at most 30 seconds for open
+  requests before exiting.
 
 * Logging
 

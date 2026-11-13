@@ -11,6 +11,7 @@
 pub mod app;
 pub mod auth;
 pub mod calendar;
+pub mod client_ip;
 pub mod config;
 pub mod crypto;
 pub mod db;
@@ -21,6 +22,7 @@ pub mod google_tokens;
 pub mod login_store;
 pub mod meeting_plan;
 pub mod meetings;
+pub mod serve;
 pub mod store;
 pub mod templates;
 pub mod tokens;
