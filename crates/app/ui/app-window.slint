@@ -355,12 +355,28 @@ component ManualPage inherits VerticalLayout {
     }
 }
 
+struct DailyTooltipState {
+    visible: bool,
+    right: length,
+    top: length,
+    height: length,
+    text: string,
+}
+
 // Daily switch of a meeting row, with the AUTO badge and a tooltip above it.
 component DailySwitch inherits Rectangle {
     in property <bool> on;
     in property <bool> auto;
     callback toggled();
-    private property <length> tip-height: root.auto ? 128px : 92px;
+    callback tooltip-changed(DailyTooltipState);
+    private property <DailyTooltipState> tooltip: {
+        visible: touch.has-hover || focus.has-focus,
+        right: root.absolute-position.x + root.width,
+        top: root.absolute-position.y,
+        height: root.auto ? 128px : 92px,
+        text: root.tip,
+    };
+    changed tooltip => { root.tooltip-changed(root.tooltip); }
     private property <string> tip: "Modalità Daily: il timer parte subito e il tempo del meeting viene ripartito in parti uguali tra i partecipanti accettati, chiamati a parlare in ordine casuale."
         + (root.auto ? " Riconosciuto in automatico dal titolo: puoi comunque cambiarlo." : "");
     forward-focus: focus;
@@ -435,9 +451,6 @@ component DailySwitch inherits Rectangle {
 
     touch := TouchArea {
         clicked => { root.toggled(); }
-        changed has-hover => {
-            if (self.has-hover) { tooltip.show(); } else if (!focus.has-focus) { tooltip.close(); }
-        }
     }
     focus := FocusScope {
         width: 0px;
@@ -448,51 +461,46 @@ component DailySwitch inherits Rectangle {
             }
             return reject;
         }
-        changed has-focus => {
-            if (self.has-focus) { tooltip.show(); } else { tooltip.close(); }
-        }
-    }
-
-    tooltip := PopupWindow {
-        close-policy: PopupClosePolicy.no-auto-close;
-        x: root.width - 280px;
-        y: -(root.tip-height + 6px) - 4px;
-        width: 280px;
-        height: root.tip-height + 6px;
-        Rectangle {
-            height: root.tip-height;
-            border-radius: AppTheme.radius-item;
-            background: AppTheme.danger;
-            drop-shadow-blur: 24px;
-            drop-shadow-offset-y: 8px;
-            drop-shadow-color: #1E1A2633;
-            Text {
-                x: 12px;
-                y: 10px;
-                width: parent.width - 24px;
-                height: parent.height - 20px;
-                text: root.tip;
-                font-size: 13px;
-                font-weight: 400;
-                color: AppTheme.on-danger;
-                wrap: word-wrap;
-                vertical-alignment: top;
-            }
-        }
-        Path {
-            x: 280px - 18px - 12px;
-            y: root.tip-height;
-            width: 12px;
-            height: 6px;
-            viewbox-width: 12;
-            viewbox-height: 6;
-            fill: AppTheme.danger;
-            commands: "M0 0H12L6 6z";
-        }
     }
 }
 
-component MeetingsPage inherits VerticalLayout {
+component DailyTooltip inherits Rectangle {
+    in property <DailyTooltipState> tip;
+    width: 280px;
+    height: root.tip.height + 6px;
+    Rectangle {
+        height: root.tip.height;
+        border-radius: AppTheme.radius-item;
+        background: AppTheme.danger;
+        drop-shadow-blur: 24px;
+        drop-shadow-offset-y: 8px;
+        drop-shadow-color: #1E1A2633;
+        Text {
+            x: 12px;
+            y: 10px;
+            width: parent.width - 24px;
+            height: parent.height - 20px;
+            text: root.tip.text;
+            font-size: 13px;
+            font-weight: 400;
+            color: AppTheme.on-danger;
+            wrap: word-wrap;
+            vertical-alignment: top;
+        }
+    }
+    Path {
+        x: 280px - 18px - 12px;
+        y: root.tip.height;
+        width: 12px;
+        height: 6px;
+        viewbox-width: 12;
+        viewbox-height: 6;
+        fill: AppTheme.danger;
+        commands: "M0 0H12L6 6z";
+    }
+}
+
+component MeetingsPage inherits Rectangle {
     in property <string> account-name;
     in property <[MeetingRow]> meetings;
     in property <bool> loading;
@@ -500,109 +508,136 @@ component MeetingsPage inherits VerticalLayout {
     callback select(int);
     callback set-daily(int, bool);
     callback refresh();
-    padding-left: 32px;
-    padding-right: 32px;
-    padding-top: 32px;
-    padding-bottom: 40px;
+    private property <DailyTooltipState> tooltip;
+    private property <int> tooltip-index: -1;
+    private property <MeetingRow> tooltip-meeting;
+    changed meetings => { root.tooltip.visible = false; root.tooltip-index = -1; }
 
     init => { root.refresh(); }
     Timer { interval: 60s; running: true; triggered => { root.refresh(); } }
 
     VerticalLayout {
-        spacing: 12px;
-        PageTitle { text: "I meeting di oggi"; color: AppTheme.timer-title; }
-        PageSub { text: "Google Calendar · " + root.account-name; overflow: elide; }
-    }
-    if root.loading : VerticalLayout {
-        padding-top: 16px;
-        AppText { text: "Caricamento…"; color: AppTheme.text-secondary; font-size: 15px; }
-    }
-    if root.error != "" : VerticalLayout {
-        padding-top: 16px;
-        AppText {
-            text: root.error;
-            color: AppTheme.notice;
-            font-size: 15px;
-            wrap: word-wrap;
+        padding-left: 32px;
+        padding-right: 32px;
+        padding-top: 32px;
+        padding-bottom: 40px;
+
+        VerticalLayout {
+            spacing: 12px;
+            PageTitle { text: "I meeting di oggi"; color: AppTheme.timer-title; }
+            PageSub { text: "Google Calendar · " + root.account-name; overflow: elide; }
         }
-    }
-    if !root.loading && root.error == "" && root.meetings.length == 0 : VerticalLayout {
-        padding-top: 16px;
-        AppText { text: "Nessun altro meeting oggi."; color: AppTheme.text-secondary; font-size: 15px; }
-    }
-    Rectangle { height: 32px; }
-    ListView {
-        vertical-stretch: 1;
-        for row[index] in root.meetings : Rectangle {
-            height: index == root.meetings.length - 1 ? 92px : 104px;
-            Rectangle {
-                y: 0px;
-                height: 92px;
-                border-radius: AppTheme.radius-card;
-                background: AppTheme.surface;
-                HorizontalLayout {
-                    padding-left: 24px;
-                    padding-right: 24px;
-                    padding-top: 20px;
-                    padding-bottom: 20px;
-                    spacing: 24px;
-                    Text {
-                        width: 150px;
-                        text: row.time-range;
-                        font-size: 21px;
-                        font-weight: 400;
-                        color: AppTheme.text;
-                        vertical-alignment: center;
-                    }
-                    VerticalLayout {
-                        horizontal-stretch: 1;
-                        spacing: 4px;
-                        alignment: center;
+        if root.loading : VerticalLayout {
+            padding-top: 16px;
+            AppText { text: "Caricamento…"; color: AppTheme.text-secondary; font-size: 15px; }
+        }
+        if root.error != "" : VerticalLayout {
+            padding-top: 16px;
+            AppText {
+                text: root.error;
+                color: AppTheme.notice;
+                font-size: 15px;
+                wrap: word-wrap;
+            }
+        }
+        if !root.loading && root.error == "" && root.meetings.length == 0 : VerticalLayout {
+            padding-top: 16px;
+            AppText { text: "Nessun altro meeting oggi."; color: AppTheme.text-secondary; font-size: 15px; }
+        }
+        Rectangle { height: 32px; }
+        meeting-list := ListView {
+            vertical-stretch: 1;
+            for row[index] in root.meetings : Rectangle {
+                height: index == root.meetings.length - 1 ? 92px : 104px;
+                Rectangle {
+                    y: 0px;
+                    height: 92px;
+                    border-radius: AppTheme.radius-card;
+                    background: AppTheme.surface;
+                    HorizontalLayout {
+                        padding-left: 24px;
+                        padding-right: 24px;
+                        padding-top: 20px;
+                        padding-bottom: 20px;
+                        spacing: 24px;
                         Text {
-                            text: row.title;
+                            width: 150px;
+                            text: row.time-range;
                             font-size: 21px;
                             font-weight: 400;
                             color: AppTheme.text;
-                            overflow: elide;
+                            vertical-alignment: center;
                         }
-                        HorizontalLayout {
-                            spacing: 6px;
-                            if row.in-progress : VerticalLayout {
-                                alignment: center;
-                                Rectangle {
-                                    width: 8px;
-                                    height: 8px;
-                                    border-radius: 4px;
-                                    background: AppTheme.orange;
-                                }
-                            }
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            spacing: 4px;
+                            alignment: center;
                             Text {
-                                text: row.meta;
-                                font-size: 15px;
-                                color: AppTheme.text-secondary;
+                                text: row.title;
+                                font-size: 21px;
+                                font-weight: 400;
+                                color: AppTheme.text;
                                 overflow: elide;
                             }
+                            HorizontalLayout {
+                                spacing: 6px;
+                                if row.in-progress : VerticalLayout {
+                                    alignment: center;
+                                    Rectangle {
+                                        width: 8px;
+                                        height: 8px;
+                                        border-radius: 4px;
+                                        background: AppTheme.orange;
+                                    }
+                                }
+                                Text {
+                                    text: row.meta;
+                                    font-size: 15px;
+                                    color: AppTheme.text-secondary;
+                                    overflow: elide;
+                                }
+                            }
                         }
-                    }
-                    VerticalLayout {
-                        alignment: center;
-                        DailySwitch {
-                            on: row.daily-on;
-                            auto: row.daily-auto;
-                            toggled => { root.set-daily(index, !row.daily-on); }
+                        VerticalLayout {
+                            alignment: center;
+                            DailySwitch {
+                                on: row.daily-on;
+                                auto: row.daily-auto;
+                                toggled => { root.set-daily(index, !row.daily-on); }
+                                tooltip-changed(tip) => {
+                                    if (tip.visible) {
+                                        root.tooltip-index = index;
+                                        root.tooltip-meeting = row;
+                                        root.tooltip = tip;
+                                    } else if (root.tooltip-index == index) {
+                                        root.tooltip = tip;
+                                    }
+                                }
+                            }
                         }
-                    }
-                    VerticalLayout {
-                        alignment: center;
-                        PillButton {
-                            text: "Avvia";
-                            clicked => { root.select(index); }
-                            PlayIcon { width: 20px; height: 20px; tint: parent.foreground; }
+                        VerticalLayout {
+                            alignment: center;
+                            PillButton {
+                                text: "Avvia";
+                                clicked => { root.select(index); }
+                                PlayIcon { width: 20px; height: 20px; tint: parent.foreground; }
+                            }
                         }
                     }
                 }
             }
         }
+    }
+
+    // Outside the scrolling viewport so the first row's tooltip is not clipped.
+    if root.tooltip.visible && !root.loading && root.error == ""
+        && root.tooltip-index >= 0 && root.tooltip-index < root.meetings.length
+        && root.tooltip-meeting == root.meetings[root.tooltip-index]
+        && root.tooltip.top >= meeting-list.absolute-position.y
+        && root.tooltip.top < meeting-list.absolute-position.y + meeting-list.height : DailyTooltip {
+        tip: root.tooltip;
+        x: root.tooltip.right - root.absolute-position.x - self.width;
+        y: root.tooltip.top - root.absolute-position.y - self.height - 4px;
     }
 }
 
