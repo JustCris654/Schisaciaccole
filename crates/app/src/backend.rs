@@ -11,10 +11,12 @@ use reqwest::blocking::{Client, Response};
 use reqwest::{Method, StatusCode};
 use schisaciaccole_core::api::{
     AUTH_LOGIN_PATH, AUTH_LOGOUT_PATH, AUTH_REFRESH_PATH, AUTH_TOKEN_PATH, ApiError, HEALTH_PATH,
-    ME_PATH, MEETINGS_PATH, Me, Meeting, RefreshRequest, TokenRequest, TokenResponse, error_codes,
+    ME_PATH, MEETINGS_PATH, Me, Meeting, PutTemplateRequest, RefreshRequest, SlotPlan,
+    TEMPLATES_PATH, Template, TokenRequest, TokenResponse, error_codes,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use url::Url;
 
 use crate::session_store::{SessionStore, SessionStoreError};
 
@@ -186,6 +188,54 @@ impl BackendClient {
         self.get_json(MEETINGS_PATH, &[("from", &from), ("to", &to)])
     }
 
+    /// Fetches the slot plan of the meeting `event_id` (`GET /api/v1/meetings/{event_id}/plan`).
+    ///
+    /// The id is escaped as a path segment; an empty id is left to the backend to reject.
+    /// Token handling is the same as [`BackendClient::fetch_me`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError::Server`] with status 404 and code `not_found` when the meeting
+    /// does not exist and with status 400 when the request is invalid. Otherwise see
+    /// [`BackendClient::fetch_me`]; [`BackendError::Unreachable`] is also returned when the
+    /// base URL cannot be extended with a path.
+    pub fn fetch_plan(&mut self, event_id: &str) -> Result<SlotPlan, BackendError> {
+        let url = self.segments_url(&["api", "v1", "meetings", event_id, "plan"])?;
+        self.json_request(Method::GET, &url, &[], None::<&()>)
+    }
+
+    /// Creates or replaces the slot template of a meeting title (`PUT /api/v1/templates`).
+    ///
+    /// The request is sent as given: validation is left to the backend. Token handling is the
+    /// same as [`BackendClient::fetch_me`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError::Server`] with status 400 when the backend rejects the request.
+    /// Otherwise see [`BackendClient::fetch_me`].
+    pub fn save_template(
+        &mut self,
+        request: &PutTemplateRequest,
+    ) -> Result<Template, BackendError> {
+        let url = self.url(TEMPLATES_PATH);
+        self.json_request(Method::PUT, &url, &[], Some(request))
+    }
+
+    /// Deletes the slot template `id` (`DELETE /api/v1/templates/{id}`).
+    ///
+    /// The id is escaped as a path segment; the answer has no body. Token handling is the same
+    /// as [`BackendClient::fetch_me`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError::Server`] with status 404 and code `not_found` when the template
+    /// does not exist. Otherwise see [`BackendClient::fetch_me`] (no decode error can occur).
+    pub fn delete_template(&mut self, id: &str) -> Result<(), BackendError> {
+        let url = self.segments_url(&["api", "v1", "templates", id])?;
+        self.send_authenticated(Method::DELETE, &url, &[], None::<&()>)?;
+        Ok(())
+    }
+
     /// Revokes the session on the backend and forgets it locally.
     ///
     /// The backend call is best effort: any failure of it is ignored, and the local session
@@ -204,6 +254,23 @@ impl BackendClient {
         }
         self.store.clear()?;
         Ok(())
+    }
+
+    /// Builds the URL of `segments` appended to the base URL, escaping every segment.
+    ///
+    /// A base URL path prefix is kept. Segments `.` and `..` are resolved by the URL parser
+    /// instead of being escaped, so callers must not pass them.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BackendError::Unreachable`] for an invalid base URL or a URL without path segments.
+    fn segments_url(&self, segments: &[&str]) -> Result<String, BackendError> {
+        let mut url = Url::parse(&self.base_url).map_err(|_| BackendError::Unreachable)?;
+        url.path_segments_mut()
+            .map_err(|_| BackendError::Unreachable)?
+            .pop_if_empty()
+            .extend(segments);
+        Ok(url.to_string())
     }
 
     fn url(&self, path: &str) -> String {
@@ -848,5 +915,19 @@ mod tests {
 
         assert!(result.is_ok());
         assert!(!client.has_session());
+    }
+
+    #[test]
+    fn plan_url_preserves_prefix_and_escapes_calendar_event_id() {
+        let client =
+            BackendClient::new("https://example.test/prefix/", Box::new(MemoryStore::new()))
+                .unwrap();
+        let url = client
+            .segments_url(&["api", "v1", "meetings", "event/id ?", "plan"])
+            .unwrap();
+        assert_eq!(
+            url,
+            "https://example.test/prefix/api/v1/meetings/event%2Fid%20%3F/plan"
+        );
     }
 }

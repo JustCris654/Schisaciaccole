@@ -1,11 +1,20 @@
+import { ThemedButton, CompactButton, ThemedField, ScrollList } from "editor-controls.slint";
 import { ListView, AboutSlint } from "std-widgets.slint";
 import { AppTheme, AppText, PageTitle, PageSub, PillButton, PillKind, PlayIcon, StopIcon, PauseIcon, SkipIcon, HomeIcon, PeopleIcon, EyeOffIcon, ChevronIcon, StepIcon, DotsIcon, LogoutIcon, LogoMark, FadeFill, FocusRing, AppMotion, MotionProgress } from "theme.slint";
 
 import "../assets/fonts/MomoTrustDisplay/MomoTrustDisplay-Regular.ttf";
 
-export enum Page { ManualPage, TimerPage, TimerFinished, LoadingPage, LoginPage, MeetingsPage }
+export enum Page { ManualPage, TimerPage, TimerFinished, LoadingPage, LoginPage, MeetingsPage, EditorPage }
 export enum StopType { TimerFinished, UserStopped }
-export enum TurnView { Plain, Settings, Running, Daily }
+export enum TurnView { Plain, Settings, Running, Daily, Scheduled }
+
+export struct EditorRow {
+    label: string,
+    minutes: int,
+    included: bool,
+    attendee: bool,
+    email: string,
+}
 
 export struct TimeOption { time: string, minutes: string }
 export struct MeetingRow {
@@ -500,11 +509,206 @@ component DailyTooltip inherits Rectangle {
     }
 }
 
+component EditorPage inherits Rectangle {
+    in property <string> title;
+    in property <string> time-range;
+    in property <string> duration;
+    in property <bool> attendees-warning;
+    in property <bool> loading;
+    in property <bool> busy;
+    in property <string> notice;
+    in property <string> unassigned;
+    in property <bool> over;
+    in property <bool> has-template;
+    in property <[EditorRow]> rows;
+    callback set-label(int, string);
+    callback set-minutes(int, int);
+    callback set-included(int, bool);
+    callback move-up(int);
+    callback move-down(int);
+    callback remove-row(int);
+    callback add-row();
+    callback reset();
+    callback save();
+    callback delete-template();
+    callback start-meeting();
+    callback back();
+
+    VerticalLayout {
+        padding: 24px;
+        spacing: 8px;
+        PageTitle { text: "Organizza i turni"; }
+        AppText {
+            text: root.title + " · " + root.time-range + " · " + root.duration;
+            overflow: elide;
+        }
+        if root.attendees-warning : AppText {
+            text: "Lista partecipanti incompleta: aggiungi le voci mancanti";
+            color: AppTheme.timer-title;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+        if root.loading : AppText { text: "Caricamento…"; vertical-stretch: 1; }
+        if !root.loading : ScrollList {
+            vertical-stretch: 1;
+            for row[index] in root.rows : Rectangle {
+                height: 56px;
+                Rectangle {
+                    height: 52px;
+                    border-radius: 8px;
+                    background: AppTheme.surface;
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        spacing: 4px;
+                        CompactButton {
+                            text: "↑";
+                            accessible-name: "Sposta su " + row.label;
+                            bare: true;
+                            enabled: index > 0;
+                            clicked => { root.move-up(index); }
+                        }
+                        CompactButton {
+                            text: "↓";
+                            accessible-name: "Sposta giù " + row.label;
+                            bare: true;
+                            enabled: index < root.rows.length - 1;
+                            clicked => { root.move-down(index); }
+                        }
+                        if row.attendee : VerticalLayout {
+                            alignment: center;
+                            horizontal-stretch: 0;
+                            ThemedButton {
+                                compact: true;
+                                accessible-role: checkbox;
+                                text: row.included ? "☑" : "☐";
+                                accessible-name: "Includi " + row.label;
+                                bare: true;
+                                checkable: true;
+                                checked: row.included;
+                                clicked => { root.set-included(index, !row.included); }
+                            }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            horizontal-stretch: 1;
+                            ThemedField {
+                                text <=> row.label;
+                                accessible-name: "Nome del turno " + (index + 1);
+                                opacity: row.included ? 1 : 0.6;
+                                edited(text) => { root.set-label(index, text); }
+                            }
+                            if row.attendee && row.email != "" : AppText {
+                                text: row.email;
+                                font-size: 12px;
+                                overflow: elide;
+                            }
+                        }
+                        if !row.attendee : CompactButton {
+                            text: "×";
+                            accessible-name: "Rimuovi " + row.label;
+                            bare: true;
+                            clicked => { root.remove-row(index); }
+                        }
+                        CompactButton {
+                            text: "−";
+                            accessible-name: "Riduci minuti di " + row.label;
+                            bare: true;
+                            enabled: row.minutes > 0;
+                            clicked => { root.set-minutes(index, row.minutes - 1); }
+                        }
+                        ThemedField {
+                            width: 44px;
+                            text: row.minutes;
+                            committed-text: row.minutes;
+                            accessible-name: "Minuti di " + row.label;
+                            numeric: true;
+                            font-weight: 400;
+                            horizontal-alignment: center;
+                            edited(text) => {
+                                if (text.is-float()) { root.set-minutes(index, round(text.to-float())); }
+                            }
+                        }
+                        AppText { text: "min"; vertical-alignment: center; }
+                        CompactButton {
+                            text: "+";
+                            foreground: #ffffff;
+                            accessible-name: "Aumenta minuti di " + row.label;
+                            primary: true;
+                            enabled: row.minutes < 600;
+                            clicked => { root.set-minutes(index, row.minutes + 1); }
+                        }
+                    }
+                }
+            }
+        }
+        if root.notice != "" : AppText {
+            text: root.notice;
+            color: AppTheme.timer-title;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+        HorizontalLayout {
+            AppText {
+                text: root.unassigned;
+                color: root.over ? AppTheme.timer-title : AppTheme.text-secondary;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+            CompactButton {
+                text: "+ Aggiungi voce";
+                bare: true;
+                enabled: !root.loading;
+                clicked => { root.add-row(); }
+            }
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            CompactButton {
+                text: "←";
+                accessible-name: "Indietro";
+                bare: true;
+                clicked => { root.back(); }
+            }
+            CompactButton {
+                text: "Slot uguali";
+                accessible-name: "Ripristina slot uguali";
+                bare: true;
+                enabled: !root.loading;
+                clicked => { root.reset(); }
+            }
+            if root.has-template : CompactButton {
+                text: "Elimina preferenza";
+                bare: true;
+                enabled: !root.loading && !root.busy;
+                clicked => { root.delete-template(); }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            ThemedButton {
+                text: "Salva preferenza";
+                width: 180px;
+                enabled: !root.loading && !root.busy;
+                clicked => { root.save(); }
+            }
+            ThemedButton {
+                text: "Avvia";
+                width: 96px;
+                primary: true;
+                enabled: !root.loading;
+                clicked => { root.start-meeting(); }
+            }
+        }
+    }
+}
+
+
 component MeetingsPage inherits Rectangle {
     in property <string> account-name;
     in property <[MeetingRow]> meetings;
     in property <bool> loading;
     in property <string> error;
+    callback open-editor(int);
     callback select(int);
     callback set-daily(int, bool);
     callback refresh();
@@ -559,7 +763,7 @@ component MeetingsPage inherits Rectangle {
                         padding-right: 24px;
                         padding-top: 20px;
                         padding-bottom: 20px;
-                        spacing: 24px;
+                        spacing: root.width < 900px ? 8px : 24px;
                         Text {
                             width: 150px;
                             text: row.time-range;
@@ -617,10 +821,18 @@ component MeetingsPage inherits Rectangle {
                         }
                         VerticalLayout {
                             alignment: center;
-                            PillButton {
-                                text: "Avvia";
-                                clicked => { root.select(index); }
-                                PlayIcon { width: 20px; height: 20px; tint: parent.foreground; }
+                            HorizontalLayout {
+                                spacing: 8px;
+                                PillButton {
+                                    text: "Editor";
+                                    kind: PillKind.outline;
+                                    clicked => { root.open-editor(index); }
+                                }
+                                PillButton {
+                                    text: "Avvia";
+                                    clicked => { root.select(index); }
+                                    PlayIcon { width: 20px; height: 20px; tint: parent.foreground; }
+                                }
                             }
                         }
                     }
@@ -1154,6 +1366,10 @@ component PersonBar inherits Rectangle {
 
 // Countdown screen with its three views: plain, turn settings and running turn.
 component TimerPage inherits Rectangle {
+    in property <string> slot-name;
+    in property <duration> slot-time;
+    in property <string> next-slot-name;
+    in property <bool> slot-free-time;
     in property <duration> timer-time;
     in property <bool> running-state;
     in property <string> timer-end;
@@ -1175,6 +1391,7 @@ component TimerPage inherits Rectangle {
     in property <bool> daily-can-remove;
     in property <string> daily-remaining;
     in property <[string]> daily-chips;
+    callback next-slot();
     callback stop(StopType);
     callback tick();
     callback show-turns();
@@ -1234,6 +1451,40 @@ component TimerPage inherits Rectangle {
                 picked(index) => { root.select-turner(index); }
                 minutes-delta(delta) => { root.adjust-turn-minutes(delta); }
                 start => { root.start-turn(); }
+            }
+        }
+        if root.turn-view == TurnView.Scheduled : VerticalLayout {
+            spacing: root.compact ? 4px : 8px;
+            Text {
+                text: root.slot-name;
+                font-size: root.compact ? 18px : 28px;
+                color: AppTheme.text;
+                horizontal-alignment: center;
+                overflow: elide;
+            }
+            HorizontalLayout {
+                alignment: center;
+                if !root.slot-free-time : MiniClock {
+                    seconds: max(0, ceil(root.slot-time / 1s));
+                    size: root.compact ? 28px : 40px;
+                    tint: AppTheme.timer-title;
+                }
+            }
+            if root.next-slot-name != "" : Text {
+                text: "Poi: " + root.next-slot-name;
+                font-size: root.compact ? 12px : 16px;
+                color: AppTheme.text-secondary;
+                horizontal-alignment: center;
+                overflow: elide;
+            }
+            HorizontalLayout {
+                alignment: center;
+                if !root.slot-free-time : PillButton {
+                    text: "Fine turno";
+                    compact: root.compact;
+                    kind: PillKind.outline;
+                    clicked => { root.next-slot(); }
+                }
             }
         }
         if root.turn-view == TurnView.Running : HorizontalLayout {
@@ -1538,6 +1789,10 @@ export component MainWindow inherits Window {
     in-out property <bool> on-top: false;
     always-on-top: on-top;
     // True while a countdown screen shows; allows the small window.
+    in property <string> slot-name;
+    in property <duration> slot-time;
+    in property <string> next-slot-name;
+    in property <bool> slot-free-time;
     in property <bool> timer-mode: false;
 
     in-out property <bool> reduce-motion <=> AppMotion.reduced;
@@ -1580,6 +1835,34 @@ export component MainWindow inherits Window {
     in property     <bool>     meetings-loading;
     in property     <string>   meetings-error;
 
+    in property     <[EditorRow]> editor-rows;
+    in property     <string>   editor-title;
+    in property     <string>   editor-time-range;
+    in property     <string>   editor-duration;
+    in property     <bool>     editor-attendees-warning;
+    in property     <bool>     editor-loading;
+    in property     <bool>     editor-busy;
+    in property     <string>   editor-notice;
+    in property     <string>   editor-unassigned;
+    in property     <bool>     editor-over;
+    in property     <bool>     editor-has-template;
+
+    callback open-editor(int);
+    callback editor-set-label(int, string);
+    callback editor-set-minutes(int, int);
+    callback editor-set-included(int, bool);
+    callback editor-move-up(int);
+    callback editor-move-down(int);
+    callback editor-remove-row(int);
+    callback editor-add-row();
+    callback editor-reset();
+    callback editor-save();
+    callback editor-delete();
+    callback editor-start();
+    callback editor-back();
+
+    callback next-slot();
+
     callback select-slot(int);
     callback start-selected();
     callback compute-options();
@@ -1609,7 +1892,7 @@ export component MainWindow inherits Window {
     callback next-daily-speaker();
     callback adjust-daily-time(int);
 
-    changed page => { page-fade.restart(); }
+    changed page => { page-fade.restart(); if (page != Page.EditorPage) { scope.focus(); } }
 
     if is-macos: MenuBar {
 	Menu {
@@ -1632,11 +1915,13 @@ export component MainWindow inherits Window {
     scope := FocusScope {
         KeyBinding {
             keys: @keys(Q);
+            enabled: root.page != Page.EditorPage;
             activated => { quit(); }
         }
 
         KeyBinding {
             keys: @keys(M);
+            enabled: root.page != Page.EditorPage;
             activated => { fullscreen(false); }
         }
 
@@ -1647,11 +1932,13 @@ export component MainWindow inherits Window {
 
         KeyBinding {
             keys: @keys(T);
+            enabled: root.page != Page.EditorPage;
             activated => { on-top = !on-top; }
         }
 
         KeyBinding {
             keys: @keys(H);
+            enabled: root.page != Page.EditorPage;
             activated => { help(); }
         }
     }
@@ -1700,9 +1987,37 @@ export component MainWindow inherits Window {
                 loading: root.meetings-loading;
                 error: root.meetings-error;
                 select(index) => { root.select-meeting(index); }
+                open-editor(index) => { root.open-editor(index); }
                 set-daily(index, on) => { root.set-daily(index, on); }
                 refresh => { root.refresh-meetings(); }
             }
+        }
+        if page == Page.EditorPage : EditorPage {
+            width: root.width;
+            height: root.height;
+            title: root.editor-title;
+            time-range: root.editor-time-range;
+            duration: root.editor-duration;
+            attendees-warning: root.editor-attendees-warning;
+            loading: root.editor-loading;
+            busy: root.editor-busy;
+            notice: root.editor-notice;
+            unassigned: root.editor-unassigned;
+            over: root.editor-over;
+            has-template: root.editor-has-template;
+            rows: root.editor-rows;
+            set-label(index, text) => { root.editor-set-label(index, text); }
+            set-minutes(index, value) => { root.editor-set-minutes(index, value); }
+            set-included(index, included) => { root.editor-set-included(index, included); }
+            move-up(index) => { root.editor-move-up(index); }
+            move-down(index) => { root.editor-move-down(index); }
+            remove-row(index) => { root.editor-remove-row(index); }
+            add-row => { root.editor-add-row(); }
+            reset => { root.editor-reset(); }
+            save => { root.editor-save(); }
+            delete-template => { root.editor-delete(); }
+            start-meeting => { root.editor-start(); }
+            back => { root.editor-back(); }
         }
         if page == Page.LoadingPage : VerticalLayout {
             padding: 32px;
@@ -1757,6 +2072,11 @@ export component MainWindow inherits Window {
             }
         }
         if page == Page.TimerPage : TimerPage {
+            slot-name: root.slot-name;
+            slot-time: root.slot-time;
+            next-slot-name: root.next-slot-name;
+            slot-free-time: root.slot-free-time;
+            next-slot => { root.next-slot(); }
             width: root.width;
             height: root.height;
             timer-time: root.timer-time;

@@ -8,6 +8,10 @@ makes that easy — instead of asking "how long do we have left?", you pick the
 **wall-clock time the meeting must end** and the timer counts down precisely to
 that moment.
 
+In today's meeting list, **Avvia** starts the meeting timer directly. The
+**Editor** button to its left opens **Organizza i turni**, where you can
+customize speaking turns before starting the meeting.
+
 ## Screenshots
 
 | Google sign-in | Today's meetings |

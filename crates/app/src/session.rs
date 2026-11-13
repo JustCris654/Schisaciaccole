@@ -15,13 +15,13 @@ use std::time::Duration;
 
 use chrono::{DateTime, FixedOffset, Local, TimeZone};
 use log::{debug, info, warn};
-use schisaciaccole_core::api::{Me, Meeting};
+use schisaciaccole_core::api::{Me, Meeting, SlotPlan, Template};
 
 use crate::backend::{BackendClient, BackendError};
 use crate::login::{self, LoginError, LoopbackServer};
 use crate::pkce;
 use crate::session_store::{self, KeyringStore, MemoryStore, SessionStore};
-use crate::state::{AppState, OFFLINE_NOTICE};
+use crate::state::{AppState, OFFLINE_NOTICE, TemplateDelete, TemplateSave};
 
 /// How long the login waits for the browser to come back.
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(5 * 60);
@@ -49,6 +49,33 @@ pub enum AppEvent {
         request: u64,
         /// Meetings from now to the end of the day, or why they could not be fetched.
         result: Result<Vec<Meeting>, BackendError>,
+    },
+    /// The slot plan fetch `request` ended.
+    PlanLoaded {
+        /// Id given by [`Session::spawn_plan_fetch`].
+        request: u64,
+        /// Meeting the plan was asked for.
+        event_id: String,
+        /// The plan, or why it could not be fetched.
+        result: Result<SlotPlan, BackendError>,
+    },
+    /// The template save `request` ended.
+    TemplateSaved {
+        /// Id given by [`Session::spawn_template_save`].
+        request: u64,
+        /// Meeting of the editor that asked for the save.
+        event_id: String,
+        /// The saved template, or why it could not be saved.
+        result: Result<Template, BackendError>,
+    },
+    /// The template deletion `request` ended.
+    TemplateDeleted {
+        /// Id given by [`Session::spawn_template_delete`].
+        request: u64,
+        /// Meeting of the editor that asked for the deletion.
+        event_id: String,
+        /// Nothing, or why the template could not be deleted.
+        result: Result<(), BackendError>,
     },
 }
 
@@ -150,6 +177,8 @@ pub struct Session {
     next_attempt: Cell<u64>,
     /// Id of the latest meetings fetch; the results of older ones are ignored.
     meetings_request: Cell<u64>,
+    editor_plan_request: Cell<u64>,
+    template_request: Cell<u64>,
 }
 
 impl Session {
@@ -175,6 +204,8 @@ impl Session {
             login: RefCell::new(None),
             next_attempt: Cell::new(0),
             meetings_request: Cell::new(0),
+            editor_plan_request: Cell::new(0),
+            template_request: Cell::new(0),
         })
     }
 
@@ -278,6 +309,118 @@ impl Session {
         self.meetings_request.get() == request
     }
 
+    /// Fetches the slot plan of meeting `event_id` on a worker and posts
+    /// [`AppEvent::PlanLoaded`].
+    ///
+    /// Each call supersedes the previous editor plan fetch: see
+    /// [`Session::is_current_plan_request`]. When the worker cannot be started a generic failure
+    /// is posted.
+    pub fn spawn_plan_fetch(&self, event_id: &str) {
+        let counter = &self.editor_plan_request;
+        let request = counter.get().wrapping_add(1);
+        counter.set(request);
+
+        let client = self.client.clone();
+        let worker_event_id = event_id.to_string();
+        let spawned = spawn("plan", move || {
+            let result = lock(&client).fetch_plan(&worker_event_id);
+            post(AppEvent::PlanLoaded {
+                request,
+                event_id: worker_event_id,
+                result,
+            });
+        });
+        if let Err(e) = spawned {
+            warn!("Cannot start the plan fetch: {e}");
+            post(AppEvent::PlanLoaded {
+                request,
+                event_id: event_id.to_string(),
+                result: Err(BackendError::Decode),
+            });
+        }
+    }
+
+    /// True when `request` is the latest editor plan fetch, so its result is still
+    /// wanted.
+    pub fn is_current_plan_request(&self, request: u64) -> bool {
+        self.editor_plan_request.get() == request
+    }
+
+    /// Saves a slot template on a worker and posts [`AppEvent::TemplateSaved`].
+    ///
+    /// Each template save or deletion supersedes the previous one: see
+    /// [`Session::is_current_template_request`]. When the worker cannot be started a generic
+    /// failure is posted.
+    pub fn spawn_template_save(&self, save: TemplateSave) {
+        let request = self.next_template_request();
+        let client = self.client.clone();
+        let TemplateSave {
+            event_id,
+            request: body,
+        } = save;
+        let worker_event_id = event_id.clone();
+        let spawned = spawn("template-save", move || {
+            let result = lock(&client).save_template(&body);
+            post(AppEvent::TemplateSaved {
+                request,
+                event_id: worker_event_id,
+                result,
+            });
+        });
+        if let Err(e) = spawned {
+            warn!("Cannot start the template save: {e}");
+            post(AppEvent::TemplateSaved {
+                request,
+                event_id,
+                result: Err(BackendError::Decode),
+            });
+        }
+    }
+
+    /// Deletes a slot template on a worker and posts [`AppEvent::TemplateDeleted`].
+    ///
+    /// Each template save or deletion supersedes the previous one: see
+    /// [`Session::is_current_template_request`]. When the worker cannot be started a generic
+    /// failure is posted.
+    pub fn spawn_template_delete(&self, delete: TemplateDelete) {
+        let request = self.next_template_request();
+        let client = self.client.clone();
+        let TemplateDelete {
+            event_id,
+            template_id,
+        } = delete;
+        let worker_event_id = event_id.clone();
+        let spawned = spawn("template-delete", move || {
+            let result = lock(&client).delete_template(&template_id);
+            post(AppEvent::TemplateDeleted {
+                request,
+                event_id: worker_event_id,
+                result,
+            });
+        });
+        if let Err(e) = spawned {
+            warn!("Cannot start the template deletion: {e}");
+            post(AppEvent::TemplateDeleted {
+                request,
+                event_id,
+                result: Err(BackendError::Decode),
+            });
+        }
+    }
+
+    /// Takes the id of a new template request.
+    fn next_template_request(&self) -> u64 {
+        let request = self.template_request.get().wrapping_add(1);
+        self.template_request.set(request);
+        request
+    }
+
+    /// True when `request` is the latest template save or deletion, so its result is still
+    /// wanted.
+    pub fn is_current_template_request(&self, request: u64) -> bool {
+        self.template_request.get() == request
+    }
+
     /// Revokes the session on a worker and posts [`AppEvent::LoggedOut`].
     ///
     /// A failure to forget the local session is logged and the event is posted anyway. When the
@@ -332,6 +475,43 @@ pub fn apply_event(state: &mut AppState, session: &Session, event: AppEvent) {
                     warn!("Meetings fetch failed: {e}");
                     state.on_meetings_failed(meetings_error_message(&e));
                 }
+            }
+        }
+        AppEvent::PlanLoaded {
+            request,
+            event_id,
+            result,
+        } => {
+            if !session.is_current_plan_request(request) {
+                debug!("Ignoring the result of editor plan request {request}");
+                return;
+            }
+            state.on_editor_plan_loaded(&event_id, result);
+        }
+        AppEvent::TemplateSaved {
+            request,
+            event_id,
+            result,
+        } => {
+            if !session.is_current_template_request(request) {
+                debug!("Ignoring the result of template request {request}");
+                return;
+            }
+            if state.on_template_saved(&event_id, result) {
+                session.spawn_meetings_fetch();
+            }
+        }
+        AppEvent::TemplateDeleted {
+            request,
+            event_id,
+            result,
+        } => {
+            if !session.is_current_template_request(request) {
+                debug!("Ignoring the result of template request {request}");
+                return;
+            }
+            if state.on_template_deleted(&event_id, result) {
+                session.spawn_meetings_fetch();
             }
         }
     }
@@ -428,6 +608,8 @@ mod tests {
             login: RefCell::new(None),
             next_attempt: Cell::new(0),
             meetings_request: Cell::new(0),
+            editor_plan_request: Cell::new(0),
+            template_request: Cell::new(0),
         }
     }
 
@@ -729,5 +911,61 @@ mod tests {
             .unwrap();
         let body: serde_json::Value = exchange.body_json().unwrap();
         assert_eq!(body["code"], "c1");
+    }
+
+    #[test]
+    fn stale_editor_plan_does_not_finish_loading() {
+        let session = offline_session();
+        session.editor_plan_request.set(2);
+        let mut state = signed_in_state();
+        let now = Local::now().fixed_offset();
+        state.on_meetings_loaded(vec![Meeting {
+            event_id: "talk".into(),
+            recurring_event_id: None,
+            has_template: false,
+            title: "Talk".into(),
+            start: now,
+            end: now + chrono::Duration::hours(1),
+            attendees: Vec::new(),
+            attendees_omitted: false,
+        }]);
+        state.open_editor(0);
+        apply_event(
+            &mut state,
+            &session,
+            AppEvent::PlanLoaded {
+                request: 1,
+                event_id: "talk".into(),
+                result: Err(BackendError::Unreachable),
+            },
+        );
+        assert!(state.start_template_save().is_none());
+        apply_event(
+            &mut state,
+            &session,
+            AppEvent::PlanLoaded {
+                request: 2,
+                event_id: "talk".into(),
+                result: Err(BackendError::Unreachable),
+            },
+        );
+        assert!(state.start_template_save().is_some());
+    }
+
+    #[test]
+    fn stale_editor_template_result_does_not_end_session() {
+        let session = offline_session();
+        session.template_request.set(2);
+        let mut state = signed_in_state();
+        apply_event(
+            &mut state,
+            &session,
+            AppEvent::TemplateSaved {
+                request: 1,
+                event_id: "talk".into(),
+                result: Err(BackendError::NotLoggedIn),
+            },
+        );
+        assert!(state.is_signed_in());
     }
 }
