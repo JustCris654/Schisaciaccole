@@ -73,6 +73,64 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all --check
 ```
 
+## Themes and appearance
+
+Open the three-dot menu in **Manuale** or **I miei meeting**, then choose
+**Impostazioni**. The **Tema** section has independent controls for the theme
+(**Predefinito della distribuzione**, **Schisaciaccole**, **OpenMove**) and the
+appearance (**Sistema**, **Chiaro**, **Scuro**). Changes apply immediately,
+including open shortcut windows. **Sistema** follows native light/dark changes
+while the app is open. These preferences work locally without signing in or
+configuring a backend, and login/logout does not change them.
+
+Preferences are TOML in `~/.config/schisaciaccole/config.toml` on Linux and macOS,
+using the user's home directory even when `XDG_CONFIG_HOME` is set. The original
+app and forks share this path. A typical file is:
+
+```toml
+theme = "distribution"
+mode = "system"
+```
+
+Accepted theme values are `distribution`, `schisaciaccole` and `openmove`;
+appearance values are `system`, `light` and `dark`. An absent preference uses
+the distribution theme and system appearance. `distribution` remains an
+explicit choice: it follows a changed build default after an update. An
+explicit theme ID is preserved across updates. Changing the theme does not
+reset the appearance mode.
+
+Missing files are normal. Invalid TOML, removed/invalid theme IDs and read
+errors fall back without blocking startup; a short red message near the
+settings explains the fallback. A valid appearance mode is retained when only
+the saved theme is invalid. Invalid modes fall back to **Sistema**. Saves use a
+sibling temporary file and atomic replacement. On a write error the current
+choice remains active for the session, with an inline message that it was not
+saved; the previous configuration is retained. Unrelated TOML keys are preserved
+when a valid configuration is updated.
+
+The distribution default is embedded when compiling the desktop:
+
+```sh
+SCHISACIACCOLE_DEFAULT_THEME=openmove cargo run --release -p schisaciaccole
+```
+
+Unset means `schisaciaccole`. Empty, non-Unicode or unknown IDs fail the build
+with a descriptive error; valid stable IDs are `schisaciaccole` and `openmove`.
+Cargo rechecks the choice when the variable changes, without `cargo clean`.
+The variable does not configure the server and is not read at app startup.
+It can be combined with the optional build-time backend URL:
+
+```sh
+SCHISACIACCOLE_BACKEND_URL=https://schisaciaccole.example.com \
+SCHISACIACCOLE_DEFAULT_THEME=openmove \
+cargo run --release -p schisaciaccole
+```
+
+The shared build/runtime ID catalog is `crates/app/src/theme_catalog.rs`,
+semantic light/dark palettes are in `palettes.rs`, and local persistence is in
+`theme.rs`. Slint components read the palette through `AppTheme`. Focus,
+warning/error states, speaking turns and decorations have independent tokens.
+
 ## Packaging
 
 The app icons live at `crates/app/assets/icon_{128,256,512}.png` and the

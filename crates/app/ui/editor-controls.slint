@@ -17,9 +17,9 @@ export component ThemedButton inherits Rectangle {
     out property <bool> hovered: touch.has-hover;
     callback clicked();
     in property <color> base-background: root.primary ? AppTheme.brand : (root.bare ? transparent : AppTheme.surface);
-    in property <color> hover-background: root.primary ? AppTheme.brand.darker(0.08) : AppTheme.page;
+    in property <color> hover-background: root.primary ? AppTheme.brand-hover : AppTheme.page;
     private property <color> target-fill: touch.pressed
-        ? (root.primary ? AppTheme.brand.darker(0.16) : AppTheme.border-subtle)
+        ? (root.primary ? AppTheme.brand-pressed : AppTheme.border-subtle)
         : (touch.has-hover ? root.hover-background : root.base-background);
     private property <color> from-fill;
     private property <color> to-fill;
@@ -46,7 +46,7 @@ export component ThemedButton inherits Rectangle {
     border-radius: AppTheme.radius-item;
     border-width: focus.has-focus ? 2px : 1px;
     border-color: focus.has-focus
-        ? (root.primary ? AppTheme.text : AppTheme.brand)
+        ? AppTheme.focus
         : (root.primary || root.bare ? transparent : AppTheme.border-subtle);
     opacity: root.enabled ? 1 : 0.45;
     background: root.displayed-fill;
@@ -136,7 +136,7 @@ export component ThemedField inherits Rectangle {
     min-height: 28px;
     border-radius: 4px;
     border-width: input.has-focus ? 1px : 0px;
-    border-color: AppTheme.brand;
+    border-color: AppTheme.focus;
     background: input.has-focus ? AppTheme.surface : transparent;
     clip: true;
 
@@ -163,8 +163,8 @@ export component ThemedField inherits Rectangle {
         font-size: 16px;
         font-weight: root.font-weight;
         color: AppTheme.text;
-        selection-background-color: AppTheme.brand;
-        selection-foreground-color: AppTheme.on-brand;
+        selection-background-color: AppTheme.selection;
+        selection-foreground-color: AppTheme.selection-text;
         vertical-alignment: center;
         horizontal-alignment: root.horizontal-alignment;
         accessible-label: root.accessible-name;

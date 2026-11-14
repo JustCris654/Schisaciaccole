@@ -1,23 +1,79 @@
-import { Palette } from "std-widgets.slint";
+export struct ThemePalette {
+    page: color,
+    surface: color,
+    brand: color,
+    brand-hover: color,
+    brand-pressed: color,
+    on-brand: color,
+    text: color,
+    text-secondary: color,
+    text-brand: color,
+    timer-title: color,
+    border-subtle: color,
+    turn: color,
+    turn-text: color,
+    turn-soft: color,
+    turn-tint: color,
+    on-turn: color,
+    notice: color,
+    focus: color,
+    error: color,
+    danger: color,
+    on-danger: color,
+    timer-normal: color,
+    timer-paused: color,
+    timer-warning: color,
+    timer-expired: color,
+    shadow: color,
+    selection: color,
+    selection-text: color,
+    decoration-one: color,
+    decoration-two: color,
+    decoration-three: color,
+    decoration-four: color,
+    decoration-five: color,
+}
 
 export global AppTheme {
-    out property <bool> dark: Palette.color-scheme == ColorScheme.dark;
-    out property <color> page: dark ? #222228 : #FFFFFF;
-    out property <color> surface: dark ? #35353E : #F1ECFA;
-    out property <color> brand: #6B2FBF;
-    out property <color> timer-title: dark ? #C682F5 : #6B2FBF;
-    out property <color> on-brand: #FFFFFF;
-    out property <color> text: dark ? #F3F1F7 : #1E1A26;
-    out property <color> text-secondary: dark ? #C1BECA : #6A6378;
-    out property <color> text-brand: dark ? #C7B0EE : #6B2FBF;
-    out property <color> border-subtle: dark ? #52525F : #DCD0F2;
-    out property <color> orange: dark ? #F29A2E : #E07B00;
-    out property <color> orange-soft: dark ? #33250F : #FDF1E1;
-    out property <color> orange-tint: dark ? #5C3F14 : #F8D7A8;
-    // Orange dark enough to read as text on the page background.
-    out property <color> notice: dark ? #F29A2E : #A85A00;
-    out property <color> danger: dark ? #3D3350 : #1E1A26;
-    out property <color> on-danger: #FFFFFF;
+    in-out property <ThemePalette> light-palette;
+    in-out property <ThemePalette> dark-palette;
+    in-out property <int> appearance-mode;
+    in-out property <ColorScheme> system-color-scheme;
+    out property <bool> dark: appearance-mode == 2 || (appearance-mode == 0 && system-color-scheme == ColorScheme.dark);
+    private property <ThemePalette> active: dark ? dark-palette : light-palette;
+    out property <color> page: active.page;
+    out property <color> surface: active.surface;
+    out property <color> brand: active.brand;
+    out property <color> brand-hover: active.brand-hover;
+    out property <color> brand-pressed: active.brand-pressed;
+    out property <color> on-brand: active.on-brand;
+    out property <color> text: active.text;
+    out property <color> text-secondary: active.text-secondary;
+    out property <color> text-brand: active.text-brand;
+    out property <color> timer-title: active.timer-title;
+    out property <color> border-subtle: active.border-subtle;
+    out property <color> turn: active.turn;
+    out property <color> turn-text: active.turn-text;
+    out property <color> turn-soft: active.turn-soft;
+    out property <color> turn-tint: active.turn-tint;
+    out property <color> on-turn: active.on-turn;
+    out property <color> notice: active.notice;
+    out property <color> focus: active.focus;
+    out property <color> error: active.error;
+    out property <color> danger: active.danger;
+    out property <color> on-danger: active.on-danger;
+    out property <color> timer-normal: active.timer-normal;
+    out property <color> timer-paused: active.timer-paused;
+    out property <color> timer-warning: active.timer-warning;
+    out property <color> timer-expired: active.timer-expired;
+    out property <color> shadow: active.shadow;
+    out property <color> selection: active.selection;
+    out property <color> selection-text: active.selection-text;
+    out property <color> decoration-one: active.decoration-one;
+    out property <color> decoration-two: active.decoration-two;
+    out property <color> decoration-three: active.decoration-three;
+    out property <color> decoration-four: active.decoration-four;
+    out property <color> decoration-five: active.decoration-five;
     out property <length> radius-card: 18px;
     out property <length> radius-item: 12px;
 }
@@ -75,7 +131,7 @@ export component FadeFill inherits Rectangle {
     background: root.displayed-fill;
 }
 
-// Keyboard focus ring: 3px orange, 2px away from the parent.
+// Keyboard focus ring: 3px semantic focus, 2px away from the parent.
 export component FocusRing inherits Rectangle {
     in property <length> host-width;
     in property <length> host-height;
@@ -86,7 +142,7 @@ export component FocusRing inherits Rectangle {
     height: root.host-height + 10px;
     border-radius: root.corner-radius + 5px;
     border-width: 3px;
-    border-color: AppTheme.orange;
+    border-color: AppTheme.focus;
 }
 
 export component AppText inherits Text {
@@ -116,7 +172,7 @@ export component PlayIcon inherits Path {
 }
 
 export component HelpIcon inherits Rectangle {
-    in property <color> tint: #FFFFFF;
+    in property <color> tint: AppTheme.on-brand;
     Path {
         width: parent.width;
         height: parent.height;
@@ -139,7 +195,7 @@ export component HelpIcon inherits Rectangle {
 }
 
 export component DotsIcon inherits Path {
-    in property <color> tint: #FFFFFF;
+    in property <color> tint: AppTheme.on-brand;
     viewbox-width: 24;
     viewbox-height: 24;
     fill: root.tint;
@@ -188,7 +244,7 @@ export component EyeOffIcon inherits Path {
 }
 
 export component ChevronIcon inherits Path {
-    in property <color> tint: AppTheme.orange;
+    in property <color> tint: AppTheme.turn-text;
     viewbox-width: 24;
     viewbox-height: 24;
     stroke: root.tint;
@@ -200,7 +256,7 @@ export component ChevronIcon inherits Path {
 
 export component StepIcon inherits Path {
     in property <bool> plus;
-    in property <color> tint: AppTheme.orange;
+    in property <color> tint: AppTheme.turn-text;
     viewbox-width: 24;
     viewbox-height: 24;
     fill: root.tint;
@@ -208,7 +264,7 @@ export component StepIcon inherits Path {
 }
 
 export component PauseIcon inherits Path {
-    in property <color> tint: AppTheme.orange;
+    in property <color> tint: AppTheme.turn-text;
     viewbox-width: 24;
     viewbox-height: 24;
     fill: root.tint;
@@ -216,7 +272,7 @@ export component PauseIcon inherits Path {
 }
 
 export component SkipIcon inherits Path {
-    in property <color> tint: AppTheme.orange;
+    in property <color> tint: AppTheme.turn-text;
     viewbox-width: 24;
     viewbox-height: 24;
     fill: root.tint;
@@ -236,14 +292,14 @@ export component LogoutIcon inherits Path {
 
 // Speech bubble with a clock. `bubble` and `hands` swap for light and brand backgrounds.
 export component LogoMark inherits Rectangle {
-    in property <color> bubble: #FFFFFF;
+    in property <color> bubble: AppTheme.on-brand;
     in property <color> hands: AppTheme.brand;
     Path {
         width: parent.width;
         height: parent.height;
         viewbox-width: 40;
         viewbox-height: 40;
-        fill: AppTheme.orange;
+        fill: AppTheme.decoration-two;
         commands: "M17.5 3H22.5A1.5 1.5 0 0 1 24 4.5V6.5A1.5 1.5 0 0 1 22.5 8H17.5A1.5 1.5 0 0 1 16 6.5V4.5A1.5 1.5 0 0 1 17.5 3z";
     }
     Path {
@@ -291,7 +347,7 @@ export component PillButton inherits Rectangle {
     callback clicked();
     private property <bool> link: root.kind == PillKind.link;
     private property <color> fill-color: root.kind == PillKind.primary
-        ? (touch.pressed ? AppTheme.brand.darker(0.12) : (touch.has-hover ? AppTheme.brand.brighter(0.08) : AppTheme.brand))
+        ? (touch.pressed ? AppTheme.brand-pressed : (touch.has-hover ? AppTheme.brand-hover : AppTheme.brand))
         : (touch.pressed ? AppTheme.border-subtle
             : (touch.has-hover ? AppTheme.surface
                 : (root.link ? AppTheme.surface.transparentize(1) : AppTheme.page)));

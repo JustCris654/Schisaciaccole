@@ -5,11 +5,14 @@ mod backend;
 mod config;
 mod editor;
 mod login;
+mod palettes;
 mod pkce;
 mod session;
 mod session_store;
 mod sound;
 mod state;
+mod theme;
+mod theme_catalog;
 
 mod ui {
     slint::include_modules!();
@@ -24,7 +27,7 @@ use slint::{ComponentHandle, Weak};
 
 use crate::session::Session;
 use crate::state::{AppState, LOCAL_MODE_NOTICE, PreferenceAction, TickSound};
-use crate::ui::{Help, MainWindow};
+use crate::ui::{Help, MainWindow, SystemAppearanceObserver};
 
 fn main() -> anyhow::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
@@ -32,6 +35,9 @@ fn main() -> anyhow::Result<()> {
     info!("Starting schisaciaccole");
 
     let main_window = MainWindow::new().context("failed to create the main window")?;
+    let help_windows = configure_visual_preferences(&main_window)?;
+    let _system_appearance_observer =
+        configure_system_appearance(&main_window, help_windows.clone())?;
     let window_weak = main_window.as_weak();
     let _reduced_motion_observer = appearance::observe_reduced_motion(move |reduce_motion| {
         let _ = window_weak.upgrade_in_event_loop(move |window| {
@@ -558,16 +564,26 @@ fn main() -> anyhow::Result<()> {
         }
     });
 
-    main_window.on_help(|| {
-        let help_window = match Help::new() {
-            Ok(help_window) => help_window,
-            Err(e) => {
-                error!("Failed to create the help window: {e}");
-                return;
+    main_window.on_help({
+        let window_weak = main_window.as_weak();
+        move || {
+            let help_window = match Help::new() {
+                Ok(help_window) => help_window,
+                Err(e) => {
+                    error!("Failed to create the help window: {e}");
+                    return;
+                }
+            };
+            if let Some(window) = window_weak.upgrade() {
+                help_window.set_light_palette(window.get_light_palette());
+                help_window.set_dark_palette(window.get_dark_palette());
+                help_window.set_appearance_mode(window.get_appearance_mode());
+                help_window.set_system_color_scheme(window.get_system_color_scheme());
             }
-        };
-        if let Err(e) = help_window.show() {
-            error!("Failed to show the help window: {e}");
+            help_windows.borrow_mut().push(help_window.as_weak());
+            if let Err(e) = help_window.show() {
+                error!("Failed to show the help window: {e}");
+            }
         }
     });
 
@@ -625,4 +641,225 @@ fn update_state(
     let mut state = state.borrow_mut();
     action(&mut state);
     state.render(&window);
+}
+
+/// Loads local visual preferences and installs callbacks without touching meeting state.
+///
+/// # Errors
+/// Returns an error only if the compiled theme identity violates build validation.
+fn configure_visual_preferences(
+    window: &MainWindow,
+) -> anyhow::Result<Rc<RefCell<Vec<Weak<Help>>>>> {
+    let distribution = theme_catalog::validate_default(Some(env!("SCHISACIACCOLE_COMPILED_THEME")))
+        .map_err(anyhow::Error::msg)?;
+    let path = theme::preferences_path();
+    let preferences = path.as_deref().map_or_else(
+        theme::VisualPreferences::unavailable_home,
+        theme::VisualPreferences::load,
+    );
+    let preferences = Rc::new(RefCell::new(preferences));
+    let help_windows = Rc::new(RefCell::new(Vec::new()));
+    render_visual_preferences(
+        window,
+        &preferences.borrow(),
+        distribution,
+        &mut help_windows.borrow_mut(),
+    );
+
+    window.on_select_theme({
+        let window = window.as_weak();
+        let preferences = preferences.clone();
+        let path = path.clone();
+        let help_windows = help_windows.clone();
+        move |index| {
+            let (Some(window), Some(choice)) =
+                (window.upgrade(), theme::ThemeChoice::from_index(index))
+            else {
+                return;
+            };
+            let mut preferences = preferences.borrow_mut();
+            preferences.theme = choice;
+            if let Some(path) = &path {
+                preferences.save(path);
+            } else {
+                preferences.cannot_save();
+            }
+            render_visual_preferences(
+                &window,
+                &preferences,
+                distribution,
+                &mut help_windows.borrow_mut(),
+            );
+        }
+    });
+    window.on_select_appearance({
+        let window = window.as_weak();
+        let help_windows = help_windows.clone();
+        move |index| {
+            let (Some(window), Some(mode)) =
+                (window.upgrade(), theme::AppearanceMode::from_index(index))
+            else {
+                return;
+            };
+            let mut preferences = preferences.borrow_mut();
+            preferences.mode = mode;
+            if let Some(path) = &path {
+                preferences.save(path);
+            } else {
+                preferences.cannot_save();
+            }
+            render_visual_preferences(
+                &window,
+                &preferences,
+                distribution,
+                &mut help_windows.borrow_mut(),
+            );
+        }
+    });
+    Ok(help_windows)
+}
+
+/// Updates all open app windows; expired help windows are removed from observation.
+fn render_visual_preferences(
+    window: &MainWindow,
+    preferences: &theme::VisualPreferences,
+    distribution: theme_catalog::ThemeId,
+    help_windows: &mut Vec<Weak<Help>>,
+) {
+    let theme = preferences.theme.resolve(distribution);
+    let light = palettes::palette(theme, false);
+    let dark = palettes::palette(theme, true);
+    window.set_light_palette(light.clone());
+    window.set_dark_palette(dark.clone());
+    window.set_appearance_mode(preferences.mode.index());
+    window.set_theme_choice(preferences.theme.index());
+    window.set_theme_notice(preferences.notice.as_str().into());
+    help_windows.retain(|help| {
+        let Some(help) = help.upgrade() else {
+            return false;
+        };
+        help.set_light_palette(light.clone());
+        help.set_dark_palette(dark.clone());
+        help.set_appearance_mode(preferences.mode.index());
+        true
+    });
+}
+
+/// Retains an unshown native palette root, so explicit modes never replace its binding.
+///
+/// # Errors
+/// Returns an error if Slint cannot create the appearance observer component.
+fn configure_system_appearance(
+    window: &MainWindow,
+    help_windows: Rc<RefCell<Vec<Weak<Help>>>>,
+) -> Result<SystemAppearanceObserver, slint::PlatformError> {
+    let observer = SystemAppearanceObserver::new()?;
+    window.set_system_color_scheme(observer.get_native_scheme());
+    observer.on_scheme_changed({
+        let window = window.as_weak();
+        move |scheme| {
+            if let Some(window) = window.upgrade() {
+                window.set_system_color_scheme(scheme);
+            }
+            for help in help_windows.borrow().iter().filter_map(Weak::upgrade) {
+                help.set_system_color_scheme(scheme);
+            }
+        }
+    });
+    Ok(observer)
+}
+
+#[cfg(test)]
+mod visual_tests {
+    use super::*;
+    use slint::platform::{
+        Platform, WindowAdapter,
+        software_renderer::{MinimalSoftwareWindow, RepaintBufferType},
+    };
+
+    #[derive(Default)]
+    struct TestPlatform {
+        windows: Rc<RefCell<Vec<Rc<MinimalSoftwareWindow>>>>,
+    }
+
+    impl Platform for TestPlatform {
+        fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, slint::PlatformError> {
+            let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+            self.windows.borrow_mut().push(window.clone());
+            Ok(window)
+        }
+    }
+
+    fn native_scheme(scheme: i_slint_core::items::ColorScheme) {
+        i_slint_core::context::with_global_context(
+            || Ok(Box::new(TestPlatform::default())),
+            |context| context.set_color_scheme(scheme),
+        )
+        .unwrap();
+        slint::platform::update_timers_and_animations();
+    }
+
+    #[test]
+    fn native_changes_remain_live_after_explicit_mode_and_do_not_change_theme_or_page() {
+        let platform = TestPlatform::default();
+        let windows = platform.windows.clone();
+        slint::platform::set_platform(Box::new(platform)).unwrap();
+        let window = MainWindow::new().unwrap();
+        window.window().set_size(slint::PhysicalSize::new(880, 660));
+        let help_windows = Rc::new(RefCell::new(Vec::new()));
+        let _observer = configure_system_appearance(&window, help_windows.clone()).unwrap();
+        let mut preferences = theme::VisualPreferences::default();
+        preferences.theme = theme::ThemeChoice::Explicit(theme_catalog::ThemeId::OpenMove);
+        render_visual_preferences(
+            &window,
+            &preferences,
+            theme_catalog::ThemeId::Schisaciaccole,
+            &mut help_windows.borrow_mut(),
+        );
+        window.show().unwrap();
+
+        let rendered_page = || {
+            let adapter = windows.borrow()[0].clone();
+            adapter.request_redraw();
+            let mut pixels = vec![slint::Rgb8Pixel::default(); 880 * 660];
+            adapter.draw_if_needed(|renderer| {
+                renderer.render(&mut pixels, 880);
+            });
+            pixels[0]
+        };
+        native_scheme(i_slint_core::items::ColorScheme::Dark);
+        assert_eq!(
+            window.get_system_color_scheme(),
+            i_slint_core::items::ColorScheme::Dark
+        );
+        assert_eq!(rendered_page(), slint::Rgb8Pixel::new(34, 34, 40));
+
+        preferences.mode = theme::AppearanceMode::Light;
+        render_visual_preferences(
+            &window,
+            &preferences,
+            theme_catalog::ThemeId::Schisaciaccole,
+            &mut help_windows.borrow_mut(),
+        );
+        slint::platform::update_timers_and_animations();
+        assert_eq!(rendered_page(), slint::Rgb8Pixel::new(250, 250, 252));
+        native_scheme(i_slint_core::items::ColorScheme::Light);
+        native_scheme(i_slint_core::items::ColorScheme::Dark);
+        assert_eq!(rendered_page(), slint::Rgb8Pixel::new(250, 250, 252));
+
+        preferences.mode = theme::AppearanceMode::System;
+        render_visual_preferences(
+            &window,
+            &preferences,
+            theme_catalog::ThemeId::Schisaciaccole,
+            &mut help_windows.borrow_mut(),
+        );
+        slint::platform::update_timers_and_animations();
+        assert_eq!(rendered_page(), slint::Rgb8Pixel::new(34, 34, 40));
+        native_scheme(i_slint_core::items::ColorScheme::Light);
+        assert_eq!(rendered_page(), slint::Rgb8Pixel::new(250, 250, 252));
+        assert_eq!(window.get_theme_choice(), 2);
+        assert_eq!(window.get_page(), crate::ui::Page::ManualPage);
+        window.hide().unwrap();
+    }
 }
