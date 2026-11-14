@@ -9,8 +9,10 @@ makes that easy — instead of asking "how long do we have left?", you pick the
 that moment.
 
 In today's meeting list, **Avvia** starts the meeting timer directly. The
-**Editor** button to its left opens **Organizza i turni**, where you can
-customize speaking turns before starting the meeting.
+**Editor** button to its left opens **Partecipanti di questo meeting**, where
+you can exclude invited attendees, add people by hand and save the list as a
+preference before starting the meeting. A meeting started from there is never
+Daily: its speaking turns list the chosen participants.
 
 ## Screenshots
 
@@ -258,8 +260,8 @@ membership at invitation time. Members added through a group have no individual
 Calendar RSVP and are shown as participants awaiting a response. Direct attendee
 metadata takes precedence, duplicates are matched without email case, and
 participants who declined are excluded from counts and speaking turns. The same
-participant list feeds **Avvia**, Daily and equal editor slots. Opening the editor
-reads membership again; its equal reset uses that fresh list.
+participant list feeds **Avvia**, Daily and the editor's participants. Opening the
+editor reads membership again; **Ripristina partecipanti** uses that fresh list.
 
 Resolution is best effort. If a top-level group's complete membership cannot be
 read, its original invitation stays in the list and **Lista partecipanti
@@ -286,7 +288,7 @@ or group membership.
 To check the feature manually, prepare a Calendar event inviting
 `team-backend@openmove.com` using an account allowed to view that group's members,
 then open today's meetings in a backend-enabled app. Compare its participant
-count, Daily names and editor's equal reset against the visible group members;
+count, Daily names and the editor's **Ripristina partecipanti** against the visible group members;
 include a direct invitation for one member to check deduplication. Open the editor
 after changing membership to check its fresh read. With a session missing the
 scope, check the explicit reconnect action; with denied group access, check the
