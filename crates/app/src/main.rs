@@ -22,9 +22,8 @@ use anyhow::Context;
 use log::{error, info, warn};
 use slint::{ComponentHandle, Weak};
 
-use crate::backend::BackendError;
 use crate::session::Session;
-use crate::state::{AppState, LOCAL_MODE_NOTICE, TickSound};
+use crate::state::{AppState, LOCAL_MODE_NOTICE, PreferenceAction, TickSound};
 use crate::ui::{Help, MainWindow};
 
 fn main() -> anyhow::Result<()> {
@@ -270,19 +269,8 @@ fn main() -> anyhow::Result<()> {
     main_window.on_open_editor({
         let window_weak = main_window.as_weak();
         let state = app_state.clone();
-        let session = session.clone();
 
-        move |index| {
-            update_state(&window_weak, &state, |state| {
-                let Some(event_id) = state.open_editor(index) else {
-                    return;
-                };
-                match &session {
-                    Some(session) => session.spawn_plan_fetch(&event_id),
-                    None => state.on_editor_plan_loaded(&event_id, Err(BackendError::Unreachable)),
-                }
-            });
-        }
+        move |index| update_state(&window_weak, &state, |state| state.open_editor(index))
     });
 
     main_window.on_editor_set_label({
@@ -333,8 +321,12 @@ fn main() -> anyhow::Result<()> {
                 return;
             };
             update_state(&window_weak, &state, |state| {
-                if let Some(save) = state.start_template_save() {
-                    session.spawn_template_save(save);
+                match state.start_preference_save() {
+                    Some(PreferenceAction::Save(save)) => session.spawn_preference_save(save),
+                    Some(PreferenceAction::Delete(delete)) => {
+                        session.spawn_preference_delete(delete);
+                    }
+                    None => {}
                 }
             });
         }
@@ -350,8 +342,8 @@ fn main() -> anyhow::Result<()> {
                 return;
             };
             update_state(&window_weak, &state, |state| {
-                if let Some(delete) = state.start_template_delete() {
-                    session.spawn_template_delete(delete);
+                if let Some(delete) = state.start_preference_delete() {
+                    session.spawn_preference_delete(delete);
                 }
             });
         }

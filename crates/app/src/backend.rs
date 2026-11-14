@@ -11,12 +11,11 @@ use reqwest::blocking::{Client, Response};
 use reqwest::{Method, StatusCode};
 use schisaciaccole_core::api::{
     AUTH_LOGIN_PATH, AUTH_LOGOUT_PATH, AUTH_REFRESH_PATH, AUTH_TOKEN_PATH, ApiError, HEALTH_PATH,
-    ME_PATH, MEETINGS_PATH, Me, Meeting, PutTemplateRequest, RefreshRequest, SlotPlan,
-    TEMPLATES_PATH, Template, TokenRequest, TokenResponse, error_codes,
+    ME_PATH, MEETINGS_PATH, Me, Meeting, MeetingPreference, PREFERENCES_PATH, PutPreferenceRequest,
+    RefreshRequest, TokenRequest, TokenResponse, error_codes, preference_path,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use url::Url;
 
 use crate::session_store::{SessionStore, SessionStoreError};
 
@@ -188,23 +187,7 @@ impl BackendClient {
         self.get_json(MEETINGS_PATH, &[("from", &from), ("to", &to)])
     }
 
-    /// Fetches the slot plan of the meeting `event_id` (`GET /api/v1/meetings/{event_id}/plan`).
-    ///
-    /// The id is escaped as a path segment; an empty id is left to the backend to reject.
-    /// Token handling is the same as [`BackendClient::fetch_me`].
-    ///
-    /// # Errors
-    ///
-    /// Returns [`BackendError::Server`] with status 404 and code `not_found` when the meeting
-    /// does not exist and with status 400 when the request is invalid. Otherwise see
-    /// [`BackendClient::fetch_me`]; [`BackendError::Unreachable`] is also returned when the
-    /// base URL cannot be extended with a path.
-    pub fn fetch_plan(&mut self, event_id: &str) -> Result<SlotPlan, BackendError> {
-        let url = self.segments_url(&["api", "v1", "meetings", event_id, "plan"])?;
-        self.json_request(Method::GET, &url, &[], None::<&()>)
-    }
-
-    /// Creates or replaces the slot template of a meeting title (`PUT /api/v1/templates`).
+    /// Creates or replaces the preference of a meeting title (`PUT /api/v1/preferences`).
     ///
     /// The request is sent as given: validation is left to the backend. Token handling is the
     /// same as [`BackendClient::fetch_me`].
@@ -213,25 +196,25 @@ impl BackendClient {
     ///
     /// Returns [`BackendError::Server`] with status 400 when the backend rejects the request.
     /// Otherwise see [`BackendClient::fetch_me`].
-    pub fn save_template(
+    pub fn put_preference(
         &mut self,
-        request: &PutTemplateRequest,
-    ) -> Result<Template, BackendError> {
-        let url = self.url(TEMPLATES_PATH);
+        request: &PutPreferenceRequest,
+    ) -> Result<MeetingPreference, BackendError> {
+        let url = self.url(PREFERENCES_PATH);
         self.json_request(Method::PUT, &url, &[], Some(request))
     }
 
-    /// Deletes the slot template `id` (`DELETE /api/v1/templates/{id}`).
+    /// Deletes the preference `id` (`DELETE /api/v1/preferences/{id}`).
     ///
-    /// The id is escaped as a path segment; the answer has no body. Token handling is the same
-    /// as [`BackendClient::fetch_me`].
+    /// The id is inserted in the path as is (see [`preference_path`]); the answer has no body.
+    /// Token handling is the same as [`BackendClient::fetch_me`].
     ///
     /// # Errors
     ///
-    /// Returns [`BackendError::Server`] with status 404 and code `not_found` when the template
+    /// Returns [`BackendError::Server`] with status 404 and code `not_found` when the preference
     /// does not exist. Otherwise see [`BackendClient::fetch_me`] (no decode error can occur).
-    pub fn delete_template(&mut self, id: &str) -> Result<(), BackendError> {
-        let url = self.segments_url(&["api", "v1", "templates", id])?;
+    pub fn delete_preference(&mut self, id: &str) -> Result<(), BackendError> {
+        let url = self.url(&preference_path(id));
         self.send_authenticated(Method::DELETE, &url, &[], None::<&()>)?;
         Ok(())
     }
@@ -254,23 +237,6 @@ impl BackendClient {
         }
         self.store.clear()?;
         Ok(())
-    }
-
-    /// Builds the URL of `segments` appended to the base URL, escaping every segment.
-    ///
-    /// A base URL path prefix is kept. Segments `.` and `..` are resolved by the URL parser
-    /// instead of being escaped, so callers must not pass them.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`BackendError::Unreachable`] for an invalid base URL or a URL without path segments.
-    fn segments_url(&self, segments: &[&str]) -> Result<String, BackendError> {
-        let mut url = Url::parse(&self.base_url).map_err(|_| BackendError::Unreachable)?;
-        url.path_segments_mut()
-            .map_err(|_| BackendError::Unreachable)?
-            .pop_if_empty()
-            .extend(segments);
-        Ok(url.to_string())
     }
 
     fn url(&self, path: &str) -> String {
@@ -451,7 +417,8 @@ fn decode<T: DeserializeOwned>(response: Response) -> Result<T, BackendError> {
 mod tests {
     use super::*;
     use crate::session_store::MemoryStore;
-    use schisaciaccole_core::api::Attendee;
+    use crate::state::tests::blank_meeting;
+    use schisaciaccole_core::api::{PersonKind, PreferencePerson};
     use serde_json::json;
     use wiremock::matchers::{body_json, header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -469,18 +436,12 @@ mod tests {
     }
 
     fn sample_meeting() -> Meeting {
-        Meeting {
-            event_id: "evt1".to_string(),
-            title: "Daily".to_string(),
-            start: DateTime::parse_from_rfc3339("2026-11-05T09:30:00+01:00").unwrap(),
-            end: DateTime::parse_from_rfc3339("2026-11-05T10:00:00+01:00").unwrap(),
-            attendees: Vec::<Attendee>::new(),
-            attendees_omitted: false,
-            participant_resolution: Default::default(),
-            recurring_event_id: None,
-            has_template: false,
-            preference: None,
-        }
+        blank_meeting(
+            "evt1",
+            "Daily",
+            DateTime::parse_from_rfc3339("2026-11-05T09:30:00+01:00").unwrap(),
+            DateTime::parse_from_rfc3339("2026-11-05T10:00:00+01:00").unwrap(),
+        )
     }
 
     fn range() -> (DateTime<FixedOffset>, DateTime<FixedOffset>) {
@@ -919,17 +880,123 @@ mod tests {
         assert!(!client.has_session());
     }
 
-    #[test]
-    fn plan_url_preserves_prefix_and_escapes_calendar_event_id() {
-        let client =
-            BackendClient::new("https://example.test/prefix/", Box::new(MemoryStore::new()))
-                .unwrap();
-        let url = client
-            .segments_url(&["api", "v1", "meetings", "event/id ?", "plan"])
-            .unwrap();
-        assert_eq!(
-            url,
-            "https://example.test/prefix/api/v1/meetings/event%2Fid%20%3F/plan"
-        );
+    fn preference_request() -> PutPreferenceRequest {
+        PutPreferenceRequest {
+            meeting_title: "Daily".to_string(),
+            people: vec![PreferencePerson {
+                kind: PersonKind::Manual,
+                email: None,
+                label: "Marco".to_string(),
+            }],
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn put_preference_sends_the_request_and_returns_the_saved_preference() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path(AUTH_REFRESH_PATH))
+            .respond_with(tokens("a1", "r2", 900))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path(PREFERENCES_PATH))
+            .and(header("authorization", "Bearer a1"))
+            .and(body_json(json!({
+                "meeting_title": "Daily",
+                "people": [{"kind": "manual", "email": null, "label": "Marco"}],
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "p1",
+                "meeting_title": "Daily",
+                "people": [{"kind": "manual", "email": null, "label": "Marco"}],
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let store = store_with("r1");
+
+        let saved = run(&server, &store, |mut client| {
+            client.put_preference(&preference_request())
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(saved.id, "p1");
+        assert_eq!(saved.people.len(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn put_preference_reports_a_rejected_request() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path(AUTH_REFRESH_PATH))
+            .respond_with(tokens("a1", "r2", 900))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path(PREFERENCES_PATH))
+            .respond_with(api_error(400, error_codes::INVALID_REQUEST))
+            .mount(&server)
+            .await;
+        let store = store_with("r1");
+
+        let result = run(&server, &store, |mut client| {
+            client.put_preference(&preference_request())
+        })
+        .await;
+
+        assert!(matches!(
+            result,
+            Err(BackendError::Server { status: 400, .. })
+        ));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn delete_preference_accepts_no_content() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path(AUTH_REFRESH_PATH))
+            .respond_with(tokens("a1", "r2", 900))
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path("/api/v1/preferences/p1"))
+            .and(header("authorization", "Bearer a1"))
+            .respond_with(ResponseTemplate::new(204))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let store = store_with("r1");
+
+        let result = run(&server, &store, |mut client| client.delete_preference("p1")).await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn delete_preference_reports_a_missing_preference() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path(AUTH_REFRESH_PATH))
+            .respond_with(tokens("a1", "r2", 900))
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path("/api/v1/preferences/p1"))
+            .respond_with(api_error(404, error_codes::NOT_FOUND))
+            .mount(&server)
+            .await;
+        let store = store_with("r1");
+
+        let result = run(&server, &store, |mut client| client.delete_preference("p1")).await;
+
+        match result {
+            Err(BackendError::Server { status, code, .. }) => {
+                assert_eq!(status, 404);
+                assert_eq!(code, error_codes::NOT_FOUND);
+            }
+            other => panic!("unexpected result: {other:?}"),
+        }
     }
 }

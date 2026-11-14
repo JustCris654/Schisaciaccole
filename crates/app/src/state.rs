@@ -5,17 +5,17 @@ use std::fmt::Display;
 use std::rc::Rc;
 
 use crate::backend::BackendError;
-use crate::editor::ParticipantEditor;
+use crate::editor::{Draft, ParticipantEditor, default_rows, participants_incomplete};
 use crate::login::REAUTH_MESSAGE;
 use chrono::{DateTime, FixedOffset, Local, TimeZone};
 use log::{debug, error, info, warn};
 use schisaciaccole_core::api::{
-    Me, Meeting, PersonKind, PutTemplateRequest, SlotPlan, Template, error_codes,
+    Me, Meeting, MeetingPreference, PersonKind, PutPreferenceRequest, error_codes,
 };
 use schisaciaccole_core::{
     DEFAULT_OPTION_COUNT, DailyRound, EditorEntry, QuarterOption, SpeakingTurn, TickOutcome,
-    TimeError, abbreviate_name, evaluate, looks_daily, max_turn_minutes, participants,
-    quarter_options, shuffled,
+    TimeError, abbreviate_name, evaluate, looks_daily, max_turn_minutes, normalize_title,
+    quarter_options, shuffled, start_names,
 };
 use slint::{ComponentHandle, LogicalSize, Model, ModelRc, SharedString, VecModel};
 
@@ -30,22 +30,22 @@ pub const LOCAL_MODE_NOTICE: &str = "Accesso non disponibile: modalità locale";
 /// Manual page notice while the logout runs.
 pub const LOGOUT_NOTICE: &str = "Disconnessione…";
 
-/// Editor notice when the saved plan could not be loaded.
-const EDITOR_PLAN_FALLBACK_NOTICE: &str = "Preferenza non caricata: partecipanti del calendario";
-/// Editor notice while a template save runs.
-const TEMPLATE_SAVING_NOTICE: &str = "Salvataggio…";
-/// Editor notice after a template save.
-const TEMPLATE_SAVED_NOTICE: &str = "Preferenza salvata";
-/// Editor notice when the backend rejects the template as invalid.
-const TEMPLATE_INVALID_NOTICE: &str = "Preferenza non valida";
-/// Editor notice when a template save fails for any other reason.
-const TEMPLATE_SAVE_FAILED_NOTICE: &str = "Salvataggio non riuscito";
-/// Editor notice while a template deletion runs.
-const TEMPLATE_DELETING_NOTICE: &str = "Eliminazione…";
-/// Editor notice after a template deletion.
-const TEMPLATE_DELETED_NOTICE: &str = "Preferenza eliminata";
-/// Editor notice when a template deletion fails.
-const TEMPLATE_DELETE_FAILED_NOTICE: &str = "Eliminazione non riuscita";
+/// Editor notice while a preference save runs.
+const PREFERENCE_SAVING_NOTICE: &str = "Salvataggio…";
+/// Editor notice after a preference save.
+const PREFERENCE_SAVED_NOTICE: &str = "Preferenza salvata";
+/// Editor notice when the backend rejects the preference as invalid.
+const PREFERENCE_INVALID_NOTICE: &str = "Preferenza non valida";
+/// Editor notice when a preference save fails for any other reason.
+const PREFERENCE_SAVE_FAILED_NOTICE: &str = "Salvataggio non riuscito";
+/// Editor notice when there is no person to save and no preference to delete.
+const NOTHING_TO_SAVE_NOTICE: &str = "Niente da salvare";
+/// Editor notice while a preference deletion runs.
+const PREFERENCE_DELETING_NOTICE: &str = "Eliminazione…";
+/// Editor notice after a preference deletion.
+const PREFERENCE_DELETED_NOTICE: &str = "Preferenza eliminata";
+/// Editor notice when a preference deletion fails.
+const PREFERENCE_DELETE_FAILED_NOTICE: &str = "Eliminazione non riuscita";
 /// Editor notice when "Avvia" is pressed after the meeting ended.
 const MEETING_OVER_NOTICE: &str = "Il meeting è già terminato";
 
@@ -107,30 +107,37 @@ enum WindowStep {
     Leave,
 }
 
-/// Template save the caller must send; see [`AppState::start_template_save`].
+/// Preference save the caller must send; see [`AppState::start_preference_save`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TemplateSave {
+pub struct PreferenceSave {
     /// Meeting of the editor that asked for the save; its result must come back with it.
     pub event_id: String,
-    /// Template to save.
-    pub request: PutTemplateRequest,
+    /// Preference to save.
+    pub request: PutPreferenceRequest,
 }
 
-/// Template deletion the caller must send; see [`AppState::start_template_delete`].
+/// Preference deletion the caller must send; see [`AppState::start_preference_delete`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TemplateDelete {
+pub struct PreferenceDelete {
     /// Meeting of the editor that asked for the deletion; its result must come back with it.
     pub event_id: String,
-    /// Id of the template to delete.
-    pub template_id: String,
+    /// Id of the preference to delete.
+    pub preference_id: String,
 }
 
-/// Editor page open on one meeting.
+/// Request the caller must send after [`AppState::start_preference_save`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PreferenceAction {
+    /// Save the preference.
+    Save(PreferenceSave),
+    /// Nothing is left to save and a preference exists: delete it.
+    Delete(PreferenceDelete),
+}
+
+/// Editor page open on one meeting. Its rows are the [`Draft`] of the meeting.
 struct OpenEditor {
     editor: ParticipantEditor,
-    /// True until the plan result (or its fallback) has filled the rows.
-    loading: bool,
-    /// True while a template save or deletion runs.
+    /// True while a preference save or deletion runs.
     busy: bool,
     /// Status line of the editor page; empty when there is none.
     notice: &'static str,
@@ -141,6 +148,8 @@ pub struct AppState {
     page: Page,
     editor: Option<OpenEditor>,
     editor_model: Rc<VecModel<EditorRow>>,
+    /// Editor rows per calendar event id, for the events still listed and the open editor.
+    drafts: HashMap<String, Draft>,
     options: Vec<DateTime<Local>>,
     /// End instant of the slot picked on the manual page; `None` when no slot is picked.
     selected: Option<DateTime<Local>>,
@@ -204,6 +213,7 @@ impl AppState {
             page: Page::ManualPage,
             editor: None,
             editor_model: Rc::new(VecModel::from(Vec::new())),
+            drafts: HashMap::new(),
             options,
             selected: None,
             target: None,
@@ -311,11 +321,12 @@ impl AppState {
 
     /// Starts the countdown to the end of the meeting in row `index` and moves to the timer page.
     ///
-    /// Works for a meeting in progress and for one that has not started. With the Daily switch of
-    /// the row on and at least one participant the Daily screen starts (see
-    /// [`AppState::set_daily`]); otherwise the countdown is plain, with optional speaking turns.
-    /// Returns the sound of the first update (see [`AppState::tick`]), which is
-    /// [`TickSound::MeetingEnd`] only if the end is reached at once.
+    /// Works for a meeting in progress and for one that has not started. The people are the start
+    /// names of the meeting (see [`AppState::start_names_for`]). With the Daily switch of the row
+    /// on and at least one person the Daily screen starts (see [`AppState::set_daily`]);
+    /// otherwise the countdown is plain, with optional speaking turns. Returns the sound of the
+    /// first update (see [`AppState::tick`]), which is [`TickSound::MeetingEnd`] only if the end
+    /// is reached at once. Drafts are kept.
     ///
     /// Edge cases: a negative `index` or one out of range is logged and ignored; the state does
     /// not change and [`TickSound::None`] is returned.
@@ -325,20 +336,23 @@ impl AppState {
             warn!("select_meeting: ignoring negative meeting index {index}");
             return TickSound::None;
         };
-        let Some(meeting) = self.shown.get(position) else {
+        let Some(meeting) = self.shown.get(position).cloned() else {
             warn!("select_meeting: ignoring out of range meeting index {index}");
             return TickSound::None;
         };
+        self.start_meeting(&meeting)
+    }
 
-        info!(
-            "select_meeting: target={}",
-            meeting.end.with_timezone(&Local).format("%H:%M")
-        );
+    /// Starts the countdown to the end of `meeting`: Daily when its switch is on and there are
+    /// start names, plain countdown with speaking turns otherwise. Closes the editor.
+    fn start_meeting(&mut self, meeting: &Meeting) -> TickSound {
         let target = meeting.end.with_timezone(&Local);
-        let names: Vec<String> = participants(meeting)
-            .into_iter()
-            .map(|participant| participant.name)
-            .collect();
+        let names = self.start_names_for(meeting);
+        info!(
+            "start_meeting: target={} names={}",
+            target.format("%H:%M"),
+            names.len()
+        );
         let use_daily = self.daily_on(meeting) && !names.is_empty();
         self.editor = None;
         self.reset_turns(names.clone());
@@ -357,141 +371,116 @@ impl AppState {
         self.tick()
     }
 
+    /// Names a start of `meeting` offers: the included rows of its draft, or without a draft
+    /// those of the Calendar participants and the saved preference (see [`default_rows`]).
+    ///
+    /// Edge cases: no usable row gives an empty list.
+    fn start_names_for(&self, meeting: &Meeting) -> Vec<String> {
+        match self.drafts.get(&meeting.event_id) {
+            Some(draft) => draft.start_names(),
+            None => start_names(&default_rows(meeting)),
+        }
+    }
+
     /// Opens the participant editor on the meeting in row `index` and moves to the editor page.
     ///
-    /// The editor starts without rows, loading: the caller must fetch the slot plan of the
-    /// returned event id for the editor and pass the result to
-    /// [`AppState::on_editor_plan_loaded`].
+    /// Purely local: the rows are the draft of the event, created from [`default_rows`] when
+    /// there is none.
     ///
     /// Edge cases: a negative `index` or one out of range is logged and ignored; the state does
-    /// not change and `None` is returned.
-    pub fn open_editor(&mut self, index: i32) -> Option<String> {
+    /// not change.
+    pub fn open_editor(&mut self, index: i32) {
         let Ok(position) = usize::try_from(index) else {
             warn!("open_editor: ignoring negative meeting index {index}");
-            return None;
+            return;
         };
         let Some(meeting) = self.shown.get(position) else {
             warn!("open_editor: ignoring out of range meeting index {index}");
-            return None;
+            return;
         };
 
-        let editor = ParticipantEditor::new(meeting.clone());
-        let event_id = editor.event_id().to_string();
+        let meeting = meeting.clone();
+        self.drafts
+            .entry(meeting.event_id.clone())
+            .or_insert_with(|| Draft::from_meeting(&meeting));
         self.editor = Some(OpenEditor {
-            editor,
-            loading: true,
+            editor: ParticipantEditor::new(meeting),
             busy: false,
             notice: "",
         });
         self.page = Page::EditorPage;
-        Some(event_id)
     }
 
-    /// Leaves the editor for the meetings page (see [`AppState::show_home`]) and drops its rows;
-    /// results still on their way for it are ignored when they arrive.
+    /// Leaves the editor for the meetings page (see [`AppState::show_home`]). The draft stays;
+    /// results still on their way for the editor are ignored when they arrive.
     pub fn close_editor(&mut self) {
         self.editor = None;
         self.page = self.home_page();
     }
 
-    /// Fills the editor rows from the slot plan fetched for `event_id`.
+    /// Sets the label of editor row `index`; see [`Draft::set_label`].
     ///
-    /// On success the rows come from the plan (included when its weight is above 0) and the
-    /// template id of the plan is remembered. Fresh participant data also updates the list and
-    /// future resets. On any error, whatever it is, the rows are the calendar participants and
-    /// a notice says so; the session is never ended by a plan failure.
-    ///
-    /// Edge cases: the result is dropped when the editor is not open on `event_id` or its plan
-    /// was already applied.
-    pub fn on_editor_plan_loaded(
-        &mut self,
-        event_id: &str,
-        result: Result<SlotPlan, BackendError>,
-    ) {
-        let Some(open) = self.editor_on(event_id) else {
-            debug!("on_editor_plan_loaded: editor not open on the meeting, dropping the plan");
-            return;
-        };
-        if !open.loading {
-            debug!("on_editor_plan_loaded: plan already applied, dropping it");
-            return;
-        }
-        open.loading = false;
-        match result {
-            Ok(plan) => open.editor.load_plan(&plan),
-            Err(err) => {
-                warn!("on_editor_plan_loaded: plan not loaded, using calendar participants: {err}");
-                open.editor.reset_participants();
-                open.notice = EDITOR_PLAN_FALLBACK_NOTICE;
-            }
-        }
-        let fresh = open.editor.meeting().clone();
-        for meeting in &mut self.meetings {
-            if meeting.event_id == fresh.event_id {
-                meeting.attendees = fresh.attendees.clone();
-                meeting.attendees_omitted = fresh.attendees_omitted;
-                meeting.participant_resolution = fresh.participant_resolution;
-            }
-        }
-        self.rebuild_meeting_rows();
-    }
-
-    /// Sets the label of editor row `index`; see [`ParticipantEditor::set_label`].
-    ///
-    /// Edge cases: ignored without an editor, while its plan loads, or for a negative or out of
-    /// range index (logged).
+    /// Edge cases: ignored without an editor or for a negative or out of range index (logged).
     pub fn editor_set_label(&mut self, index: i32, label: &str) {
-        if let (Some(row), Some(editor)) = (row_index(index), self.editable()) {
-            editor.set_label(row, label);
+        if let (Some(row), Some(draft)) = (row_index(index), self.editor_draft()) {
+            draft.set_label(row, label);
+            self.rebuild_meeting_rows();
         }
     }
 
-    /// Includes or excludes the attendee of editor row `index`; see
-    /// [`ParticipantEditor::set_included`].
+    /// Includes or excludes editor row `index`, of any kind; see [`Draft::set_included`].
     ///
-    /// Edge cases: as for [`AppState::editor_set_label`]; manual rows stay included.
+    /// Edge cases: as for [`AppState::editor_set_label`].
     pub fn editor_set_included(&mut self, index: i32, included: bool) {
-        if let (Some(row), Some(editor)) = (row_index(index), self.editable()) {
-            editor.set_included(row, included);
+        if let (Some(row), Some(draft)) = (row_index(index), self.editor_draft()) {
+            draft.set_included(row, included);
+            self.rebuild_meeting_rows();
         }
     }
 
-    /// Removes editor row `index` when it was added by hand; see [`ParticipantEditor::remove_row`].
+    /// Removes editor row `index` when it was added by hand; see [`Draft::remove_row`].
     ///
     /// Edge cases: as for [`AppState::editor_set_label`]; attendee rows are kept.
     pub fn editor_remove_row(&mut self, index: i32) {
-        if let (Some(row), Some(editor)) = (row_index(index), self.editable()) {
-            editor.remove_row(row);
+        if let (Some(row), Some(draft)) = (row_index(index), self.editor_draft()) {
+            draft.remove_row(row);
+            self.rebuild_meeting_rows();
         }
     }
 
-    /// Appends a manual row to the editor; see [`ParticipantEditor::add_manual_row`].
+    /// Appends a manual row to the editor; see [`Draft::add_manual_row`].
     ///
-    /// Edge cases: ignored without an editor, while its plan loads, or at the row limit.
+    /// Edge cases: ignored without an editor or at the row limit.
     pub fn editor_add_row(&mut self) {
-        if let Some(editor) = self.editable() {
-            editor.add_manual_row();
+        if let Some(draft) = self.editor_draft() {
+            draft.add_manual_row();
+            self.rebuild_meeting_rows();
         }
     }
 
-    /// Replaces the editor rows with all the calendar participants, keeping the template id;
-    /// see [`ParticipantEditor::reset_participants`].
+    /// Rebuilds the editor rows from the current meeting snapshot (Calendar participants and
+    /// saved preference, all included); see [`Draft::reset`].
     ///
-    /// Edge cases: ignored without an editor or while its plan loads.
+    /// Edge cases: ignored without an editor.
     pub fn editor_reset_participants(&mut self) {
-        if let Some(editor) = self.editable() {
-            editor.reset_participants();
+        let Some(open) = self.editor.as_ref() else {
+            return;
+        };
+        let meeting = open.editor.meeting().clone();
+        if let Some(draft) = self.drafts.get_mut(&meeting.event_id) {
+            draft.reset(&meeting);
+            self.rebuild_meeting_rows();
         }
     }
 
-    /// Starts the countdown of the edited meeting and moves to the timer page. It is the plain
-    /// countdown of [`AppState::select_meeting`], never Daily, with the speaking turns offered to
-    /// the included editor rows (see [`ParticipantEditor::start_names`]). Returns the sound of
-    /// the first update (see [`AppState::tick`]).
+    /// Starts the countdown of the edited meeting and moves to the timer page, as
+    /// [`AppState::select_meeting`] does for the same meeting: Daily when its switch is on, with
+    /// the included rows of the draft. Returns the sound of the first update (see
+    /// [`AppState::tick`]).
     ///
-    /// Edge cases: without an editor or while its plan loads nothing happens. When the meeting
-    /// is already over the editor stays open with a notice. Without usable names the countdown
-    /// starts without speaking turns.
+    /// Edge cases: without an editor nothing happens. When the meeting is already over the editor
+    /// stays open with a notice. Without usable names the countdown starts without speaking
+    /// turns.
     #[must_use]
     pub fn start_from_editor(&mut self) -> TickSound {
         let now = Local::now();
@@ -499,140 +488,164 @@ impl AppState {
             debug!("start_from_editor: no editor");
             return TickSound::None;
         };
-        if open.loading {
-            debug!("start_from_editor: plan still loading");
-            return TickSound::None;
-        }
         if open.editor.meeting().end <= now {
             warn!("start_from_editor: the meeting is over");
             open.notice = MEETING_OVER_NOTICE;
             return TickSound::None;
         }
-
-        let target = open.editor.meeting().end.with_timezone(&Local);
-        let names = open.editor.start_names();
-        info!(
-            "start_from_editor: target={} names={}",
-            target.format("%H:%M"),
-            names.len()
-        );
-        self.editor = None;
-        self.reset_turns(names);
-        self.origin = Some(TimerOrigin::Meeting);
-        self.page = Page::TimerPage;
-        self.target = Some(target);
-        self.tick()
+        let meeting = open.editor.meeting().clone();
+        self.start_meeting(&meeting)
     }
 
-    /// Starts saving the editor rows as the template of the meeting title.
+    /// Starts saving the editor rows as the preference of the meeting title.
     ///
-    /// Returns the request the caller must send; its result goes to
-    /// [`AppState::on_template_saved`]. Until then the editor is busy and says it is saving.
+    /// The people come from [`Draft::preference_people`]. With some, returns
+    /// [`PreferenceAction::Save`]; its result goes to [`AppState::on_preference_saved`]. With none
+    /// and a saved preference it behaves as [`AppState::start_preference_delete`] and returns
+    /// [`PreferenceAction::Delete`]. Until the result the editor is busy.
     ///
-    /// Edge cases: returns `None` and changes nothing without an editor, while its plan loads,
-    /// or while another save or deletion runs.
-    pub fn start_template_save(&mut self) -> Option<TemplateSave> {
+    /// Edge cases: returns `None` and changes nothing without an editor or while another save or
+    /// deletion runs. With no people and no preference returns `None` with the notice "Niente da
+    /// salvare" and sends nothing.
+    pub fn start_preference_save(&mut self) -> Option<PreferenceAction> {
         let open = self.idle_editor()?;
+        let meeting = open.editor.meeting().clone();
+        let people = match self.drafts.get(&meeting.event_id) {
+            Some(draft) => draft.preference_people(&meeting),
+            None => Vec::new(),
+        };
+        if people.is_empty() {
+            if meeting.preference.is_some() {
+                return self.start_preference_delete().map(PreferenceAction::Delete);
+            }
+            if let Some(open) = self.editor.as_mut() {
+                open.notice = NOTHING_TO_SAVE_NOTICE;
+            }
+            return None;
+        }
+        let open = self.editor.as_mut()?;
         open.busy = true;
-        open.notice = TEMPLATE_SAVING_NOTICE;
-        Some(TemplateSave {
-            event_id: open.editor.event_id().to_string(),
-            request: open.editor.save_request(),
-        })
+        open.notice = PREFERENCE_SAVING_NOTICE;
+        Some(PreferenceAction::Save(PreferenceSave {
+            event_id: meeting.event_id,
+            request: PutPreferenceRequest {
+                meeting_title: meeting.title,
+                people,
+            },
+        }))
     }
 
-    /// Applies the result of the template save started for `event_id`.
+    /// Applies the result of the preference save started for `event_id`.
     ///
-    /// On success the template id is remembered and a notice confirms the save; the return
-    /// value is then `true`: the caller must fetch the meetings again so their saved-slots
-    /// marker follows. On error the rows are kept: a missing or dead session ends it as a
-    /// meetings fetch does (login page), a 400 shows "invalid", anything else a failure notice.
+    /// On success the returned preference is set on every listed meeting with the same
+    /// normalized title and on the editor, and a notice confirms it. The draft is kept as it is
+    /// and the list is not fetched again. On error the rows are kept: a missing or dead session
+    /// ends it as a meetings fetch does (login page), a 400 shows "invalid", anything else a
+    /// failure notice.
     ///
-    /// Edge cases: the result is dropped (`false`) when the editor is no longer open on
-    /// `event_id` or no request runs for it.
-    #[must_use]
-    pub fn on_template_saved(
+    /// Edge cases: the result is dropped when the editor is no longer open on `event_id` or no
+    /// request runs for it.
+    pub fn on_preference_saved(
         &mut self,
         event_id: &str,
-        result: Result<Template, BackendError>,
-    ) -> bool {
+        result: Result<MeetingPreference, BackendError>,
+    ) {
         let Some(open) = self.busy_editor(event_id) else {
-            debug!("on_template_saved: editor gone or not saving, dropping the result");
-            return false;
+            debug!("on_preference_saved: editor gone or not saving, dropping the result");
+            return;
         };
         open.busy = false;
         match result {
-            Ok(template) => {
-                open.editor.set_template_id(Some(template.id));
-                open.notice = TEMPLATE_SAVED_NOTICE;
-                true
+            Ok(preference) => {
+                open.notice = PREFERENCE_SAVED_NOTICE;
+                let key = normalize_title(&preference.meeting_title);
+                self.set_preference(&key, Some(preference));
             }
             Err(err) => {
-                self.on_template_failed(err, TEMPLATE_INVALID_NOTICE, TEMPLATE_SAVE_FAILED_NOTICE);
-                false
+                self.on_preference_failed(
+                    err,
+                    PREFERENCE_INVALID_NOTICE,
+                    PREFERENCE_SAVE_FAILED_NOTICE,
+                );
             }
         }
     }
 
-    /// Starts deleting the saved template of the edited meeting.
+    /// Starts deleting the saved preference of the edited meeting.
     ///
-    /// Returns what the caller must send; its result goes to [`AppState::on_template_deleted`].
-    /// Until then the editor is busy and says it is deleting.
+    /// Returns what the caller must send; its result goes to
+    /// [`AppState::on_preference_deleted`]. Until then the editor is busy.
     ///
-    /// Edge cases: returns `None` and changes nothing without an editor, without a known
-    /// template, while its plan loads, or while another save or deletion runs.
-    pub fn start_template_delete(&mut self) -> Option<TemplateDelete> {
+    /// Edge cases: returns `None` and changes nothing without an editor, without a saved
+    /// preference, or while another save or deletion runs.
+    pub fn start_preference_delete(&mut self) -> Option<PreferenceDelete> {
         let open = self.idle_editor()?;
-        let template_id = open.editor.template_id()?.to_string();
+        let preference_id = open.editor.meeting().preference.as_ref()?.id.clone();
         open.busy = true;
-        open.notice = TEMPLATE_DELETING_NOTICE;
-        Some(TemplateDelete {
+        open.notice = PREFERENCE_DELETING_NOTICE;
+        Some(PreferenceDelete {
             event_id: open.editor.event_id().to_string(),
-            template_id,
+            preference_id,
         })
     }
 
-    /// Applies the result of the template deletion started for `event_id`.
+    /// Applies the result of the preference deletion started for `event_id`.
     ///
-    /// On success, or when the template was already gone (404 `not_found`), the template id is
-    /// forgotten, the rows go back to the calendar participants and a notice confirms it; the return value
-    /// is then `true`: the caller must fetch the meetings again. Other errors are handled as for
-    /// [`AppState::on_template_saved`], with a deletion failure notice.
+    /// On success, or when the preference was already gone (404 `not_found`), the preference is
+    /// removed from every listed meeting with the same normalized title and from the editor, the
+    /// draft goes back to the Calendar participants (all included) and a notice confirms it. The
+    /// list is not fetched again. Other errors are handled as for
+    /// [`AppState::on_preference_saved`], with a deletion failure notice.
     ///
-    /// Edge cases: the result is dropped (`false`) when the editor is no longer open on
-    /// `event_id` or no request runs for it.
-    #[must_use]
-    pub fn on_template_deleted(
-        &mut self,
-        event_id: &str,
-        result: Result<(), BackendError>,
-    ) -> bool {
+    /// Edge cases: the result is dropped when the editor is no longer open on `event_id` or no
+    /// request runs for it.
+    pub fn on_preference_deleted(&mut self, event_id: &str, result: Result<(), BackendError>) {
         let Some(open) = self.busy_editor(event_id) else {
-            debug!("on_template_deleted: editor gone or not deleting, dropping the result");
-            return false;
+            debug!("on_preference_deleted: editor gone or not deleting, dropping the result");
+            return;
         };
         open.busy = false;
         match result {
             Err(err) if !is_not_found(&err) => {
-                self.on_template_failed(
+                self.on_preference_failed(
                     err,
-                    TEMPLATE_DELETE_FAILED_NOTICE,
-                    TEMPLATE_DELETE_FAILED_NOTICE,
+                    PREFERENCE_DELETE_FAILED_NOTICE,
+                    PREFERENCE_DELETE_FAILED_NOTICE,
                 );
-                false
             }
             _ => {
-                open.editor.set_template_id(None);
-                open.editor.reset_participants();
-                open.notice = TEMPLATE_DELETED_NOTICE;
-                true
+                open.notice = PREFERENCE_DELETED_NOTICE;
+                let key = normalize_title(&open.editor.meeting().title);
+                self.set_preference(&key, None);
+                let Some(meeting) = self.editor.as_ref().map(|open| open.editor.meeting()) else {
+                    return;
+                };
+                let meeting = meeting.clone();
+                if let Some(draft) = self.drafts.get_mut(&meeting.event_id) {
+                    draft.reset(&meeting);
+                }
+                self.rebuild_meeting_rows();
             }
         }
     }
 
-    /// Handles a failed template request: a missing or dead session is lost (login page), a
+    /// Sets `preference` on every listed meeting whose normalized title is `key` and on the
+    /// snapshot of the open editor, then rebuilds the meeting rows.
+    fn set_preference(&mut self, key: &str, preference: Option<MeetingPreference>) {
+        for meeting in &mut self.meetings {
+            if normalize_title(&meeting.title) == key {
+                meeting.preference = preference.clone();
+            }
+        }
+        if let Some(open) = self.editor.as_mut() {
+            open.editor.set_preference(preference);
+        }
+        self.rebuild_meeting_rows();
+    }
+
+    /// Handles a failed preference request: a missing or dead session is lost (login page), a
     /// 400 shows `invalid` on the editor and any other error shows `failed`.
-    fn on_template_failed(
+    fn on_preference_failed(
         &mut self,
         error: BackendError,
         invalid: &'static str,
@@ -642,7 +655,7 @@ impl AppState {
             BackendError::NotLoggedIn => self.on_session_lost(""),
             BackendError::ReauthRequired => self.on_session_lost(REAUTH_MESSAGE),
             other => {
-                warn!("Template request failed: {other}");
+                warn!("Preference request failed: {other}");
                 let notice = match other {
                     BackendError::Server { status: 400, .. } => invalid,
                     _ => failed,
@@ -666,22 +679,19 @@ impl AppState {
         self.editor_on(event_id).filter(|open| open.busy)
     }
 
-    /// Open editor that may send a request: loaded and with no request running.
+    /// Open editor that may send a request: no request running.
     fn idle_editor(&mut self) -> Option<&mut OpenEditor> {
-        self.editor
-            .as_mut()
-            .filter(|open| !open.loading && !open.busy)
+        self.editor.as_mut().filter(|open| !open.busy)
     }
 
-    /// Editor whose rows may change: open and loaded.
-    fn editable(&mut self) -> Option<&mut ParticipantEditor> {
-        match self.editor.as_mut() {
-            Some(open) if !open.loading => Some(&mut open.editor),
-            _ => {
-                debug!("Editor not open or still loading, ignoring the change");
-                None
-            }
+    /// Draft of the open editor, if any.
+    fn editor_draft(&mut self) -> Option<&mut Draft> {
+        let event_id = self.editor.as_ref()?.editor.event_id();
+        let draft = self.drafts.get_mut(event_id);
+        if draft.is_none() {
+            debug!("Editor without a draft, ignoring the change");
         }
+        draft
     }
 
     /// Updates the countdown against the current time.
@@ -865,6 +875,7 @@ impl AppState {
             &Local::now().fixed_offset(),
             &Local,
             self.daily_choices.get(&meeting.event_id).copied(),
+            self.start_names_for(meeting).len(),
         );
         self.meetings_model.set_row_data(position, row);
     }
@@ -992,9 +1003,36 @@ impl AppState {
     }
 
     /// Replaces the meetings with those of a successful fetch and shows them.
+    ///
+    /// The Daily choices and the drafts of events no longer listed are dropped, except the draft
+    /// of the event the editor is open on. Each remaining draft is merged with its fresh meeting
+    /// (see [`Draft::merge_fresh`]) and the open editor takes the fresh meeting as its snapshot.
+    ///
+    /// Edge cases: an open editor whose event left the list keeps its old snapshot and draft.
     pub fn on_meetings_loaded(&mut self, meetings: Vec<Meeting>) {
         self.daily_choices
             .retain(|id, _| meetings.iter().any(|meeting| meeting.event_id == *id));
+        let open_event = self
+            .editor
+            .as_ref()
+            .map(|open| open.editor.event_id().to_string());
+        self.drafts.retain(|id, _| {
+            open_event.as_deref() == Some(id.as_str())
+                || meetings.iter().any(|meeting| meeting.event_id == *id)
+        });
+        for meeting in &meetings {
+            if let Some(draft) = self.drafts.get_mut(&meeting.event_id) {
+                draft.merge_fresh(meeting);
+            }
+        }
+        if let Some(open) = self.editor.as_mut() {
+            let fresh = meetings
+                .iter()
+                .find(|meeting| meeting.event_id == open.editor.event_id());
+            if let Some(fresh) = fresh {
+                open.editor.replace_meeting(fresh.clone());
+            }
+        }
         self.meetings = meetings;
         self.meetings_loaded = true;
         self.meetings_status = MeetingsStatus::Ready;
@@ -1020,6 +1058,7 @@ impl AppState {
     /// Drops the loaded meetings, so the next visit to the meetings page starts loading.
     fn forget_meetings(&mut self) {
         self.editor = None;
+        self.drafts.clear();
         self.meetings.clear();
         self.shown.clear();
         self.meetings_model.set_vec(Vec::new());
@@ -1155,7 +1194,14 @@ impl AppState {
         let mut rows = Vec::with_capacity(shown.len());
         for meeting in &shown {
             let choice = self.daily_choices.get(&meeting.event_id).copied();
-            rows.push(meeting_row(meeting, &now.fixed_offset(), &Local, choice));
+            let people = self.start_names_for(meeting).len();
+            rows.push(meeting_row(
+                meeting,
+                &now.fixed_offset(),
+                &Local,
+                choice,
+                people,
+            ));
         }
         self.shown = shown;
         self.meetings_model.set_vec(rows);
@@ -1265,16 +1311,20 @@ impl AppState {
         };
         let editor = &open.editor;
         let meeting = editor.meeting();
-        sync_editor_rows(&self.editor_model, editor.rows());
+        let rows = self
+            .drafts
+            .get(&meeting.event_id)
+            .map_or(&[][..], Draft::rows);
+        sync_editor_rows(&self.editor_model, rows);
         window.set_editor_title(meeting.title.as_str().into());
         window.set_editor_time_range(time_range(meeting, &Local).into());
         window.set_editor_duration(format!("Durata {} min", editor.duration_minutes()).into());
         window.set_editor_attendees_warning(participants_incomplete(meeting));
         window.set_editor_groups_reconnect(meeting.participant_resolution.reauthorization_required);
-        window.set_editor_loading(open.loading);
         window.set_editor_busy(open.busy);
         window.set_editor_notice(open.notice.into());
-        window.set_editor_has_template(editor.template_id().is_some());
+        window.set_editor_has_preference(meeting.preference.is_some());
+        window.set_editor_daily_start(self.daily_on(meeting));
     }
 
     /// Binds the shared participant names model to `window`; call once after creating the window.
@@ -1530,13 +1580,15 @@ fn format_minutes_seconds(ms: i64) -> String {
 }
 
 /// Builds the row of `meeting`: times in `tz` as `HH:MM–HH:MM`, the title, the meta line (see
-/// [`meeting_meta`]) and the Daily switch: `daily_choice` when the user set it, otherwise on for
-/// a title that looks like a daily. `daily_auto` tells that the title looks like a daily.
+/// [`meeting_meta`], `people` is the participant count) and the Daily switch: `daily_choice`
+/// when the user set it, otherwise on for a title that looks like a daily. `daily_auto` tells
+/// that the title looks like a daily.
 fn meeting_row<Tz: TimeZone>(
     meeting: &Meeting,
     now: &DateTime<FixedOffset>,
     tz: &Tz,
     daily_choice: Option<bool>,
+    people: usize,
 ) -> MeetingRow
 where
     Tz::Offset: Display,
@@ -1547,28 +1599,18 @@ where
         daily_auto,
         time_range: time_range(meeting, tz).into(),
         title: meeting.title.as_str().into(),
-        meta: meeting_meta(meeting, now).into(),
+        meta: meeting_meta(meeting, now, people).into(),
         in_progress: is_in_progress(meeting, now),
         attendees_warning: participants_incomplete(meeting),
     }
 }
 
-/// True when Calendar omitted attendees or Google Groups could not be fully resolved.
-///
-/// Complete empty groups have no warning; reauthorization alone also requires attention.
-fn participants_incomplete(meeting: &Meeting) -> bool {
-    meeting.attendees_omitted
-        || meeting.participant_resolution.incomplete
-        || meeting.participant_resolution.reauthorization_required
-}
-
 /// Meta line of a meeting row: "In corso" or the time to the start, then the participant count.
 ///
-/// The count is the length of [`participants`], so declined attendees are not counted and the
-/// attendees the calendar omitted are not known. One participant is singular, any other count
-/// (zero included) is plural.
-fn meeting_meta(meeting: &Meeting, now: &DateTime<FixedOffset>) -> String {
-    let count = participants(meeting).len();
+/// `count` is the number of start names of the meeting (see [`AppState::start_names_for`]):
+/// excluded and declined people are not counted and the attendees the calendar omitted are not
+/// known. One participant is singular, any other count (zero included) is plural.
+fn meeting_meta(meeting: &Meeting, now: &DateTime<FixedOffset>, count: usize) -> String {
     let people = if count == 1 {
         "1 partecipante".to_string()
     } else {
@@ -1650,8 +1692,28 @@ where
 pub mod tests {
     use super::*;
     use chrono::{NaiveDate, Utc};
-    use schisaciaccole_core::api::{Attendee, ResponseStatus};
+    use schisaciaccole_core::api::{Attendee, PreferencePerson, ResponseStatus};
+    use schisaciaccole_core::participants;
     use slint::Model;
+
+    /// Meeting without attendees, resolution flags or preference.
+    pub fn blank_meeting(
+        event_id: &str,
+        title: &str,
+        start: DateTime<FixedOffset>,
+        end: DateTime<FixedOffset>,
+    ) -> Meeting {
+        serde_json::from_value(serde_json::json!({
+            "event_id": event_id,
+            "title": title,
+            "start": start.to_rfc3339(),
+            "end": end.to_rfc3339(),
+            "attendees": [],
+            "attendees_omitted": false,
+            "recurring_event_id": null,
+        }))
+        .unwrap()
+    }
 
     /// State on the manual page, as at startup without a backend.
     pub fn sample_state() -> AppState {
@@ -1719,18 +1781,7 @@ pub mod tests {
     }
 
     fn meeting(title: &str, start: DateTime<FixedOffset>, end: DateTime<FixedOffset>) -> Meeting {
-        Meeting {
-            event_id: title.to_string(),
-            title: title.to_string(),
-            start,
-            end,
-            attendees: Vec::new(),
-            attendees_omitted: false,
-            participant_resolution: Default::default(),
-            recurring_event_id: None,
-            has_template: false,
-            preference: None,
-        }
+        blank_meeting(title, title, start, end)
     }
 
     fn attendees(count: usize) -> Vec<Attendee> {
@@ -1796,7 +1847,7 @@ pub mod tests {
         let plus_two = FixedOffset::east_opt(2 * 3600).unwrap();
         let meeting = meeting("Daily", at(7, 5), at(7, 20));
 
-        let row = meeting_row(&meeting, &at(6, 0), &plus_two, None);
+        let row = meeting_row(&meeting, &at(6, 0), &plus_two, None, 0);
 
         assert_eq!(row.time_range, "09:05–09:20");
         assert_eq!(row.title, "Daily");
@@ -1806,13 +1857,14 @@ pub mod tests {
     fn row_marks_the_meeting_in_progress() {
         let meeting = meeting("Daily", at(9, 0), at(10, 0));
 
-        assert!(meeting_row(&meeting, &at(9, 0), &Utc, None).in_progress);
-        assert!(!meeting_row(&meeting, &at(8, 59), &Utc, None).in_progress);
-        assert!(!meeting_row(&meeting, &at(10, 0), &Utc, None).in_progress);
+        assert!(meeting_row(&meeting, &at(9, 0), &Utc, None, 0).in_progress);
+        assert!(!meeting_row(&meeting, &at(8, 59), &Utc, None, 0).in_progress);
+        assert!(!meeting_row(&meeting, &at(10, 0), &Utc, None, 0).in_progress);
     }
 
+    /// Meta line counting the Calendar participants of `meeting`.
     fn meta(meeting: &Meeting, now: DateTime<FixedOffset>) -> String {
-        meeting_meta(meeting, &now)
+        meeting_meta(meeting, &now, participants(meeting).len())
     }
 
     #[test]
@@ -2957,145 +3009,262 @@ pub mod tests {
         assert_eq!(state.notice, "");
         assert_eq!(state.login_status, "");
     }
-    fn editing_meeting() -> AppState {
-        let mut state = state_with_meetings();
-        let mut talk = state.shown.first().unwrap().clone();
-        talk.attendees = vec![
-            Attendee {
-                email: "a@x.it".into(),
-                name: "A".into(),
-                is_self: false,
-                optional: false,
-                response: ResponseStatus::Accepted,
-            },
-            Attendee {
-                email: "b@x.it".into(),
-                name: "B".into(),
-                is_self: false,
-                optional: false,
-                response: ResponseStatus::Accepted,
-            },
-        ];
-        state.on_meetings_loaded(vec![talk]);
-        let event_id = state.open_editor(0).unwrap();
-        state.on_editor_plan_loaded(&event_id, Err(BackendError::Unreachable));
+    /// A meeting in progress that ends in 10 minutes, with the given attendee names.
+    fn talk(title: &str, names: &[&str]) -> Meeting {
+        let now = Local::now().fixed_offset();
+        let mut talk = meeting(
+            title,
+            now - chrono::Duration::minutes(1),
+            now + chrono::Duration::minutes(10),
+        );
+        talk.attendees = names.iter().map(|name| person(name)).collect();
+        talk
+    }
+
+    fn state_with(meetings: Vec<Meeting>) -> AppState {
+        let mut state = sample_state();
+        state.on_signed_in(&me(None));
+        state.on_meetings_loaded(meetings);
         state
+    }
+
+    fn preference(id: &str, title: &str, people: Vec<PreferencePerson>) -> MeetingPreference {
+        MeetingPreference {
+            id: id.to_string(),
+            meeting_title: title.to_string(),
+            people,
+        }
+    }
+
+    fn rename(name: &str, label: &str) -> PreferencePerson {
+        PreferencePerson {
+            kind: PersonKind::Attendee,
+            email: Some(format!("{}@x.it", name.to_lowercase())),
+            label: label.to_string(),
+        }
+    }
+
+    fn manual_person(label: &str) -> PreferencePerson {
+        PreferencePerson {
+            kind: PersonKind::Manual,
+            email: None,
+            label: label.to_string(),
+        }
+    }
+
+    /// State with one meeting "Planning" of Ann and Bob, editor not open.
+    fn planning_state() -> AppState {
+        state_with(vec![talk("Planning", &["Ann", "Bob"])])
+    }
+
+    /// State with the editor open on "Planning" of Ann and Bob.
+    fn editing_meeting() -> AppState {
+        let mut state = planning_state();
+        state.open_editor(0);
+        state
+    }
+
+    fn draft_labels(state: &AppState, event_id: &str) -> Vec<String> {
+        let draft = state.drafts.get(event_id).unwrap();
+        draft.rows().iter().map(|row| row.label.clone()).collect()
+    }
+
+    fn notice(state: &AppState) -> &'static str {
+        state.editor.as_ref().unwrap().notice
     }
 
     #[test]
     fn editor_opens_without_starting_countdown() {
-        let mut state = state_with_meetings();
-        assert!(state.open_editor(0).is_some());
+        let mut state = planning_state();
+
+        state.open_editor(0);
+
         assert_eq!(state.page, Page::EditorPage);
         assert!(state.target.is_none());
-        assert!(state.editor.as_ref().unwrap().loading);
+        assert!(!state.editor.as_ref().unwrap().busy);
     }
 
     #[test]
     fn invalid_editor_row_keeps_meetings_page() {
-        let mut state = state_with_meetings();
-        assert!(state.open_editor(-1).is_none());
-        assert!(state.open_editor(99).is_none());
+        let mut state = planning_state();
+
+        state.open_editor(-1);
+        state.open_editor(99);
+
         assert_eq!(state.page, Page::MeetingsPage);
         assert!(state.editor.is_none());
+        assert!(state.drafts.is_empty());
     }
 
     #[test]
-    fn editor_plan_failure_lists_the_calendar_participants() {
-        let state = editing_meeting();
-        let open = state.editor.as_ref().unwrap();
-        assert!(!open.loading);
-        assert_eq!(open.notice, EDITOR_PLAN_FALLBACK_NOTICE);
-        let rows = open.editor.rows();
-        assert_eq!(rows.len(), 2);
-        assert!(rows.iter().all(|row| row.included));
+    fn open_editor_builds_rows_from_calendar_preference_and_manual_people_locally() {
+        let mut planning = talk("Planning", &["Ann", "Bob"]);
+        planning.preference = Some(preference(
+            "p1",
+            "Planning",
+            vec![rename("Bob", "Roberto"), manual_person("Marco")],
+        ));
+        let mut state = state_with(vec![planning]);
+
+        state.open_editor(0);
+
+        assert_eq!(
+            draft_labels(&state, "Planning"),
+            vec!["Ann", "Roberto", "Marco"]
+        );
+        assert!(
+            state.drafts["Planning"]
+                .rows()
+                .iter()
+                .all(|row| row.included)
+        );
+        assert!(!state.editor.as_ref().unwrap().busy);
+        assert_eq!(state.editor.as_ref().unwrap().notice, "");
     }
 
     #[test]
-    fn editor_start_is_a_plain_countdown_with_the_included_names_and_never_daily() {
+    fn editor_edits_update_the_draft_and_the_rows() {
         let mut state = editing_meeting();
+
+        state.editor_set_label(0, "Anna");
+        state.editor_add_row();
+        state.editor_set_label(2, "Marco");
+
+        assert_eq!(
+            draft_labels(&state, "Planning"),
+            vec!["Anna", "Bob", "Marco"]
+        );
+    }
+
+    #[test]
+    fn draft_is_kept_after_back_and_reused_on_reopen() {
+        let mut state = editing_meeting();
+        state.editor_set_label(0, "Anna");
+        state.editor_set_included(1, false);
+
+        state.close_editor();
+        state.open_editor(0);
+
+        assert_eq!(state.page, Page::EditorPage);
+        assert_eq!(draft_labels(&state, "Planning"), vec!["Anna", "Bob"]);
+        assert!(!state.drafts["Planning"].rows()[1].included);
+    }
+
+    #[test]
+    fn list_start_uses_the_draft_names() {
+        let mut state = editing_meeting();
+        state.editor_set_label(0, "Anna");
+        state.editor_set_included(1, false);
+        state.close_editor();
+
+        let _ = state.select_meeting(0);
+
+        assert_eq!(state.turn_names, vec!["Anna"]);
+        assert!(state.drafts.contains_key("Planning"));
+    }
+
+    #[test]
+    fn list_start_without_a_draft_uses_calendar_and_preference() {
+        let mut planning = talk("Planning", &["Ann", "Bob"]);
+        planning.preference = Some(preference(
+            "p1",
+            "Planning",
+            vec![rename("Bob", "Roberto"), manual_person("Marco")],
+        ));
+        let mut state = state_with(vec![planning]);
+
+        let _ = state.select_meeting(0);
+
+        assert_eq!(state.turn_names, vec!["Ann", "Roberto", "Marco"]);
+        assert!(state.drafts.is_empty());
+    }
+
+    #[test]
+    fn editor_start_is_a_daily_when_the_switch_is_on() {
+        let mut state = editing_meeting();
+        state.close_editor();
         state.set_daily(0, true);
+        state.open_editor(0);
+        state.editor_set_included(0, false);
+        let target = state.editor.as_ref().unwrap().editor.meeting().end;
+
+        assert_eq!(state.start_from_editor(), TickSound::None);
+
+        assert_eq!(state.page, Page::TimerPage);
+        assert_eq!(state.target, Some(target.with_timezone(&Local)));
+        assert_eq!(state.turn_view, TurnView::Daily);
+        assert_eq!(state.turn_names, vec!["Bob"]);
+        assert!(state.editor.is_none());
+        assert!(state.drafts.contains_key("Planning"));
+    }
+
+    #[test]
+    fn editor_start_is_a_plain_countdown_when_the_switch_is_off() {
+        let mut state = editing_meeting();
         state.editor_add_row();
         state.editor_set_label(2, " C ");
         state.editor_set_included(0, false);
-        let target = state
-            .editor
-            .as_ref()
-            .unwrap()
-            .editor
-            .meeting()
-            .end
-            .with_timezone(&Local);
+
         assert_eq!(state.start_from_editor(), TickSound::None);
+
         assert_eq!(state.page, Page::TimerPage);
-        assert_eq!(state.target, Some(target));
         assert_eq!(state.turn_view, TurnView::Plain);
         assert!(state.daily.is_none());
-        assert!(state.editor.is_none());
-        assert_eq!(state.turn_names, vec!["B", "C"]);
+        assert_eq!(state.turn_names, vec!["Bob", "C"]);
         assert!(state.turns_available());
     }
 
     #[test]
-    fn editor_start_waits_for_plan() {
-        let mut state = state_with_meetings();
+    fn editor_start_with_the_switch_on_but_nobody_active_is_plain() {
+        let mut state = state_with(vec![talk("Daily PMO", &["Ann"])]);
         state.open_editor(0);
-        assert_eq!(state.start_from_editor(), TickSound::None);
-        assert!(state.target.is_none());
-        assert_eq!(state.page, Page::EditorPage);
+        state.editor_set_included(0, false);
+
+        let _ = state.start_from_editor();
+
+        assert_eq!(state.turn_view, TurnView::Plain);
+        assert!(state.daily.is_none());
+    }
+
+    #[test]
+    fn manual_row_can_be_excluded_and_is_not_a_start_name() {
+        let mut state = editing_meeting();
+        state.editor_add_row();
+        state.editor_set_label(2, "Marco");
+        state.editor_set_included(2, false);
+
+        assert!(!state.drafts["Planning"].rows()[2].included);
+        let _ = state.start_from_editor();
+
+        assert_eq!(state.turn_names, vec!["Ann", "Bob"]);
     }
 
     #[test]
     fn editor_start_rejects_expired_meeting() {
         let mut state = editing_meeting();
-        let expired = Local::now().fixed_offset() - chrono::Duration::seconds(1);
-        let mut talk = state.editor.as_ref().unwrap().editor.meeting().clone();
-        talk.end = expired;
-        let mut editor = ParticipantEditor::new(talk);
-        editor.reset_participants();
-        state.editor.as_mut().unwrap().editor = editor;
+        let mut expired = state.editor.as_ref().unwrap().editor.meeting().clone();
+        expired.end = Local::now().fixed_offset() - chrono::Duration::seconds(1);
+        state
+            .editor
+            .as_mut()
+            .unwrap()
+            .editor
+            .replace_meeting(expired);
+
         assert_eq!(state.start_from_editor(), TickSound::None);
+
         assert!(state.target.is_none());
-        assert_eq!(state.editor.as_ref().unwrap().notice, MEETING_OVER_NOTICE);
-    }
-
-    #[test]
-    fn editor_save_tracks_template_and_ignores_duplicate_result() {
-        let mut state = editing_meeting();
-        let save = state.start_template_save().unwrap();
-        assert!(state.start_template_save().is_none());
-        assert!(state.on_template_saved(
-            &save.event_id,
-            Ok(Template {
-                id: "saved".into(),
-                meeting_title: save.request.meeting_title,
-                entries: save.request.entries
-            })
-        ));
-        assert_eq!(
-            state.editor.as_ref().unwrap().editor.template_id(),
-            Some("saved")
-        );
-        assert!(!state.on_template_saved(&save.event_id, Err(BackendError::Unreachable)));
-    }
-
-    #[test]
-    fn editor_closed_drops_pending_plan_and_save() {
-        let mut state = editing_meeting();
-        let save = state.start_template_save().unwrap();
-        state.close_editor();
-        state.on_editor_plan_loaded(&save.event_id, Err(BackendError::Unreachable));
-        assert!(!state.on_template_saved(&save.event_id, Err(BackendError::Unreachable)));
-        assert!(state.editor.is_none());
-        assert_eq!(state.page, Page::MeetingsPage);
+        assert_eq!(state.page, Page::EditorPage);
+        assert_eq!(notice(&state), MEETING_OVER_NOTICE);
     }
 
     #[test]
     fn editor_without_participants_starts_without_turns() {
         let mut state = state_with_meetings();
-        let event_id = state.open_editor(0).unwrap();
-        state.on_editor_plan_loaded(&event_id, Err(BackendError::Unreachable));
+        state.open_editor(0);
+
         let _ = state.start_from_editor();
+
         assert!(state.target.is_some());
         assert_eq!(state.turn_view, TurnView::Plain);
         assert!(state.turn_names.is_empty());
@@ -3107,16 +3276,20 @@ pub mod tests {
         let mut state = editing_meeting();
         state.editor_set_included(0, false);
         let _ = state.start_from_editor();
+
         state.show_turns();
+
         assert_eq!(state.turn_view, TurnView::Settings);
-        assert_eq!(state.turn_names, vec!["B"]);
+        assert_eq!(state.turn_names, vec!["Bob"]);
     }
 
     #[test]
     fn editor_stop_returns_to_meetings() {
         let mut state = editing_meeting();
         let _ = state.start_from_editor();
+
         state.stop(StopType::UserStopped);
+
         assert!(state.turn_names.is_empty());
         assert_eq!(state.page, Page::MeetingsPage);
     }
@@ -3126,21 +3299,40 @@ pub mod tests {
         let mut state = editing_meeting();
         let _ = state.start_from_editor();
         state.target = Some(Local::now() - chrono::Duration::milliseconds(1));
+
         assert_eq!(state.tick(), TickSound::MeetingEnd);
+
         assert_eq!(state.page, Page::TimerFinished);
         state.show_home();
         assert_eq!(state.page, Page::MeetingsPage);
     }
 
-    fn fresh_plan(meeting: &Meeting) -> SlotPlan {
-        SlotPlan {
-            source: schisaciaccole_core::api::PlanSource::Equal,
-            template_id: None,
-            entries: schisaciaccole_core::build_plan(&participants(meeting), None),
-            attendees: Some(meeting.attendees.clone()),
-            attendees_omitted: meeting.attendees_omitted,
-            participant_resolution: meeting.participant_resolution,
-        }
+    #[test]
+    fn reset_rebuilds_the_rows_from_calendar_and_preference() {
+        let mut planning = talk("Planning", &["Ann", "Bob"]);
+        planning.preference = Some(preference(
+            "p1",
+            "Planning",
+            vec![rename("Bob", "Roberto"), manual_person("Marco")],
+        ));
+        let mut state = state_with(vec![planning]);
+        state.open_editor(0);
+        state.editor_set_included(0, false);
+        state.editor_set_label(1, "X");
+        state.editor_add_row();
+
+        state.editor_reset_participants();
+
+        assert_eq!(
+            draft_labels(&state, "Planning"),
+            vec!["Ann", "Roberto", "Marco"]
+        );
+        assert!(
+            state.drafts["Planning"]
+                .rows()
+                .iter()
+                .all(|row| row.included)
+        );
     }
 
     #[test]
@@ -3148,7 +3340,7 @@ pub mod tests {
         let mut talk = meeting("Review", at(9, 0), at(10, 0));
         talk.attendees_omitted = true;
 
-        let row = meeting_row(&talk, &at(9, 30), &Utc, None);
+        let row = meeting_row(&talk, &at(9, 30), &Utc, None, 0);
 
         assert!(row.attendees_warning);
     }
@@ -3158,7 +3350,7 @@ pub mod tests {
         let mut talk = meeting("Review", at(9, 0), at(10, 0));
         talk.participant_resolution.incomplete = true;
 
-        let row = meeting_row(&talk, &at(9, 30), &Utc, None);
+        let row = meeting_row(&talk, &at(9, 30), &Utc, None, 0);
 
         assert!(row.attendees_warning);
     }
@@ -3175,14 +3367,122 @@ pub mod tests {
     }
 
     #[test]
-    fn fresh_plan_failure_metadata_is_visible_in_editor_and_list() {
-        let mut state = state_with_one_meeting("Review", &["Ann"]);
-        let event_id = state.open_editor(0).unwrap();
-        let mut fresh = state.shown.first().unwrap().clone();
+    fn meeting_meta_counts_the_given_people() {
+        let talk = meeting("Review", at(9, 0), at(10, 0));
+
+        assert_eq!(
+            meeting_meta(&talk, &at(9, 30), 4),
+            "In corso · 4 partecipanti"
+        );
+    }
+
+    #[test]
+    fn meeting_row_counts_start_names_of_the_draft() {
+        let mut state = state_with(vec![talk("Planning", &["Ann", "Bob", "Carl"])]);
+        assert!(row(&state, 0).meta.ends_with("3 partecipanti"));
+        state.open_editor(0);
+        state.editor_set_included(0, false);
+        state.editor_add_row();
+        state.editor_set_label(3, "Marco");
+        state.editor_add_row();
+        state.close_editor();
+
+        assert!(row(&state, 0).meta.ends_with("3 partecipanti"));
+        state.open_editor(0);
+        state.editor_set_included(1, false);
+
+        assert!(row(&state, 0).meta.ends_with("2 partecipanti"));
+    }
+
+    #[test]
+    fn meeting_row_counts_saved_manual_people_without_a_draft() {
+        let mut planning = talk("Planning", &["Ann"]);
+        planning.preference = Some(preference("p1", "Planning", vec![manual_person("Marco")]));
+
+        let state = state_with(vec![planning]);
+
+        assert!(row(&state, 0).meta.ends_with("2 partecipanti"));
+    }
+
+    #[test]
+    fn reload_merges_a_new_participant_into_the_draft_and_drops_a_removed_one() {
+        let mut state = editing_meeting();
+        state.editor_set_included(0, false);
+        state.editor_add_row();
+        state.editor_set_label(2, "Marco");
+        state.close_editor();
+
+        state.on_meetings_loaded(vec![talk("Planning", &["Ann", "Dario"])]);
+
+        assert_eq!(
+            draft_labels(&state, "Planning"),
+            vec!["Ann", "Dario", "Marco"]
+        );
+        let included: Vec<bool> = state.drafts["Planning"]
+            .rows()
+            .iter()
+            .map(|row| row.included)
+            .collect();
+        assert_eq!(included, vec![false, true, true]);
+    }
+
+    #[test]
+    fn reload_with_a_complete_draft_and_an_incomplete_list_keeps_the_draft() {
+        let mut state = editing_meeting();
+        state.editor_set_included(0, false);
+        state.close_editor();
+        let mut fresh = talk("Planning", &["Group"]);
+        fresh.participant_resolution.incomplete = true;
+
+        state.on_meetings_loaded(vec![fresh]);
+
+        assert_eq!(draft_labels(&state, "Planning"), vec!["Ann", "Bob"]);
+        assert!(!state.drafts["Planning"].rows()[0].included);
+        assert!(state.drafts["Planning"].is_complete());
+    }
+
+    #[test]
+    fn reload_with_an_incomplete_draft_and_a_complete_list_merges() {
+        let mut incomplete = talk("Planning", &["Group"]);
+        incomplete.participant_resolution.incomplete = true;
+        let mut state = state_with(vec![incomplete]);
+        state.open_editor(0);
+        state.close_editor();
+        assert!(!state.drafts["Planning"].is_complete());
+
+        state.on_meetings_loaded(vec![talk("Planning", &["Ann", "Bob"])]);
+
+        assert_eq!(draft_labels(&state, "Planning"), vec!["Ann", "Bob"]);
+        assert!(state.drafts["Planning"].is_complete());
+    }
+
+    #[test]
+    fn reload_replaces_the_snapshot_of_the_open_editor_and_its_rows() {
+        let mut state = editing_meeting();
+        let mut fresh = talk("Planning", &["Ann", "Bob", "Carl"]);
+        fresh.participant_resolution.incomplete = true;
+        fresh.participant_resolution.reauthorization_required = true;
+        fresh.preference = Some(preference("p9", "Planning", vec![manual_person("Marco")]));
+        let mut complete = fresh.clone();
+        complete.participant_resolution = Default::default();
+
+        state.on_meetings_loaded(vec![complete]);
+
+        let open = state.editor.as_ref().unwrap();
+        assert_eq!(open.editor.meeting().attendees.len(), 3);
+        assert_eq!(open.editor.meeting().preference.as_ref().unwrap().id, "p9");
+        assert_eq!(draft_labels(&state, "Planning"), vec!["Ann", "Bob", "Carl"]);
+        assert_eq!(state.page, Page::EditorPage);
+    }
+
+    #[test]
+    fn reload_incomplete_snapshot_shows_the_warning_state() {
+        let mut state = editing_meeting();
+        let mut fresh = talk("Planning", &["Ann", "Bob"]);
         fresh.participant_resolution.incomplete = true;
         fresh.participant_resolution.reauthorization_required = true;
 
-        state.on_editor_plan_loaded(&event_id, Ok(fresh_plan(&fresh)));
+        state.on_meetings_loaded(vec![fresh]);
 
         let open = state.editor.as_ref().unwrap();
         assert!(participants_incomplete(open.editor.meeting()));
@@ -3190,61 +3490,330 @@ pub mod tests {
         assert!(row(&state, 0).attendees_warning);
         assert_eq!(state.page, Page::EditorPage);
         assert!(!state.login_waiting);
-        assert!(state.start_template_save().is_some());
     }
 
     #[test]
-    fn fresh_calendar_omission_warns_in_editor() {
-        let mut state = state_with_one_meeting("Review", &["Ann"]);
-        let event_id = state.open_editor(0).unwrap();
-        let mut fresh = state.shown.first().unwrap().clone();
-        fresh.attendees_omitted = true;
+    fn draft_of_the_open_editor_survives_its_event_leaving_the_list() {
+        let mut state = editing_meeting();
+        state.editor_set_label(0, "Anna");
 
-        state.on_editor_plan_loaded(&event_id, Ok(fresh_plan(&fresh)));
+        state.on_meetings_loaded(Vec::new());
 
-        assert!(participants_incomplete(
-            state.editor.as_ref().unwrap().editor.meeting()
-        ));
+        assert_eq!(draft_labels(&state, "Planning"), vec!["Anna", "Bob"]);
+        assert!(state.editor.is_some());
     }
 
     #[test]
-    fn fresh_members_drive_participant_reset_and_direct_start() {
-        let mut state = state_with_one_meeting("Review", &["Group"]);
-        let event_id = state.open_editor(0).unwrap();
-        let mut fresh = state.shown.first().unwrap().clone();
-        fresh.attendees = vec![person("Ann"), person("Bob")];
-        for attendee in &mut fresh.attendees {
-            attendee.response = ResponseStatus::NeedsAction;
+    fn draft_of_a_closed_editor_is_dropped_when_its_event_leaves_the_list() {
+        let mut state = editing_meeting();
+        state.close_editor();
+
+        state.on_meetings_loaded(Vec::new());
+
+        assert!(state.drafts.is_empty());
+    }
+
+    #[test]
+    fn logout_and_lost_session_clear_the_drafts() {
+        let mut state = editing_meeting();
+        state.close_editor();
+        state.on_session_lost("");
+        assert!(state.drafts.is_empty());
+
+        let mut state = editing_meeting();
+        state.on_logout_started();
+        assert!(state.drafts.is_empty());
+    }
+
+    #[test]
+    fn save_sends_the_renames_and_manual_people_and_marks_the_editor_busy() {
+        let mut state = editing_meeting();
+        state.editor_set_label(1, "Roberto");
+        state.editor_set_included(0, false);
+        state.editor_add_row();
+        state.editor_set_label(2, "Marco");
+
+        let action = state.start_preference_save().unwrap();
+
+        let PreferenceAction::Save(save) = action else {
+            panic!("expected a save");
+        };
+        assert_eq!(save.event_id, "Planning");
+        assert_eq!(save.request.meeting_title, "Planning");
+        assert_eq!(
+            save.request.people,
+            vec![rename("Bob", "Roberto"), manual_person("Marco")]
+        );
+        assert!(state.editor.as_ref().unwrap().busy);
+        assert_eq!(notice(&state), PREFERENCE_SAVING_NOTICE);
+        assert!(state.start_preference_save().is_none());
+    }
+
+    #[test]
+    fn save_with_nothing_to_keep_and_a_preference_starts_a_delete() {
+        let mut planning = talk("Planning", &["Ann", "Bob"]);
+        planning.preference = Some(preference("p1", "Planning", vec![manual_person("Marco")]));
+        let mut state = state_with(vec![planning]);
+        state.open_editor(0);
+        state.editor_remove_row(2);
+
+        let action = state.start_preference_save().unwrap();
+
+        assert_eq!(
+            action,
+            PreferenceAction::Delete(PreferenceDelete {
+                event_id: "Planning".to_string(),
+                preference_id: "p1".to_string(),
+            })
+        );
+        assert!(state.editor.as_ref().unwrap().busy);
+        assert_eq!(notice(&state), PREFERENCE_DELETING_NOTICE);
+    }
+
+    #[test]
+    fn save_with_nothing_to_keep_and_no_preference_sends_nothing() {
+        let mut state = editing_meeting();
+
+        assert!(state.start_preference_save().is_none());
+
+        assert_eq!(notice(&state), NOTHING_TO_SAVE_NOTICE);
+        assert!(!state.editor.as_ref().unwrap().busy);
+    }
+
+    #[test]
+    fn successful_save_updates_meetings_with_the_same_title_and_keeps_the_draft() {
+        let mut other = talk("  planning ", &["Ann"]);
+        other.event_id = "other".to_string();
+        let mut unrelated = talk("Retro", &["Ann"]);
+        unrelated.event_id = "retro".to_string();
+        let mut state = state_with(vec![talk("Planning", &["Ann", "Bob"]), other, unrelated]);
+        let index = state
+            .shown
+            .iter()
+            .position(|meeting| meeting.event_id == "Planning")
+            .unwrap();
+        state.open_editor(i32::try_from(index).unwrap());
+        state.editor_set_included(0, false);
+        state.editor_add_row();
+        state.editor_set_label(2, "Marco");
+        let _ = state.start_preference_save().unwrap();
+        let saved = preference("p1", "Planning", vec![manual_person("Marco")]);
+
+        state.on_preference_saved("Planning", Ok(saved.clone()));
+
+        assert_eq!(notice(&state), PREFERENCE_SAVED_NOTICE);
+        assert!(!state.editor.as_ref().unwrap().busy);
+        for meeting in &state.meetings {
+            let expected = if meeting.event_id == "retro" {
+                None
+            } else {
+                Some(saved.clone())
+            };
+            assert_eq!(meeting.preference, expected, "{}", meeting.event_id);
         }
-        state.on_editor_plan_loaded(&event_id, Ok(fresh_plan(&fresh)));
+        assert_eq!(
+            state.editor.as_ref().unwrap().editor.meeting().preference,
+            Some(saved)
+        );
+        assert_eq!(
+            draft_labels(&state, "Planning"),
+            vec!["Ann", "Bob", "Marco"]
+        );
+        assert!(!state.drafts["Planning"].rows()[0].included);
+        assert!(!state.drafts.contains_key("other"));
+    }
+
+    #[test]
+    fn save_result_is_dropped_when_not_busy_or_editor_closed() {
+        let mut state = editing_meeting();
+        let saved = preference("p1", "Planning", vec![manual_person("Marco")]);
+
+        state.on_preference_saved("Planning", Ok(saved.clone()));
+        assert!(state.meetings[0].preference.is_none());
 
         state.editor_add_row();
-        state.editor_reset_participants();
-
-        let rows = state.editor.as_ref().unwrap().editor.rows();
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows.first().unwrap().label, "Ann");
-        assert!(row(&state, 0).meta.ends_with("2 partecipanti"));
+        state.editor_set_label(2, "Marco");
+        let _ = state.start_preference_save().unwrap();
         state.close_editor();
-        let _ = state.select_meeting(0);
-        assert_eq!(state.turn_names, vec!["Ann", "Bob"]);
+        state.on_preference_saved("Planning", Ok(saved));
+
+        assert!(state.meetings[0].preference.is_none());
+        assert!(state.editor.is_none());
+        assert_eq!(state.page, Page::MeetingsPage);
     }
 
     #[test]
-    fn fresh_members_drive_daily_after_editor_closes() {
-        let mut state = state_with_one_meeting("Daily", &["Group"]);
-        let event_id = state.open_editor(0).unwrap();
-        let mut fresh = state.shown.first().unwrap().clone();
-        fresh.attendees = vec![person("Ann"), person("Bob")];
-        state.on_editor_plan_loaded(&event_id, Ok(fresh_plan(&fresh)));
+    fn duplicate_save_result_is_ignored() {
+        let mut state = editing_meeting();
+        state.editor_add_row();
+        state.editor_set_label(2, "Marco");
+        let _ = state.start_preference_save().unwrap();
+
+        state.on_preference_saved("Planning", Ok(preference("p1", "Planning", Vec::new())));
+        state.on_preference_saved("Planning", Err(BackendError::NotLoggedIn));
+
+        assert!(state.is_signed_in());
+        assert_eq!(notice(&state), PREFERENCE_SAVED_NOTICE);
+    }
+
+    #[test]
+    fn invalid_save_shows_the_invalid_notice_and_keeps_the_rows() {
+        let mut state = editing_meeting();
+        state.editor_add_row();
+        state.editor_set_label(2, "Marco");
+        let _ = state.start_preference_save().unwrap();
+
+        state.on_preference_saved(
+            "Planning",
+            Err(BackendError::Server {
+                status: 400,
+                code: error_codes::INVALID_REQUEST.to_string(),
+                message: String::new(),
+            }),
+        );
+
+        assert_eq!(notice(&state), PREFERENCE_INVALID_NOTICE);
+        assert!(!state.editor.as_ref().unwrap().busy);
+        assert_eq!(
+            draft_labels(&state, "Planning"),
+            vec!["Ann", "Bob", "Marco"]
+        );
+    }
+
+    #[test]
+    fn failed_save_shows_the_failure_notice() {
+        let mut state = editing_meeting();
+        state.editor_add_row();
+        state.editor_set_label(2, "Marco");
+        let _ = state.start_preference_save().unwrap();
+
+        state.on_preference_saved("Planning", Err(BackendError::Unreachable));
+
+        assert_eq!(notice(&state), PREFERENCE_SAVE_FAILED_NOTICE);
+    }
+
+    #[test]
+    fn save_with_a_lost_session_shows_the_login_page() {
+        let mut state = editing_meeting();
+        state.editor_add_row();
+        state.editor_set_label(2, "Marco");
+        let _ = state.start_preference_save().unwrap();
+
+        state.on_preference_saved("Planning", Err(BackendError::ReauthRequired));
+
+        assert_eq!(state.page, Page::LoginPage);
+        assert_eq!(state.login_status, REAUTH_MESSAGE);
+        assert!(state.editor.is_none());
+        assert!(state.drafts.is_empty());
+    }
+
+    /// State with the editor open on "Planning" (Ann, Bob) with a saved preference "p1".
+    fn editing_with_preference() -> AppState {
+        let mut planning = talk("Planning", &["Ann", "Bob"]);
+        planning.preference = Some(preference(
+            "p1",
+            "Planning",
+            vec![rename("Bob", "Roberto"), manual_person("Marco")],
+        ));
+        let mut state = state_with(vec![planning]);
+        state.open_editor(0);
+        state
+    }
+
+    #[test]
+    fn delete_is_only_offered_with_a_preference() {
+        let mut state = editing_meeting();
+
+        assert!(state.start_preference_delete().is_none());
+        assert!(!state.editor.as_ref().unwrap().busy);
+    }
+
+    #[test]
+    fn delete_resets_the_rows_to_the_calendar_participants() {
+        let mut state = editing_with_preference();
+        state.editor_set_included(0, false);
+        let delete = state.start_preference_delete().unwrap();
+        assert_eq!(delete.preference_id, "p1");
+
+        state.on_preference_deleted(&delete.event_id, Ok(()));
+
+        assert_eq!(notice(&state), PREFERENCE_DELETED_NOTICE);
+        assert_eq!(draft_labels(&state, "Planning"), vec!["Ann", "Bob"]);
+        assert!(
+            state.drafts["Planning"]
+                .rows()
+                .iter()
+                .all(|row| row.included)
+        );
+        assert!(state.meetings[0].preference.is_none());
+        assert!(
+            state
+                .editor
+                .as_ref()
+                .unwrap()
+                .editor
+                .meeting()
+                .preference
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn delete_not_found_is_a_success() {
+        let mut state = editing_with_preference();
+        let delete = state.start_preference_delete().unwrap();
+
+        state.on_preference_deleted(
+            &delete.event_id,
+            Err(BackendError::Server {
+                status: 404,
+                code: error_codes::NOT_FOUND.to_string(),
+                message: String::new(),
+            }),
+        );
+
+        assert_eq!(notice(&state), PREFERENCE_DELETED_NOTICE);
+        assert!(state.meetings[0].preference.is_none());
+    }
+
+    #[test]
+    fn failed_delete_keeps_the_preference() {
+        let mut state = editing_with_preference();
+        let delete = state.start_preference_delete().unwrap();
+
+        state.on_preference_deleted(&delete.event_id, Err(BackendError::Unreachable));
+
+        assert_eq!(notice(&state), PREFERENCE_DELETE_FAILED_NOTICE);
+        assert!(state.meetings[0].preference.is_some());
+        assert!(!state.editor.as_ref().unwrap().busy);
+    }
+
+    #[test]
+    fn invalid_delete_shows_the_deletion_failure() {
+        let mut state = editing_with_preference();
+        let delete = state.start_preference_delete().unwrap();
+
+        state.on_preference_deleted(
+            &delete.event_id,
+            Err(BackendError::Server {
+                status: 400,
+                code: error_codes::INVALID_REQUEST.to_string(),
+                message: String::new(),
+            }),
+        );
+
+        assert_eq!(notice(&state), PREFERENCE_DELETE_FAILED_NOTICE);
+    }
+
+    #[test]
+    fn delete_result_after_closing_the_editor_is_dropped() {
+        let mut state = editing_with_preference();
+        let delete = state.start_preference_delete().unwrap();
         state.close_editor();
 
-        let _ = state.select_meeting(0);
+        state.on_preference_deleted(&delete.event_id, Ok(()));
 
-        assert_eq!(state.turn_view, TurnView::Daily);
-        assert_eq!(state.turn_names.len(), 2);
-        assert!(state.turn_names.contains(&"Ann".to_string()));
-        assert!(state.turn_names.contains(&"Bob".to_string()));
+        assert!(state.meetings[0].preference.is_some());
     }
 
     #[test]
@@ -3282,7 +3851,7 @@ pub mod tests {
     }
 
     #[test]
-    fn reconnect_cancel_keeps_editor_and_fallback_start_usable() {
+    fn reconnect_cancel_keeps_editor_and_start_usable() {
         let mut state = editing_meeting();
         state.on_login_started();
 

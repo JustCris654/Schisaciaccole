@@ -1,44 +1,61 @@
 //! Participant editor: who takes part in one meeting and the operations the editor page offers.
 //!
-//! Plain data without Slint types: [`crate::state::AppState`] owns a [`ParticipantEditor`] while
-//! the editor page is open and turns its rows into the UI model. Row indices come from the UI,
-//! so every operation ignores an index out of range instead of failing.
+//! Plain data without Slint types. A [`Draft`] holds the rows of one meeting and survives the
+//! editor page: [`crate::state::AppState`] keeps one per calendar event and applies every editor
+//! operation to it. A [`ParticipantEditor`] is the meeting snapshot the open page shows. Row
+//! indices come from the UI, so every operation ignores an index out of range instead of failing.
 
 use log::debug;
-use schisaciaccole_core::api::{Meeting, PersonKind, PutTemplateRequest, SlotPlan};
+use schisaciaccole_core::api::{Meeting, MeetingPreference, PersonKind, PreferencePerson};
 use schisaciaccole_core::{
-    EditorEntry, build_plan, editor_to_template, participants, plan_to_editor,
+    EditorEntry, editor_rows, merge_rows, participants, preference_people, start_names,
 };
 
 /// Most rows the editor holds: adding a row beyond it does nothing.
 pub const MAX_ROWS: usize = 99;
 
-/// Participants of one meeting, with the template they were loaded from.
+/// True when Calendar omitted attendees or Google Groups could not be fully resolved.
+///
+/// Complete empty groups have no warning; reauthorization alone also requires attention.
+pub fn participants_incomplete(meeting: &Meeting) -> bool {
+    meeting.attendees_omitted
+        || meeting.participant_resolution.incomplete
+        || meeting.participant_resolution.reauthorization_required
+}
+
+/// Preference people of `meeting`, when it has a saved preference.
+fn saved_people(meeting: &Meeting) -> Option<&[PreferencePerson]> {
+    meeting
+        .preference
+        .as_ref()
+        .map(|preference| preference.people.as_slice())
+}
+
+/// Editor rows of `meeting` when nobody edited them: the Calendar participants and the people of
+/// the saved preference, all included (see [`editor_rows`]).
+///
+/// Edge cases: a meeting without participants and without preference gives no rows.
+pub fn default_rows(meeting: &Meeting) -> Vec<EditorEntry> {
+    editor_rows(&participants(meeting), saved_people(meeting))
+}
+
+/// Meeting shown by the open editor page.
 #[derive(Debug, Clone)]
 pub struct ParticipantEditor {
     meeting: Meeting,
     /// Nominal duration of the meeting (end minus start), never negative.
     duration_secs: i64,
-    rows: Vec<EditorEntry>,
-    /// Id of the saved template of the meeting title, when one is known.
-    template_id: Option<String>,
 }
 
 impl ParticipantEditor {
-    /// Creates an editor for `meeting` with no rows and no known template.
+    /// Creates an editor for `meeting`.
     ///
     /// Edge cases: a meeting that ends before it starts gets a duration of 0 seconds.
     pub fn new(meeting: Meeting) -> Self {
-        let duration_secs = meeting
-            .end
-            .signed_duration_since(meeting.start)
-            .num_seconds()
-            .max(0);
+        let duration_secs = nominal_secs(&meeting);
         Self {
             meeting,
             duration_secs,
-            rows: Vec::new(),
-            template_id: None,
         }
     }
 
@@ -52,53 +69,86 @@ impl ParticipantEditor {
         &self.meeting.event_id
     }
 
-    /// Rows in display order.
-    pub fn rows(&self) -> &[EditorEntry] {
-        &self.rows
-    }
-
-    /// Id of the saved template, when one is known.
-    pub fn template_id(&self) -> Option<&str> {
-        self.template_id.as_deref()
-    }
-
-    /// Replaces the known template id.
-    pub fn set_template_id(&mut self, template_id: Option<String>) {
-        self.template_id = template_id;
-    }
-
     /// Nominal duration of the meeting in whole minutes (rounded down).
     pub fn duration_minutes(&self) -> i64 {
         self.duration_secs / 60
     }
 
-    /// Replaces the rows with those of `plan` and remembers its template id (`None` for an equal
-    /// plan). Fresh participants replace the meeting snapshot used by the participant reset.
-    /// Legacy plans without participants preserve that snapshot and merge warning flags
-    /// conservatively.
-    pub fn load_plan(&mut self, plan: &SlotPlan) {
-        if let Some(attendees) = &plan.attendees {
-            self.meeting.attendees = attendees.clone();
-            self.meeting.attendees_omitted = plan.attendees_omitted;
-            self.meeting.participant_resolution = plan.participant_resolution;
-        } else {
-            self.meeting.attendees_omitted |= plan.attendees_omitted;
-            self.meeting.participant_resolution.incomplete |=
-                plan.participant_resolution.incomplete;
-            self.meeting.participant_resolution.reauthorization_required |=
-                plan.participant_resolution.reauthorization_required;
-        }
-        self.rows = plan_to_editor(&plan.entries);
-        self.template_id = plan.template_id.clone();
+    /// Replaces the meeting snapshot and the duration derived from it.
+    ///
+    /// Edge cases: the event id is not checked; the caller passes the same event.
+    pub fn replace_meeting(&mut self, meeting: Meeting) {
+        self.duration_secs = nominal_secs(&meeting);
+        self.meeting = meeting;
     }
 
-    /// Replaces the rows with all the calendar participants of the meeting, every one included.
-    /// Rows added by hand are dropped and the template id is kept.
+    /// Replaces the preference of the snapshot, `None` when it was deleted.
+    pub fn set_preference(&mut self, preference: Option<MeetingPreference>) {
+        self.meeting.preference = preference;
+    }
+}
+
+/// Nominal duration of `meeting` in seconds, never negative.
+fn nominal_secs(meeting: &Meeting) -> i64 {
+    meeting
+        .end
+        .signed_duration_since(meeting.start)
+        .num_seconds()
+        .max(0)
+}
+
+/// Rows of one meeting kept in memory while the app runs.
+///
+/// `complete` tells whether the participant list the rows come from was complete (see
+/// [`participants_incomplete`]); [`Draft::merge_fresh`] needs it to avoid losing exclusions
+/// during a temporary group expansion failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Draft {
+    rows: Vec<EditorEntry>,
+    complete: bool,
+}
+
+impl Draft {
+    /// Creates the draft of `meeting`: [`default_rows`], complete when the participant list is.
+    pub fn from_meeting(meeting: &Meeting) -> Self {
+        Self {
+            rows: default_rows(meeting),
+            complete: !participants_incomplete(meeting),
+        }
+    }
+
+    /// Rows in display order.
+    pub fn rows(&self) -> &[EditorEntry] {
+        &self.rows
+    }
+
+    /// True when the participant list of the last creation, reset or merge was complete.
+    #[cfg(test)]
+    pub fn is_complete(&self) -> bool {
+        self.complete
+    }
+
+    /// Rebuilds the draft from `meeting` as [`Draft::from_meeting`] does, dropping every edit.
+    pub fn reset(&mut self, meeting: &Meeting) {
+        *self = Self::from_meeting(meeting);
+    }
+
+    /// Merges the participants of `fresh`, the meeting just read, into the rows.
     ///
-    /// Edge cases: a meeting without participants gives no rows.
-    pub fn reset_participants(&mut self) {
-        let equal = build_plan(&participants(&self.meeting), None);
-        self.rows = plan_to_editor(&equal);
+    /// A complete draft is left unchanged when the fresh list is incomplete. Otherwise the rows
+    /// go through [`merge_rows`] (the saved preference only names new attendees) and the draft
+    /// takes the completeness of `fresh`.
+    ///
+    /// Edge cases: nothing is merged for an incomplete fresh list over a complete draft, even if
+    /// attendees were added; they enter on the first complete list.
+    pub fn merge_fresh(&mut self, fresh: &Meeting) {
+        let fresh_complete = !participants_incomplete(fresh);
+        if self.complete && !fresh_complete {
+            debug!("merge_fresh: fresh list incomplete, keeping the draft");
+            return;
+        }
+        self.rows = merge_rows(&self.rows, &participants(fresh), saved_people(fresh));
+        self.complete = fresh_complete;
     }
 
     /// Sets the label of row `index` as typed; trimming happens when the rows are saved.
@@ -111,21 +161,19 @@ impl ParticipantEditor {
         }
     }
 
-    /// Includes or excludes the attendee of row `index` from the meeting.
+    /// Includes or excludes row `index` from the meeting, whatever its kind.
     ///
-    /// Edge cases: a row that is not an attendee is always included, so it is left unchanged;
-    /// an index out of range is logged and ignored.
+    /// Edge cases: an index out of range is logged and ignored.
     pub fn set_included(&mut self, index: usize, included: bool) {
         match self.rows.get_mut(index) {
-            Some(row) if row.kind == PersonKind::Attendee => row.included = included,
-            Some(_) => debug!("set_included: row {index} is not an attendee"),
+            Some(row) => row.included = included,
             None => debug!("set_included: ignoring out of range row {index}"),
         }
     }
 
     /// Appends an included manual row with an empty label, for the user to type a name.
     ///
-    /// Edge cases: nothing is added when the editor already holds [`MAX_ROWS`] rows.
+    /// Edge cases: nothing is added when the draft already holds [`MAX_ROWS`] rows.
     pub fn add_manual_row(&mut self) {
         if self.rows.len() >= MAX_ROWS {
             debug!("add_manual_row: already {MAX_ROWS} rows");
@@ -153,39 +201,29 @@ impl ParticipantEditor {
         }
     }
 
-    /// Request that saves the rows as the template of the meeting title.
+    /// People to save as the preference of `meeting`: see [`preference_people`], with the
+    /// preference already saved on `meeting` as the carried-over renames.
     ///
-    /// The entries come from [`editor_to_template`]: included rows share one weight, excluded
-    /// rows weigh 0 and blank manual rows are left out.
-    pub fn save_request(&self) -> PutTemplateRequest {
-        PutTemplateRequest {
-            meeting_title: self.meeting.title.clone(),
-            entries: editor_to_template(&self.rows),
-        }
+    /// Edge cases: an empty result means there is nothing to save; the server rejects it.
+    pub fn preference_people(&self, meeting: &Meeting) -> Vec<PreferencePerson> {
+        preference_people(&self.rows, &participants(meeting), saved_people(meeting))
     }
 
-    /// Names to start the meeting with: the labels of the included rows, trimmed, in row order.
+    /// Names to start the meeting with: see [`start_names`].
     ///
-    /// Edge cases: rows with a blank label are skipped, so a meeting without usable rows gives
-    /// an empty list. Two rows with the same name give the name twice.
+    /// Edge cases: rows with a blank label are skipped, so a draft without usable rows gives an
+    /// empty list. Two rows with the same name give the name twice.
     pub fn start_names(&self) -> Vec<String> {
-        let mut names = Vec::with_capacity(self.rows.len());
-        for row in &self.rows {
-            let name = row.label.trim();
-            if row.included && !name.is_empty() {
-                names.push(name.to_string());
-            }
-        }
-        names
+        start_names(&self.rows)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::tests::blank_meeting;
     use chrono::{DateTime, FixedOffset, TimeZone};
-    use schisaciaccole_core::api::{Attendee, EntryKind, PlanEntry, PlanSource, ResponseStatus};
-    use schisaciaccole_core::{FREE_TIME_LABEL, PARTICIPANT_WEIGHT_SECS};
+    use schisaciaccole_core::api::{Attendee, ResponseStatus};
 
     fn at(hour: u32, minute: u32) -> DateTime<FixedOffset> {
         FixedOffset::east_opt(0)
@@ -206,60 +244,48 @@ mod tests {
 
     /// One hour meeting "Daily" with the given attendees.
     fn meeting(names: &[&str]) -> Meeting {
-        Meeting {
-            event_id: "ev1".to_string(),
-            title: "Daily".to_string(),
-            start: at(9, 0),
-            end: at(10, 0),
-            attendees: names.iter().map(|name| attendee(name)).collect(),
-            attendees_omitted: false,
-            participant_resolution: Default::default(),
-            recurring_event_id: None,
-            has_template: false,
-            preference: None,
+        let mut meeting = blank_meeting("ev1", "Daily", at(9, 0), at(10, 0));
+        meeting.attendees = names.iter().map(|name| attendee(name)).collect();
+        meeting
+    }
+
+    fn preference(people: Vec<PreferencePerson>) -> MeetingPreference {
+        MeetingPreference {
+            id: "p1".to_string(),
+            meeting_title: "Daily".to_string(),
+            people,
         }
     }
 
-    /// Editor on the calendar participants Ann, Bob and Carl, all included.
-    fn calendar_editor() -> ParticipantEditor {
-        let mut editor = ParticipantEditor::new(meeting(&["Carl", "Ann", "Bob"]));
-        editor.reset_participants();
-        editor
-    }
-
-    fn labels(editor: &ParticipantEditor) -> Vec<&str> {
-        editor.rows().iter().map(|row| row.label.as_str()).collect()
-    }
-
-    fn plan_entry(kind: EntryKind, label: &str, weight: u64) -> PlanEntry {
-        PlanEntry {
-            kind,
-            email: match kind {
-                EntryKind::Attendee => Some(format!("{}@x.it", label.to_lowercase())),
-                _ => None,
-            },
+    fn rename(email: &str, label: &str) -> PreferencePerson {
+        PreferencePerson {
+            kind: PersonKind::Attendee,
+            email: Some(email.to_string()),
             label: label.to_string(),
-            weight,
         }
     }
 
-    fn plan_of(entries: Vec<PlanEntry>) -> SlotPlan {
-        SlotPlan {
-            attendees: None,
-            attendees_omitted: false,
-            participant_resolution: Default::default(),
-            source: PlanSource::Template,
-            template_id: Some("t1".to_string()),
-            entries,
+    fn manual(label: &str) -> PreferencePerson {
+        PreferencePerson {
+            kind: PersonKind::Manual,
+            email: None,
+            label: label.to_string(),
         }
+    }
+
+    /// Draft on the calendar participants Ann, Bob and Carl, all included.
+    fn calendar_draft() -> Draft {
+        Draft::from_meeting(&meeting(&["Carl", "Ann", "Bob"]))
+    }
+
+    fn labels(draft: &Draft) -> Vec<&str> {
+        draft.rows().iter().map(|row| row.label.as_str()).collect()
     }
 
     #[test]
-    fn new_editor_is_empty_with_the_nominal_duration() {
+    fn new_editor_has_the_nominal_duration() {
         let editor = ParticipantEditor::new(meeting(&["Ann"]));
 
-        assert!(editor.rows().is_empty());
-        assert_eq!(editor.template_id(), None);
         assert_eq!(editor.duration_minutes(), 60);
         assert_eq!(editor.event_id(), "ev1");
     }
@@ -285,127 +311,192 @@ mod tests {
     }
 
     #[test]
-    fn reset_lists_every_calendar_participant_included() {
-        let editor = calendar_editor();
+    fn replacing_the_meeting_updates_the_duration() {
+        let mut editor = ParticipantEditor::new(meeting(&["Ann"]));
+        let mut longer = meeting(&["Ann"]);
+        longer.end = at(11, 0);
 
-        assert_eq!(labels(&editor), vec!["Ann", "Bob", "Carl"]);
-        assert!(editor.rows().iter().all(|row| row.included));
+        editor.replace_meeting(longer);
+
+        assert_eq!(editor.duration_minutes(), 120);
+    }
+
+    #[test]
+    fn draft_lists_every_calendar_participant_included() {
+        let draft = calendar_draft();
+
+        assert_eq!(labels(&draft), vec!["Ann", "Bob", "Carl"]);
+        assert!(draft.rows().iter().all(|row| row.included));
+    }
+
+    #[test]
+    fn draft_applies_the_preference_renames_and_manual_people() {
+        let mut talk = meeting(&["Ann", "Bob"]);
+        talk.preference = Some(preference(vec![
+            rename("bob@x.it", "Roberto"),
+            manual("Marco"),
+        ]));
+
+        let draft = Draft::from_meeting(&talk);
+
+        assert_eq!(labels(&draft), vec!["Ann", "Roberto", "Marco"]);
+        assert!(draft.rows().iter().all(|row| row.included));
+    }
+
+    #[test]
+    fn draft_of_a_complete_list_is_complete() {
+        assert!(calendar_draft().is_complete());
+    }
+
+    #[test]
+    fn draft_of_an_incomplete_list_is_not_complete() {
+        let mut talk = meeting(&["Ann"]);
+        talk.participant_resolution.incomplete = true;
+
+        assert!(!Draft::from_meeting(&talk).is_complete());
     }
 
     #[test]
     fn reset_restores_excluded_participants() {
-        let mut editor = calendar_editor();
-        editor.set_included(1, false);
+        let talk = meeting(&["Carl", "Ann", "Bob"]);
+        let mut draft = Draft::from_meeting(&talk);
+        draft.set_included(1, false);
 
-        editor.reset_participants();
+        draft.reset(&talk);
 
-        assert!(editor.rows().iter().all(|row| row.included));
+        assert!(draft.rows().iter().all(|row| row.included));
     }
 
     #[test]
     fn reset_drops_rows_added_by_hand() {
-        let mut editor = calendar_editor();
-        editor.add_manual_row();
+        let talk = meeting(&["Carl", "Ann", "Bob"]);
+        let mut draft = Draft::from_meeting(&talk);
+        draft.add_manual_row();
 
-        editor.reset_participants();
+        draft.reset(&talk);
 
-        assert_eq!(labels(&editor), vec!["Ann", "Bob", "Carl"]);
+        assert_eq!(labels(&draft), vec!["Ann", "Bob", "Carl"]);
     }
 
     #[test]
-    fn reset_keeps_the_template_id() {
-        let mut editor = calendar_editor();
-        editor.set_template_id(Some("t1".to_string()));
+    fn reset_takes_the_completeness_of_the_meeting() {
+        let mut talk = meeting(&["Ann"]);
+        let mut draft = Draft::from_meeting(&talk);
+        talk.attendees_omitted = true;
 
-        editor.reset_participants();
+        draft.reset(&talk);
 
-        assert_eq!(editor.template_id(), Some("t1"));
+        assert!(!draft.is_complete());
     }
 
     #[test]
-    fn loading_a_plan_fills_rows_and_template_id() {
-        let mut editor = ParticipantEditor::new(meeting(&["Ann", "Bob"]));
-        let plan = plan_of(vec![
-            plan_entry(EntryKind::Attendee, "Ann", 2),
-            plan_entry(EntryKind::Attendee, "Bob", 0),
-        ]);
+    fn merge_adds_a_new_attendee_included_and_drops_a_removed_one() {
+        let mut draft = Draft::from_meeting(&meeting(&["Ann", "Bob", "Carl"]));
+        draft.set_included(1, false);
+        draft.add_manual_row();
+        draft.set_label(3, "Marco");
 
-        editor.load_plan(&plan);
+        draft.merge_fresh(&meeting(&["Ann", "Bob", "Dario"]));
 
-        assert_eq!(labels(&editor), vec!["Ann", "Bob"]);
-        assert!(editor.rows()[0].included);
-        assert!(!editor.rows()[1].included);
-        assert_eq!(editor.template_id(), Some("t1"));
+        assert_eq!(labels(&draft), vec!["Ann", "Bob", "Dario", "Marco"]);
+        let included: Vec<bool> = draft.rows().iter().map(|row| row.included).collect();
+        assert_eq!(included, vec![true, false, true, true]);
     }
 
     #[test]
-    fn loading_a_plan_skips_free_time() {
-        let mut editor = ParticipantEditor::new(meeting(&["Ann"]));
-        let plan = plan_of(vec![
-            plan_entry(EntryKind::Attendee, "Ann", 2),
-            plan_entry(EntryKind::FreeTime, FREE_TIME_LABEL, 1),
-        ]);
+    fn merge_of_an_incomplete_list_keeps_a_complete_draft() {
+        let mut draft = Draft::from_meeting(&meeting(&["Ann", "Bob"]));
+        draft.set_included(0, false);
+        let before = draft.clone();
+        let mut fresh = meeting(&["Dario"]);
+        fresh.participant_resolution.incomplete = true;
 
-        editor.load_plan(&plan);
+        draft.merge_fresh(&fresh);
 
-        assert_eq!(labels(&editor), vec!["Ann"]);
+        assert_eq!(draft, before);
+    }
+
+    #[test]
+    fn merge_of_a_complete_list_replaces_an_incomplete_draft() {
+        let mut stale = meeting(&["Group"]);
+        stale.participant_resolution.incomplete = true;
+        let mut draft = Draft::from_meeting(&stale);
+
+        draft.merge_fresh(&meeting(&["Ann", "Bob"]));
+
+        assert_eq!(labels(&draft), vec!["Ann", "Bob"]);
+        assert!(draft.is_complete());
+    }
+
+    #[test]
+    fn merge_of_an_incomplete_list_merges_into_an_incomplete_draft() {
+        let mut stale = meeting(&["Group"]);
+        stale.participant_resolution.incomplete = true;
+        let mut draft = Draft::from_meeting(&stale);
+        let mut fresh = meeting(&["Other"]);
+        fresh.attendees_omitted = true;
+
+        draft.merge_fresh(&fresh);
+
+        assert_eq!(labels(&draft), vec!["Other"]);
+        assert!(!draft.is_complete());
     }
 
     #[test]
     fn set_label_keeps_the_text_as_typed() {
-        let mut editor = calendar_editor();
+        let mut draft = calendar_draft();
 
-        editor.set_label(1, " Roberto ");
+        draft.set_label(1, " Roberto ");
 
-        assert_eq!(editor.rows()[1].label, " Roberto ");
+        assert_eq!(draft.rows()[1].label, " Roberto ");
     }
 
     #[test]
     fn set_label_out_of_range_changes_nothing() {
-        let mut editor = calendar_editor();
+        let mut draft = calendar_draft();
 
-        editor.set_label(3, "X");
+        draft.set_label(3, "X");
 
-        assert_eq!(labels(&editor), vec!["Ann", "Bob", "Carl"]);
+        assert_eq!(labels(&draft), vec!["Ann", "Bob", "Carl"]);
     }
 
     #[test]
     fn attendee_can_be_excluded_and_included_again() {
-        let mut editor = calendar_editor();
+        let mut draft = calendar_draft();
 
-        editor.set_included(1, false);
-        assert!(!editor.rows()[1].included);
+        draft.set_included(1, false);
+        assert!(!draft.rows()[1].included);
 
-        editor.set_included(1, true);
-        assert!(editor.rows()[1].included);
+        draft.set_included(1, true);
+        assert!(draft.rows()[1].included);
     }
 
     #[test]
-    fn manual_row_cannot_be_excluded() {
-        let mut editor = calendar_editor();
-        editor.add_manual_row();
+    fn manual_row_can_be_excluded() {
+        let mut draft = calendar_draft();
+        draft.add_manual_row();
 
-        editor.set_included(3, false);
+        draft.set_included(3, false);
 
-        assert!(editor.rows()[3].included);
+        assert!(!draft.rows()[3].included);
     }
 
     #[test]
     fn set_included_out_of_range_changes_nothing() {
-        let mut editor = calendar_editor();
+        let mut draft = calendar_draft();
 
-        editor.set_included(3, false);
+        draft.set_included(3, false);
 
-        assert!(editor.rows().iter().all(|row| row.included));
+        assert!(draft.rows().iter().all(|row| row.included));
     }
 
     #[test]
     fn added_row_is_an_included_manual_row_with_an_empty_name() {
-        let mut editor = calendar_editor();
+        let mut draft = calendar_draft();
 
-        editor.add_manual_row();
+        draft.add_manual_row();
 
-        let added = editor.rows().last().unwrap();
+        let added = draft.rows().last().unwrap();
         assert_eq!(added.kind, PersonKind::Manual);
         assert_eq!(added.label, "");
         assert!(added.included);
@@ -414,174 +505,106 @@ mod tests {
 
     #[test]
     fn rows_stop_at_the_limit() {
-        let mut editor = calendar_editor();
+        let mut draft = calendar_draft();
 
         for _ in 0..MAX_ROWS {
-            editor.add_manual_row();
+            draft.add_manual_row();
         }
 
-        assert_eq!(editor.rows().len(), MAX_ROWS);
+        assert_eq!(draft.rows().len(), MAX_ROWS);
     }
 
     #[test]
     fn manual_row_can_be_removed() {
-        let mut editor = calendar_editor();
-        editor.add_manual_row();
+        let mut draft = calendar_draft();
+        draft.add_manual_row();
 
-        editor.remove_row(3);
+        draft.remove_row(3);
 
-        assert_eq!(labels(&editor), vec!["Ann", "Bob", "Carl"]);
+        assert_eq!(labels(&draft), vec!["Ann", "Bob", "Carl"]);
     }
 
     #[test]
     fn attendee_row_cannot_be_removed() {
-        let mut editor = calendar_editor();
+        let mut draft = calendar_draft();
 
-        editor.remove_row(0);
+        draft.remove_row(0);
 
-        assert_eq!(labels(&editor), vec!["Ann", "Bob", "Carl"]);
+        assert_eq!(labels(&draft), vec!["Ann", "Bob", "Carl"]);
     }
 
     #[test]
     fn remove_out_of_range_changes_nothing() {
-        let mut editor = calendar_editor();
+        let mut draft = calendar_draft();
 
-        editor.remove_row(3);
+        draft.remove_row(3);
 
-        assert_eq!(editor.rows().len(), 3);
+        assert_eq!(draft.rows().len(), 3);
     }
 
     #[test]
-    fn save_request_has_the_title_and_a_weight_per_row() {
-        let mut editor = calendar_editor();
-        editor.set_included(1, false);
+    fn preference_people_has_renames_and_named_manual_rows_not_exclusions() {
+        let talk = meeting(&["Carl", "Ann", "Bob"]);
+        let mut draft = Draft::from_meeting(&talk);
+        draft.set_label(1, "Roberto");
+        draft.set_included(0, false);
+        draft.add_manual_row();
+        draft.set_label(3, " Dario ");
+        draft.add_manual_row();
 
-        let request = editor.save_request();
+        let people = draft.preference_people(&talk);
 
-        assert_eq!(request.meeting_title, "Daily");
-        let weights: Vec<u32> = request.entries.iter().map(|e| e.weight_secs).collect();
-        assert_eq!(
-            weights,
-            vec![PARTICIPANT_WEIGHT_SECS, 0, PARTICIPANT_WEIGHT_SECS]
-        );
+        assert_eq!(people, vec![rename("bob@x.it", "Roberto"), manual("Dario")]);
     }
 
     #[test]
-    fn save_request_has_no_free_time_entry() {
-        let editor = calendar_editor();
-
-        let request = editor.save_request();
+    fn preference_people_of_untouched_calendar_rows_is_empty() {
+        let talk = meeting(&["Ann", "Bob"]);
 
         assert!(
-            request
-                .entries
-                .iter()
-                .all(|entry| entry.kind == EntryKind::Attendee)
+            Draft::from_meeting(&talk)
+                .preference_people(&talk)
+                .is_empty()
         );
-    }
-
-    #[test]
-    fn save_request_skips_a_blank_manual_row() {
-        let mut editor = calendar_editor();
-        editor.add_manual_row();
-
-        let request = editor.save_request();
-
-        assert_eq!(request.entries.len(), 3);
-    }
-
-    #[test]
-    fn save_request_keeps_a_named_manual_row() {
-        let mut editor = calendar_editor();
-        editor.add_manual_row();
-        editor.set_label(3, " Dario ");
-
-        let request = editor.save_request();
-
-        let last = request.entries.last().unwrap();
-        assert_eq!(last.kind, EntryKind::Manual);
-        assert_eq!(last.label, "Dario");
     }
 
     #[test]
     fn start_names_are_the_included_rows_in_order() {
-        let editor = calendar_editor();
-
-        assert_eq!(editor.start_names(), vec!["Ann", "Bob", "Carl"]);
+        assert_eq!(calendar_draft().start_names(), vec!["Ann", "Bob", "Carl"]);
     }
 
     #[test]
-    fn start_names_skip_excluded_rows() {
-        let mut editor = calendar_editor();
-        editor.set_included(1, false);
+    fn start_names_skip_excluded_rows_manual_ones_included() {
+        let mut draft = calendar_draft();
+        draft.add_manual_row();
+        draft.set_label(3, "Dario");
+        draft.set_included(1, false);
+        draft.set_included(3, false);
 
-        assert_eq!(editor.start_names(), vec!["Ann", "Carl"]);
+        assert_eq!(draft.start_names(), vec!["Ann", "Carl"]);
     }
 
     #[test]
     fn start_names_skip_blank_rows() {
-        let mut editor = calendar_editor();
-        editor.add_manual_row();
-        editor.add_manual_row();
-        editor.set_label(4, "   ");
+        let mut draft = calendar_draft();
+        draft.add_manual_row();
+        draft.set_label(3, "   ");
 
-        assert_eq!(editor.start_names(), vec!["Ann", "Bob", "Carl"]);
+        assert_eq!(draft.start_names(), vec!["Ann", "Bob", "Carl"]);
     }
 
     #[test]
     fn start_names_are_trimmed_and_follow_the_row_order() {
-        let mut editor = calendar_editor();
-        editor.add_manual_row();
-        editor.set_label(3, " Dario ");
-        editor.set_label(0, "Anna");
+        let mut draft = calendar_draft();
+        draft.add_manual_row();
+        draft.set_label(3, " Dario ");
+        draft.set_label(0, "Anna");
 
-        assert_eq!(editor.start_names(), vec!["Anna", "Bob", "Carl", "Dario"]);
+        assert_eq!(draft.start_names(), vec!["Anna", "Bob", "Carl", "Dario"]);
     }
 
     #[test]
-    fn start_names_of_an_empty_editor_are_empty() {
-        let editor = ParticipantEditor::new(meeting(&["Ann"]));
-
-        assert!(editor.start_names().is_empty());
-    }
-
-    #[test]
-    fn fresh_empty_group_stays_empty_on_reset() {
-        let mut editor = calendar_editor();
-        let plan = SlotPlan {
-            source: PlanSource::Equal,
-            template_id: None,
-            entries: Vec::new(),
-            attendees: Some(Vec::new()),
-            attendees_omitted: false,
-            participant_resolution: Default::default(),
-        };
-
-        editor.load_plan(&plan);
-        editor.reset_participants();
-
-        assert!(editor.rows().is_empty());
-        assert!(editor.meeting().attendees.is_empty());
-    }
-
-    #[test]
-    fn legacy_plan_preserves_participants_and_prior_warning() {
-        let mut meeting = meeting(&["Ann"]);
-        meeting.attendees_omitted = true;
-        let mut editor = ParticipantEditor::new(meeting);
-        let plan = SlotPlan {
-            source: PlanSource::Equal,
-            template_id: None,
-            entries: Vec::new(),
-            attendees: None,
-            attendees_omitted: false,
-            participant_resolution: Default::default(),
-        };
-
-        editor.load_plan(&plan);
-        editor.reset_participants();
-
-        assert_eq!(labels(&editor), vec!["Ann"]);
-        assert!(editor.meeting().attendees_omitted);
+    fn default_rows_of_a_meeting_without_participants_are_empty() {
+        assert!(default_rows(&meeting(&[])).is_empty());
     }
 }

@@ -15,13 +15,13 @@ use std::time::Duration;
 
 use chrono::{DateTime, FixedOffset, Local, TimeZone};
 use log::{debug, info, warn};
-use schisaciaccole_core::api::{Me, Meeting, SlotPlan, Template};
+use schisaciaccole_core::api::{Me, Meeting, MeetingPreference};
 
 use crate::backend::{BackendClient, BackendError};
 use crate::login::{self, LoginError, LoopbackServer};
 use crate::pkce;
 use crate::session_store::{self, KeyringStore, MemoryStore, SessionStore};
-use crate::state::{AppState, OFFLINE_NOTICE, TemplateDelete, TemplateSave};
+use crate::state::{AppState, OFFLINE_NOTICE, PreferenceDelete, PreferenceSave};
 
 /// How long the login waits for the browser to come back.
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(5 * 60);
@@ -50,31 +50,22 @@ pub enum AppEvent {
         /// Meetings from now to the end of the day, or why they could not be fetched.
         result: Result<Vec<Meeting>, BackendError>,
     },
-    /// The slot plan fetch `request` ended.
-    PlanLoaded {
-        /// Id given by [`Session::spawn_plan_fetch`].
-        request: u64,
-        /// Meeting the plan was asked for.
-        event_id: String,
-        /// The plan, or why it could not be fetched.
-        result: Result<SlotPlan, BackendError>,
-    },
-    /// The template save `request` ended.
-    TemplateSaved {
-        /// Id given by [`Session::spawn_template_save`].
+    /// The preference save `request` ended.
+    PreferenceSaved {
+        /// Id given by [`Session::spawn_preference_save`].
         request: u64,
         /// Meeting of the editor that asked for the save.
         event_id: String,
-        /// The saved template, or why it could not be saved.
-        result: Result<Template, BackendError>,
+        /// The saved preference, or why it could not be saved.
+        result: Result<MeetingPreference, BackendError>,
     },
-    /// The template deletion `request` ended.
-    TemplateDeleted {
-        /// Id given by [`Session::spawn_template_delete`].
+    /// The preference deletion `request` ended.
+    PreferenceDeleted {
+        /// Id given by [`Session::spawn_preference_delete`].
         request: u64,
         /// Meeting of the editor that asked for the deletion.
         event_id: String,
-        /// Nothing, or why the template could not be deleted.
+        /// Nothing, or why the preference could not be deleted.
         result: Result<(), BackendError>,
     },
 }
@@ -177,8 +168,8 @@ pub struct Session {
     next_attempt: Cell<u64>,
     /// Id of the latest meetings fetch; the results of older ones are ignored.
     meetings_request: Cell<u64>,
-    editor_plan_request: Cell<u64>,
-    template_request: Cell<u64>,
+    /// Id of the latest preference save or deletion; the results of older ones are ignored.
+    preference_request: Cell<u64>,
 }
 
 impl Session {
@@ -204,8 +195,7 @@ impl Session {
             login: RefCell::new(None),
             next_attempt: Cell::new(0),
             meetings_request: Cell::new(0),
-            editor_plan_request: Cell::new(0),
-            template_request: Cell::new(0),
+            preference_request: Cell::new(0),
         })
     }
 
@@ -309,67 +299,30 @@ impl Session {
         self.meetings_request.get() == request
     }
 
-    /// Fetches the slot plan of meeting `event_id` on a worker and posts
-    /// [`AppEvent::PlanLoaded`].
+    /// Saves a meeting preference on a worker and posts [`AppEvent::PreferenceSaved`].
     ///
-    /// Each call supersedes the previous editor plan fetch: see
-    /// [`Session::is_current_plan_request`]. When the worker cannot be started a generic failure
-    /// is posted.
-    pub fn spawn_plan_fetch(&self, event_id: &str) {
-        let counter = &self.editor_plan_request;
-        let request = counter.get().wrapping_add(1);
-        counter.set(request);
-
-        let client = self.client.clone();
-        let worker_event_id = event_id.to_string();
-        let spawned = spawn("plan", move || {
-            let result = lock(&client).fetch_plan(&worker_event_id);
-            post(AppEvent::PlanLoaded {
-                request,
-                event_id: worker_event_id,
-                result,
-            });
-        });
-        if let Err(e) = spawned {
-            warn!("Cannot start the plan fetch: {e}");
-            post(AppEvent::PlanLoaded {
-                request,
-                event_id: event_id.to_string(),
-                result: Err(BackendError::Decode),
-            });
-        }
-    }
-
-    /// True when `request` is the latest editor plan fetch, so its result is still
-    /// wanted.
-    pub fn is_current_plan_request(&self, request: u64) -> bool {
-        self.editor_plan_request.get() == request
-    }
-
-    /// Saves a slot template on a worker and posts [`AppEvent::TemplateSaved`].
-    ///
-    /// Each template save or deletion supersedes the previous one: see
-    /// [`Session::is_current_template_request`]. When the worker cannot be started a generic
+    /// Each preference save or deletion supersedes the previous one: see
+    /// [`Session::is_current_preference_request`]. When the worker cannot be started a generic
     /// failure is posted.
-    pub fn spawn_template_save(&self, save: TemplateSave) {
-        let request = self.next_template_request();
+    pub fn spawn_preference_save(&self, save: PreferenceSave) {
+        let request = self.next_preference_request();
         let client = self.client.clone();
-        let TemplateSave {
+        let PreferenceSave {
             event_id,
             request: body,
         } = save;
         let worker_event_id = event_id.clone();
-        let spawned = spawn("template-save", move || {
-            let result = lock(&client).save_template(&body);
-            post(AppEvent::TemplateSaved {
+        let spawned = spawn("preference-save", move || {
+            let result = lock(&client).put_preference(&body);
+            post(AppEvent::PreferenceSaved {
                 request,
                 event_id: worker_event_id,
                 result,
             });
         });
         if let Err(e) = spawned {
-            warn!("Cannot start the template save: {e}");
-            post(AppEvent::TemplateSaved {
+            warn!("Cannot start the preference save: {e}");
+            post(AppEvent::PreferenceSaved {
                 request,
                 event_id,
                 result: Err(BackendError::Decode),
@@ -377,30 +330,30 @@ impl Session {
         }
     }
 
-    /// Deletes a slot template on a worker and posts [`AppEvent::TemplateDeleted`].
+    /// Deletes a meeting preference on a worker and posts [`AppEvent::PreferenceDeleted`].
     ///
-    /// Each template save or deletion supersedes the previous one: see
-    /// [`Session::is_current_template_request`]. When the worker cannot be started a generic
+    /// Each preference save or deletion supersedes the previous one: see
+    /// [`Session::is_current_preference_request`]. When the worker cannot be started a generic
     /// failure is posted.
-    pub fn spawn_template_delete(&self, delete: TemplateDelete) {
-        let request = self.next_template_request();
+    pub fn spawn_preference_delete(&self, delete: PreferenceDelete) {
+        let request = self.next_preference_request();
         let client = self.client.clone();
-        let TemplateDelete {
+        let PreferenceDelete {
             event_id,
-            template_id,
+            preference_id,
         } = delete;
         let worker_event_id = event_id.clone();
-        let spawned = spawn("template-delete", move || {
-            let result = lock(&client).delete_template(&template_id);
-            post(AppEvent::TemplateDeleted {
+        let spawned = spawn("preference-delete", move || {
+            let result = lock(&client).delete_preference(&preference_id);
+            post(AppEvent::PreferenceDeleted {
                 request,
                 event_id: worker_event_id,
                 result,
             });
         });
         if let Err(e) = spawned {
-            warn!("Cannot start the template deletion: {e}");
-            post(AppEvent::TemplateDeleted {
+            warn!("Cannot start the preference deletion: {e}");
+            post(AppEvent::PreferenceDeleted {
                 request,
                 event_id,
                 result: Err(BackendError::Decode),
@@ -408,17 +361,17 @@ impl Session {
         }
     }
 
-    /// Takes the id of a new template request.
-    fn next_template_request(&self) -> u64 {
-        let request = self.template_request.get().wrapping_add(1);
-        self.template_request.set(request);
+    /// Takes the id of a new preference request.
+    fn next_preference_request(&self) -> u64 {
+        let request = self.preference_request.get().wrapping_add(1);
+        self.preference_request.set(request);
         request
     }
 
-    /// True when `request` is the latest template save or deletion, so its result is still
+    /// True when `request` is the latest preference save or deletion, so its result is still
     /// wanted.
-    pub fn is_current_template_request(&self, request: u64) -> bool {
-        self.template_request.get() == request
+    pub fn is_current_preference_request(&self, request: u64) -> bool {
+        self.preference_request.get() == request
     }
 
     /// Revokes the session on a worker and posts [`AppEvent::LoggedOut`].
@@ -483,42 +436,27 @@ pub fn apply_event(state: &mut AppState, session: &Session, event: AppEvent) {
                 }
             }
         }
-        AppEvent::PlanLoaded {
+        AppEvent::PreferenceSaved {
             request,
             event_id,
             result,
         } => {
-            if !session.is_current_plan_request(request) {
-                debug!("Ignoring the result of editor plan request {request}");
+            if !session.is_current_preference_request(request) {
+                debug!("Ignoring the result of preference request {request}");
                 return;
             }
-            state.on_editor_plan_loaded(&event_id, result);
+            state.on_preference_saved(&event_id, result);
         }
-        AppEvent::TemplateSaved {
+        AppEvent::PreferenceDeleted {
             request,
             event_id,
             result,
         } => {
-            if !session.is_current_template_request(request) {
-                debug!("Ignoring the result of template request {request}");
+            if !session.is_current_preference_request(request) {
+                debug!("Ignoring the result of preference request {request}");
                 return;
             }
-            if state.on_template_saved(&event_id, result) {
-                session.spawn_meetings_fetch();
-            }
-        }
-        AppEvent::TemplateDeleted {
-            request,
-            event_id,
-            result,
-        } => {
-            if !session.is_current_template_request(request) {
-                debug!("Ignoring the result of template request {request}");
-                return;
-            }
-            if state.on_template_deleted(&event_id, result) {
-                session.spawn_meetings_fetch();
-            }
+            state.on_preference_deleted(&event_id, result);
         }
     }
 }
@@ -614,8 +552,7 @@ mod tests {
             login: RefCell::new(None),
             next_attempt: Cell::new(0),
             meetings_request: Cell::new(0),
-            editor_plan_request: Cell::new(0),
-            template_request: Cell::new(0),
+            preference_request: Cell::new(0),
         }
     }
 
@@ -920,55 +857,14 @@ mod tests {
     }
 
     #[test]
-    fn stale_editor_plan_does_not_finish_loading() {
+    fn stale_editor_preference_result_does_not_end_session() {
         let session = offline_session();
-        session.editor_plan_request.set(2);
-        let mut state = signed_in_state();
-        let now = Local::now().fixed_offset();
-        state.on_meetings_loaded(vec![Meeting {
-            event_id: "talk".into(),
-            recurring_event_id: None,
-            has_template: false,
-            preference: None,
-            title: "Talk".into(),
-            start: now,
-            end: now + chrono::Duration::hours(1),
-            attendees: Vec::new(),
-            attendees_omitted: false,
-            participant_resolution: Default::default(),
-        }]);
-        state.open_editor(0);
-        apply_event(
-            &mut state,
-            &session,
-            AppEvent::PlanLoaded {
-                request: 1,
-                event_id: "talk".into(),
-                result: Err(BackendError::Unreachable),
-            },
-        );
-        assert!(state.start_template_save().is_none());
-        apply_event(
-            &mut state,
-            &session,
-            AppEvent::PlanLoaded {
-                request: 2,
-                event_id: "talk".into(),
-                result: Err(BackendError::Unreachable),
-            },
-        );
-        assert!(state.start_template_save().is_some());
-    }
-
-    #[test]
-    fn stale_editor_template_result_does_not_end_session() {
-        let session = offline_session();
-        session.template_request.set(2);
+        session.preference_request.set(2);
         let mut state = signed_in_state();
         apply_event(
             &mut state,
             &session,
-            AppEvent::TemplateSaved {
+            AppEvent::PreferenceSaved {
                 request: 1,
                 event_id: "talk".into(),
                 result: Err(BackendError::NotLoggedIn),
