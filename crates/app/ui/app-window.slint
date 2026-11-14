@@ -3,6 +3,7 @@ import { ListView, AboutSlint } from "std-widgets.slint";
 import { AppTheme, AppText, PageTitle, PageSub, PillButton, PillKind, PlayIcon, StopIcon, PauseIcon, SkipIcon, HomeIcon, PeopleIcon, EyeOffIcon, ChevronIcon, StepIcon, DotsIcon, LogoutIcon, LogoMark, FadeFill, FocusRing, AppMotion, MotionProgress } from "theme.slint";
 
 import "../assets/fonts/MomoTrustDisplay/MomoTrustDisplay-Regular.ttf";
+import "../assets/fonts/Manrope/static/Manrope-Bold.ttf";
 
 export enum Page { ManualPage, TimerPage, TimerFinished, LoadingPage, LoginPage, MeetingsPage, EditorPage }
 export enum StopType { TimerFinished, UserStopped }
@@ -916,6 +917,9 @@ component MeetingsPage inherits Rectangle {
 }
 
 // One fixed-width cell of the countdown, so the digits never shift while they tick.
+// Text clips to its box, so a cell must stay wider than its glyph. Manrope Bold digits are at
+// most 0.52 em wide, which leaves a gap inside the 0.6 em cell. The colon is raised to the
+// middle of the digit height.
 component ClockCell inherits Rectangle {
     in property <string> glyph;
     in property <bool> colon;
@@ -926,9 +930,11 @@ component ClockCell inherits Rectangle {
     Text {
         width: parent.width;
         height: parent.height;
+        y: root.colon ? -root.size * 0.1 : 0px;
         text: root.glyph;
+        font-family: "Manrope";
         font-size: root.size;
-        font-weight: 400;
+        font-weight: 700;
         color: root.tint;
         horizontal-alignment: center;
         vertical-alignment: center;
