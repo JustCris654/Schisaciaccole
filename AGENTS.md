@@ -44,17 +44,6 @@ a task as done before its output has been validated. The orchestrator commits af
   (`M0`, `M1`, `T3`, …): describe the change itself.
 - Push only when the developer asks.
 
-## Rust glossaries
-
-Each crate has a glossary file at `glossary/<crate>.md`; `glossary/Glossario.md` is the index. Each
-glossary file has one `## <file>` table per source file (`Nome | Tipo | Riga | Descrizione`) listing
-every fn, method, struct, enum, trait, type alias, const, macro and trait impl of the crate.
-Excluded: tests, inherent `impl` blocks (their methods are listed), code generated inside `quote!`.
-When a change adds, removes, renames or moves a Rust item in a documented crate — line shifts from
-edits above an item included — update the affected rows and the commit named in the file's lead.
-Check every `Riga` against the source (`sed -n '<line>p' <file>`). A new Rust crate gets its own
-glossary file in the same format and an entry in `glossary/Glossario.md`.
-
 ## Rust coding guidelines
 
 **Style**
@@ -97,6 +86,10 @@ glossary file in the same format and an entry in `glossary/Glossario.md`.
 - Atomics for flags and counters (`AtomicBool`, `AtomicUsize`), not a `Mutex`; choose the memory ordering on purpose.
 - When more than one lock is taken, take them always in the same order.
 - `std::sync::LazyLock` / `OnceLock` instead of `lazy_static!` / `once_cell`; `thiserror` for library/service errors and `anyhow` for binaries.
+
+## Exploring the code
+
+The graphify skill is available and is how to explore this codebase: architecture, how files relate, and where a behavior lives. Follow that skill before searching or reading source to answer those questions. When `graphify-out/graph.json` exists, query the graph first, then verify what it cites against the current files. The graph can be stale; rebuild it only when the task is about the graph.
 
 ## Project agent context
 
