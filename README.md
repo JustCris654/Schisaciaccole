@@ -225,17 +225,73 @@ migrations at startup, and needs the Google OpenID discovery document
 A real login needs a Google OAuth client. Create a project inside the company
 Google Cloud organization, then:
 
-- Enable the **Google Calendar API**.
+- Enable the **Google Calendar API** and **Cloud Identity API**.
 - Configure the **OAuth consent screen** with user type **Internal** and the scopes
-  `openid`, `email`, `profile` and
-  `https://www.googleapis.com/auth/calendar.events.owned.readonly`. If that scope
-  is not enough, use `https://www.googleapis.com/auth/calendar.events.readonly`
+  `openid`, `email`, `profile`,
+  `https://www.googleapis.com/auth/cloud-identity.groups.readonly` and
+  `https://www.googleapis.com/auth/calendar.events.owned.readonly`. If the Calendar
+  scope is not enough, use `https://www.googleapis.com/auth/calendar.events.readonly`
   instead and set `GOOGLE_CALENDAR_SCOPE` to it.
 - Create an **OAuth client ID** of type **Web application** with the authorized
   redirect URI `<PUBLIC_BASE_URL>/auth/google/callback` (locally:
   `http://localhost:8080/auth/google/callback`).
 - Put the client ID and secret in `.env` as `GOOGLE_CLIENT_ID` and
   `GOOGLE_CLIENT_SECRET`, and set `ALLOWED_HD` to the company domain.
+
+### Google Groups participants
+
+Meeting lists and the turn editor resolve invited Google Groups, including nested
+groups, using the signed-in user's Cloud Identity access. Enable the Cloud
+Identity API in the OAuth project and include the read-only groups scope above.
+The scope permits reading accessible groups and memberships; the user's domain,
+group settings and membership role still determine visibility. See Google's
+[authorization guide](https://docs.cloud.google.com/identity/docs/concepts/auth)
+and [membership-list scope reference](https://docs.cloud.google.com/identity/docs/reference/rest/v1/groups.memberships/list).
+
+Existing sessions without this grant keep their Calendar meetings. Use
+**Ricollega Google** when prompted to grant access; declining or cancelling keeps
+those meetings usable. Repeated refreshes never open a login automatically.
+Ordinary group permission failures do not ask for repeated consent.
+
+Members are read at request time, so they reflect **current membership**, not the
+membership at invitation time. Members added through a group have no individual
+Calendar RSVP and are shown as participants awaiting a response. Direct attendee
+metadata takes precedence, duplicates are matched without email case, and
+participants who declined are excluded from counts and speaking turns. The same
+participant list feeds **Avvia**, Daily and equal editor slots. Opening the editor
+reads membership again; its equal reset uses that fresh list.
+
+Resolution is best effort. If a top-level group's complete membership cannot be
+read, its original invitation stays in the list and **Lista partecipanti
+incompleta** appears. Partial members of that group are discarded; independent
+successful groups remain expanded. Calendar's omitted-attendee flag produces the
+same warning. Lookup 404 is deliberately conservative: retain the original
+attendee and warn, even when the address might belong to an ordinary person.
+Known user members are leaves and need no additional group lookup. Complete empty
+groups contribute no participants. Warnings never prevent starting or editing.
+
+Each authenticated request has its own membership cache and one expansion budget:
+5 seconds overall, at most 64 Cloud Identity HTTP requests, 8 nesting levels,
+10 membership pages per group, 5,000 discovered membership records and 5,000
+cumulative staged members, including repeated traversal of cached groups.
+Individual HTTP calls have a timeout of at most 2 seconds within the remaining
+budget and response bodies are limited to 2,000,000 bytes. Cycles, malformed
+responses, access failures and exhausted limits fall back with an incomplete
+warning. Membership data is not shared between users or cached across requests.
+`GOOGLE_GROUPS_BASE_URL` defaults to
+`https://cloudidentity.googleapis.com/v1`; override it only for development mocks.
+The app reads Calendar events and group memberships without modifying invitations
+or group membership.
+
+To check the feature manually, prepare a Calendar event inviting
+`team-backend@openmove.com` using an account allowed to view that group's members,
+then open today's meetings in a backend-enabled app. Compare its participant
+count, Daily names and editor's equal reset against the visible group members;
+include a direct invitation for one member to check deduplication. Open the editor
+after changing membership to check its fresh read. With a session missing the
+scope, check the explicit reconnect action; with denied group access, check the
+warning and that **Avvia** and editor remain usable. Test invitations are created
+manually by the developer; the app itself only reads them.
 
 ## Tests
 The server tests need a running PostgreSQL. `#[sqlx::test]` creates a throwaway
