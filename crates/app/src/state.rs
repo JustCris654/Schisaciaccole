@@ -1703,16 +1703,17 @@ pub mod tests {
         start: DateTime<FixedOffset>,
         end: DateTime<FixedOffset>,
     ) -> Meeting {
-        serde_json::from_value(serde_json::json!({
-            "event_id": event_id,
-            "title": title,
-            "start": start.to_rfc3339(),
-            "end": end.to_rfc3339(),
-            "attendees": [],
-            "attendees_omitted": false,
-            "recurring_event_id": null,
-        }))
-        .unwrap()
+        Meeting {
+            event_id: event_id.to_string(),
+            title: title.to_string(),
+            start,
+            end,
+            attendees: Vec::new(),
+            attendees_omitted: false,
+            participant_resolution: Default::default(),
+            recurring_event_id: None,
+            preference: None,
+        }
     }
 
     /// State on the manual page, as at startup without a backend.

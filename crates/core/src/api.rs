@@ -17,34 +17,12 @@ pub const AUTH_LOGOUT_PATH: &str = "/auth/logout";
 pub const ME_PATH: &str = "/api/v1/me";
 /// Path of the endpoint that lists meetings; takes `from` and `to` (RFC 3339) query parameters.
 pub const MEETINGS_PATH: &str = "/api/v1/meetings";
-/// Path of the endpoint that creates or replaces a slot template (`PUT`).
-pub const TEMPLATES_PATH: &str = "/api/v1/templates";
-/// Axum route pattern of the slot plan of a meeting; see [`meeting_plan_path`].
-pub const MEETING_PLAN_ROUTE: &str = "/api/v1/meetings/{event_id}/plan";
-/// Axum route pattern of a single slot template; see [`template_path`].
-pub const TEMPLATE_ROUTE: &str = "/api/v1/templates/{id}";
 /// Path of the endpoint that creates or replaces a meeting preference (`PUT`).
 pub const PREFERENCES_PATH: &str = "/api/v1/preferences";
 /// Axum route pattern of a single meeting preference; see [`preference_path`].
 pub const PREFERENCE_ROUTE: &str = "/api/v1/preferences/{id}";
 /// Path of the health check endpoint.
 pub const HEALTH_PATH: &str = "/healthz";
-
-/// Builds the path of `GET /api/v1/meetings/{event_id}/plan`.
-///
-/// The id is inserted as is, without escaping: callers must pass an id made only of URL-safe
-/// characters. Edge case: an empty id gives a path that matches no route.
-pub fn meeting_plan_path(event_id: &str) -> String {
-    format!("/api/v1/meetings/{event_id}/plan")
-}
-
-/// Builds the path of `/api/v1/templates/{id}`.
-///
-/// The id is inserted as is, without escaping: callers must pass an id made only of URL-safe
-/// characters. Edge case: an empty id gives a path that matches no route.
-pub fn template_path(id: &str) -> String {
-    format!("/api/v1/templates/{id}")
-}
 
 /// Builds the path of `/api/v1/preferences/{id}`.
 ///
@@ -175,9 +153,6 @@ pub struct Meeting {
     pub participant_resolution: ParticipantResolution,
     /// Identifier of the recurring series this event belongs to, if any.
     pub recurring_event_id: Option<String>,
-    /// True when the signed-in user saved a slot preference for this meeting's title.
-    #[serde(default)]
-    pub has_template: bool,
     /// The signed-in user's saved preference for this meeting's normalized title.
     #[serde(default)]
     pub preference: Option<MeetingPreference>,
@@ -227,99 +202,6 @@ pub struct MeetingPreference {
     pub people: Vec<PreferencePerson>,
 }
 
-/// Kind of an entry of a slot template or plan.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum EntryKind {
-    /// A meeting attendee, identified by email.
-    Attendee,
-    /// A slot added by hand, not tied to an attendee.
-    Manual,
-    /// Time not assigned to anybody.
-    FreeTime,
-}
-
-/// One saved entry of a slot template.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct TemplateEntry {
-    /// Kind of the entry.
-    pub kind: EntryKind,
-    /// Email of the attendee; `Some` only for [`EntryKind::Attendee`].
-    pub email: Option<String>,
-    /// Label shown for the entry.
-    pub label: String,
-    /// Weight in seconds; 0 means the participant is excluded.
-    pub weight_secs: u32,
-}
-
-/// Body of `PUT /api/v1/templates`; creates or replaces the template of the normalized title.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct PutTemplateRequest {
-    /// Title of the meeting the template applies to.
-    pub meeting_title: String,
-    /// Entries in position order.
-    pub entries: Vec<TemplateEntry>,
-}
-
-/// Response of `PUT /api/v1/templates`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct Template {
-    /// Identifier of the template.
-    pub id: String,
-    /// Title of the meeting the template applies to.
-    pub meeting_title: String,
-    /// Entries in position order.
-    pub entries: Vec<TemplateEntry>,
-}
-
-/// Where a [`SlotPlan`] comes from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PlanSource {
-    /// Built from a saved template.
-    Template,
-    /// No template: equal slots for everybody.
-    Equal,
-}
-
-/// One entry of a computed slot plan.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct PlanEntry {
-    /// Kind of the entry.
-    pub kind: EntryKind,
-    /// Email of the attendee; `Some` only for [`EntryKind::Attendee`].
-    pub email: Option<String>,
-    /// Label shown for the entry.
-    pub label: String,
-    /// Relative weight (seconds from a template, 1 for equal plans); 0 means excluded.
-    pub weight: u64,
-}
-
-/// Response of `GET /api/v1/meetings/{event_id}/plan`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct SlotPlan {
-    /// Where the plan comes from.
-    pub source: PlanSource,
-    /// Identifier of the template used; `None` for equal plans.
-    pub template_id: Option<String>,
-    /// Entries in speaking order.
-    pub entries: Vec<PlanEntry>,
-    /// Freshly resolved attendees; absent in responses from older servers.
-    #[serde(default)]
-    pub attendees: Option<Vec<Attendee>>,
-    /// True when Calendar omitted attendees from the freshly read event.
-    #[serde(default)]
-    pub attendees_omitted: bool,
-    /// Group resolution status of the event read to build this plan.
-    #[serde(default)]
-    pub participant_resolution: ParticipantResolution,
-}
-
 /// Error body returned by the backend on failure.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -364,7 +246,6 @@ mod tests {
             attendees_omitted: false,
             participant_resolution: ParticipantResolution::default(),
             recurring_event_id: Some("series1".to_string()),
-            has_template: false,
             preference: None,
         }
     }
@@ -487,7 +368,6 @@ mod tests {
                 "reauthorization_required": false,
             },
             "recurring_event_id": "series1",
-            "has_template": false,
             "preference": null,
         });
         assert_eq!(value, expected);
@@ -504,138 +384,6 @@ mod tests {
         assert_eq!(serde_json::to_value(value).unwrap(), expected);
     }
 
-    fn sample_entry(kind: EntryKind, email: Option<&str>, secs: u32) -> TemplateEntry {
-        TemplateEntry {
-            kind,
-            email: email.map(str::to_string),
-            label: "Anna".to_string(),
-            weight_secs: secs,
-        }
-    }
-
-    fn sample_plan() -> SlotPlan {
-        SlotPlan {
-            source: PlanSource::Template,
-            template_id: Some("t1".to_string()),
-            entries: vec![PlanEntry {
-                kind: EntryKind::FreeTime,
-                email: None,
-                label: "Tempo libero".to_string(),
-                weight: 1200,
-            }],
-            attendees: Some(vec![sample_attendee()]),
-            attendees_omitted: false,
-            participant_resolution: ParticipantResolution::default(),
-        }
-    }
-
-    #[test]
-    fn entry_kind_round_trips_every_variant() {
-        for kind in [EntryKind::Attendee, EntryKind::Manual, EntryKind::FreeTime] {
-            assert_eq!(round_trip(&kind), kind);
-        }
-    }
-
-    #[test]
-    fn template_entry_round_trips() {
-        let value = sample_entry(EntryKind::Attendee, Some("a@x.it"), 300);
-        assert_eq!(round_trip(&value), value);
-    }
-
-    #[test]
-    fn put_template_request_round_trips() {
-        let value = PutTemplateRequest {
-            meeting_title: "Retro".to_string(),
-            entries: vec![sample_entry(EntryKind::Manual, None, 60)],
-        };
-        assert_eq!(round_trip(&value), value);
-    }
-
-    #[test]
-    fn template_round_trips() {
-        let value = Template {
-            id: "t1".to_string(),
-            meeting_title: "Retro".to_string(),
-            entries: vec![sample_entry(EntryKind::Manual, None, 60)],
-        };
-        assert_eq!(round_trip(&value), value);
-    }
-
-    #[test]
-    fn plan_source_round_trips_every_variant() {
-        for source in [PlanSource::Template, PlanSource::Equal] {
-            assert_eq!(round_trip(&source), source);
-        }
-    }
-
-    #[test]
-    fn plan_entry_round_trips() {
-        let value = PlanEntry {
-            kind: EntryKind::Attendee,
-            email: Some("a@x.it".to_string()),
-            label: "Anna".to_string(),
-            weight: 1,
-        };
-        assert_eq!(round_trip(&value), value);
-    }
-
-    #[test]
-    fn slot_plan_round_trips() {
-        let value = sample_plan();
-        assert_eq!(round_trip(&value), value);
-    }
-
-    #[test]
-    fn template_entry_json_field_names() {
-        let attendee = sample_entry(EntryKind::Attendee, Some("a@x.it"), 300);
-        let expected = json!({
-            "kind": "attendee",
-            "email": "a@x.it",
-            "label": "Anna",
-            "weight_secs": 300,
-        });
-        assert_eq!(serde_json::to_value(attendee).unwrap(), expected);
-    }
-
-    #[test]
-    fn template_entry_free_time_kind_is_snake_case() {
-        let free = sample_entry(EntryKind::FreeTime, None, 1200);
-        let expected = json!({
-            "kind": "free_time",
-            "email": null,
-            "label": "Anna",
-            "weight_secs": 1200,
-        });
-        assert_eq!(serde_json::to_value(free).unwrap(), expected);
-    }
-
-    #[test]
-    fn slot_plan_json_field_names() {
-        let expected = json!({
-            "source": "template",
-            "template_id": "t1",
-            "attendees": [{
-                "email": "anna.rossi@openmove.com",
-                "name": "Anna Rossi",
-                "is_self": true,
-                "optional": false,
-                "response": "needsAction",
-            }],
-            "attendees_omitted": false,
-            "participant_resolution": {
-                "incomplete": false,
-                "reauthorization_required": false,
-            },
-            "entries": [{
-                "kind": "free_time",
-                "email": null,
-                "label": "Tempo libero",
-                "weight": 1200,
-            }],
-        });
-        assert_eq!(serde_json::to_value(sample_plan()).unwrap(), expected);
-    }
-
     #[test]
     fn meeting_without_resolution_uses_complete_default() {
         let expected = sample_meeting();
@@ -646,58 +394,6 @@ mod tests {
             .remove("participant_resolution");
         let actual: Meeting = serde_json::from_value(value).unwrap();
         assert_eq!(actual, expected);
-    }
-
-    #[test]
-    fn old_slot_plan_has_no_fresh_attendees_or_resolution_warning() {
-        let value = json!({ "source": "equal", "template_id": null, "entries": [] });
-        let actual: SlotPlan = serde_json::from_value(value).unwrap();
-        assert_eq!(actual.attendees, None);
-        assert!(!actual.attendees_omitted);
-        assert_eq!(
-            actual.participant_resolution,
-            ParticipantResolution::default()
-        );
-    }
-
-    #[test]
-    fn fresh_empty_attendees_are_distinct_from_missing_attendees() {
-        let value = json!({
-            "source": "equal", "template_id": null, "entries": [], "attendees": [],
-            "participant_resolution": { "incomplete": true },
-        });
-        let actual: SlotPlan = serde_json::from_value(value).unwrap();
-        assert_eq!(actual.attendees, Some(Vec::new()));
-        assert!(actual.participant_resolution.incomplete);
-        assert!(!actual.participant_resolution.reauthorization_required);
-    }
-
-    #[test]
-    fn put_template_request_json_field_names() {
-        let value = PutTemplateRequest {
-            meeting_title: "Retro".to_string(),
-            entries: vec![sample_entry(EntryKind::Manual, None, 60)],
-        };
-        let expected = json!({
-            "meeting_title": "Retro",
-            "entries": [{
-                "kind": "manual",
-                "email": null,
-                "label": "Anna",
-                "weight_secs": 60,
-            }],
-        });
-        assert_eq!(serde_json::to_value(value).unwrap(), expected);
-    }
-
-    #[test]
-    fn meeting_plan_path_inserts_the_event_id() {
-        assert_eq!(meeting_plan_path("evt1"), "/api/v1/meetings/evt1/plan");
-    }
-
-    #[test]
-    fn template_path_inserts_the_id() {
-        assert_eq!(template_path("t1"), "/api/v1/templates/t1");
     }
 
     #[test]
