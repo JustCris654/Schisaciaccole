@@ -30,6 +30,10 @@ countdown whose speaking turns list the chosen participants.
 | --- | --- |
 | ![Manuale: end time picked](assets/screenshot_end_time.png) | ![Daily mode](assets/screenshot_daily.png) |
 
+| Participant editor | Editor with the Daily switch on |
+| --- | --- |
+| ![Participant editor](assets/screenshot_editor.png) | ![Editor with the Daily switch on](assets/screenshot_editor_daily.png) |
+
 ## Requirements
 
 - [Rust](https://www.rust-lang.org/tools/install) (stable toolchain, `cargo`)

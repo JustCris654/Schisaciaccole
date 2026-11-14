@@ -278,7 +278,6 @@ Browser
 <tr>
 <td width="40%" valign="top">
 <img src="../../assets/screenshot_meetings.png" alt="Lista dei meeting di oggi" width="100%">
-<br><sub>Lo screenshot è precedente al pulsante <b>Editor</b>, che oggi compare accanto ad <b>Avvia</b> in ogni riga.</sub>
 </td>
 <td valign="top">
 
@@ -307,27 +306,9 @@ Browser
 <table>
 <tr>
 <td width="40%" valign="top">
-<pre>
-┌────────────────────────────────────┐
-│ Partecipanti di questo meeting     │
-│ Sprint Review - 10:00-11:00 - 1h   │
-│ (Lista partecipanti incompleta...) │
-│ (Ricollega Google)                 │
-│ ┌────────────────────────────────┐ │
-│ │ [x] Anna Rossi                 │ │
-│ │     anna@azienda.it            │ │
-│ │ [ ] Bruno Verdi                │ │
-│ │     bruno@azienda.it           │ │
-│ │ [x] Marco                      │ │
-│ │     Ospite esterno          x  │ │
-│ └────────────────────────────────┘ │
-│            + Aggiungi partecipante │
-│ Preferenza salvata                 │
-│ <-  Ripristina    Elimina  [Salva] │
-│     partecipanti  preferenza       │
-│                      [Avvia Daily] │
-└────────────────────────────────────┘
-</pre>
+<img src="../../assets/screenshot_editor.png" alt="Editor dei partecipanti" width="100%">
+<br><sub>Con l'interruttore Daily della riga acceso il pulsante diventa <b>Avvia Daily</b>:</sub>
+<br><img src="../../assets/screenshot_editor_daily.png" alt="Editor con il pulsante Avvia Daily" width="100%">
 </td>
 <td valign="top">
 
