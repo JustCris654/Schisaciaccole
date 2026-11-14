@@ -267,8 +267,11 @@ Resolution is best effort. If a top-level group's complete membership cannot be
 read, its original invitation stays in the list and **Lista partecipanti
 incompleta** appears. Partial members of that group are discarded; independent
 successful groups remain expanded. Calendar's omitted-attendee flag produces the
-same warning. Lookup 404 is deliberately conservative: retain the original
-attendee and warn, even when the address might belong to an ordinary person.
+same warning. Only invitations that could be groups are looked up: the signed-in
+user and attendees who accepted, declined or answered maybe are people. A lookup
+404 for an invited address means it is not a group, so it stays a direct attendee
+without a warning; a group in another domain that Cloud Identity does not show
+is treated the same way. A 404 for a nested member of unknown type still warns.
 Known user members are leaves and need no additional group lookup. Complete empty
 groups contribute no participants. Warnings never prevent starting or editing.
 
