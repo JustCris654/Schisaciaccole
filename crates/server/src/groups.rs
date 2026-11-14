@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use openidconnect::AccessToken;
 use openidconnect::reqwest;
-use schisaciaccole_core::api::Meeting;
+use schisaciaccole_core::api::{Attendee, Meeting, ResponseStatus};
 use schisaciaccole_core::attendee::{
     GroupExpansion, GroupExpansionOutcome, GroupMember, merge_group_attendees,
 };
@@ -70,7 +70,7 @@ struct Resolver<'a> {
     requests: usize,
     records: usize,
     staged_leaves: usize,
-    lookups: HashMap<String, Result<String, Incomplete>>,
+    lookups: HashMap<String, Result<Option<String>, Incomplete>>,
     memberships: HashMap<String, Result<Vec<Member>, Incomplete>>,
 }
 
@@ -91,7 +91,11 @@ impl<'a> Resolver<'a> {
 
     /// Expands a whole root privately. A cycle or any incomplete descendant
     /// discards all leaves; empty groups successfully produce no people.
-    async fn expand(&mut self, email: &str) -> Result<Vec<GroupMember>, Incomplete> {
+    ///
+    /// Returns `Ok(None)` when Cloud Identity answers 404 for the root itself:
+    /// the invitation is not a group and stays a direct attendee. A 404 for a
+    /// nested member of unknown type is still incomplete.
+    async fn expand(&mut self, email: &str) -> Result<Option<Vec<GroupMember>>, Incomplete> {
         let mut leaves = Vec::new();
         let mut pending = vec![(email.to_string(), 0, HashSet::new())];
         let mut visited = HashSet::new();
@@ -99,7 +103,11 @@ impl<'a> Resolver<'a> {
             if depth >= MAX_DEPTH || Instant::now() >= self.deadline {
                 return Err(Incomplete);
             }
-            let group = self.lookup(&email).await?;
+            let group = match self.lookup(&email).await? {
+                Some(group) => group,
+                None if depth == 0 => return Ok(None),
+                None => return Err(Incomplete),
+            };
             if !ancestors.insert(group.clone()) {
                 return Err(Incomplete);
             }
@@ -127,11 +135,12 @@ impl<'a> Resolver<'a> {
                 }
             }
         }
-        Ok(leaves)
+        Ok(Some(leaves))
     }
 
-    /// Looks up unknown addresses conservatively, including 404 responses.
-    async fn lookup(&mut self, email: &str) -> Result<String, Incomplete> {
+    /// Looks up the group resource name of an address. `Ok(None)` means Cloud
+    /// Identity answered 404, so the address is not a visible group.
+    async fn lookup(&mut self, email: &str) -> Result<Option<String>, Incomplete> {
         let key = email.trim().to_ascii_lowercase();
         if let Some(result) = self.lookups.get(&key) {
             return result.clone();
@@ -141,16 +150,18 @@ impl<'a> Resolver<'a> {
         result
     }
 
-    async fn lookup_uncached(&mut self, email: &str) -> Result<String, Incomplete> {
+    async fn lookup_uncached(&mut self, email: &str) -> Result<Option<String>, Incomplete> {
         if !valid_email(email) {
             return Err(Incomplete);
         }
         let url = endpoint(self.base_url, &["groups:lookup"])?;
-        let lookup: Lookup = self.fetch(url, &[("groupKey.id", email)]).await?;
+        let Some(lookup) = self.fetch::<Lookup>(url, &[("groupKey.id", email)]).await? else {
+            return Ok(None);
+        };
         if !valid_group_name(&lookup.name) {
             return Err(Incomplete);
         }
-        Ok(lookup.name)
+        Ok(Some(lookup.name))
     }
 
     async fn members(&mut self, group: &str) -> Result<Vec<Member>, Incomplete> {
@@ -175,7 +186,9 @@ impl<'a> Resolver<'a> {
             if let Some(token) = token.as_deref() {
                 query.push(("pageToken", token));
             }
-            let page: MembershipPage = self.fetch(url.clone(), &query).await?;
+            let Some(page) = self.fetch::<MembershipPage>(url.clone(), &query).await? else {
+                return Err(Incomplete);
+            };
             self.records += page.memberships.len();
             if self.records > MAX_RECORDS {
                 return Err(Incomplete);
@@ -194,13 +207,14 @@ impl<'a> Resolver<'a> {
         Err(Incomplete)
     }
 
-    /// Bounds sending and body reads together. Invalid status and JSON are
+    /// Bounds sending and body reads together. A 404 gives `Ok(None)` without
+    /// reading the body; every other non-success status and invalid JSON are
     /// indistinguishable to callers and never expose provider content.
     async fn fetch<T: serde::de::DeserializeOwned>(
         &mut self,
         url: reqwest::Url,
         query: &[(&str, &str)],
-    ) -> Result<T, Incomplete> {
+    ) -> Result<Option<T>, Incomplete> {
         if self.requests >= MAX_REQUESTS || Instant::now() >= self.deadline {
             return Err(Incomplete);
         }
@@ -215,6 +229,9 @@ impl<'a> Resolver<'a> {
                 .send()
                 .await
                 .map_err(|_| Incomplete)?;
+            if response.status() == reqwest::StatusCode::NOT_FOUND {
+                return Ok(None);
+            }
             if !response.status().is_success() {
                 return Err(Incomplete);
             }
@@ -225,7 +242,9 @@ impl<'a> Resolver<'a> {
                 }
                 bytes.extend_from_slice(&chunk);
             }
-            serde_json::from_slice(&bytes).map_err(|_| Incomplete)
+            serde_json::from_slice(&bytes)
+                .map(Some)
+                .map_err(|_| Incomplete)
         })
         .await
         .map_err(|_| Incomplete)?
@@ -235,6 +254,9 @@ impl<'a> Resolver<'a> {
 /// Resolves every invitation in `meetings` with one shared five-second budget.
 /// Missing group consent leaves Calendar meetings usable and explicitly marks
 /// reauthorization; permission/API failures merely mark resolution incomplete.
+/// Only attendees that could be groups are looked up (see `needs_lookup`), and
+/// an address Cloud Identity does not know (404) stays a direct attendee, so a
+/// meeting of people only is never marked incomplete.
 ///
 /// # Errors
 ///
@@ -246,7 +268,7 @@ pub(crate) async fn resolve_meetings(
     meetings: &mut [Meeting],
 ) -> Result<(), ApiFailure> {
     let deadline = Instant::now() + TOTAL_TIMEOUT;
-    if !meetings.iter().any(|meeting| !meeting.attendees.is_empty()) {
+    if !meetings.iter().any(has_lookup_candidates) {
         return Ok(());
     }
     let loaded = timeout_at(deadline, async {
@@ -262,7 +284,7 @@ pub(crate) async fn resolve_meetings(
         Err(_) => {
             for meeting in meetings
                 .iter_mut()
-                .filter(|meeting| !meeting.attendees.is_empty())
+                .filter(|meeting| has_lookup_candidates(meeting))
             {
                 mark_incomplete(meeting, "", false);
             }
@@ -278,7 +300,7 @@ pub(crate) async fn resolve_meetings(
     if !granted {
         for meeting in meetings
             .iter_mut()
-            .filter(|meeting| !meeting.attendees.is_empty())
+            .filter(|meeting| has_lookup_candidates(meeting))
         {
             mark_incomplete(meeting, &user.email, true);
         }
@@ -288,7 +310,7 @@ pub(crate) async fn resolve_meetings(
     let Ok(Ok(token)) = token else {
         for meeting in meetings
             .iter_mut()
-            .filter(|meeting| !meeting.attendees.is_empty())
+            .filter(|meeting| has_lookup_candidates(meeting))
         {
             mark_incomplete(meeting, &user.email, false);
         }
@@ -306,7 +328,7 @@ pub(crate) async fn resolve_meetings(
         Err(_) => {
             for meeting in meetings
                 .iter_mut()
-                .filter(|meeting| !meeting.attendees.is_empty())
+                .filter(|meeting| has_lookup_candidates(meeting))
             {
                 mark_incomplete(meeting, &user.email, false);
             }
@@ -316,7 +338,7 @@ pub(crate) async fn resolve_meetings(
     if reauthorization_required {
         for meeting in meetings
             .iter_mut()
-            .filter(|meeting| !meeting.attendees.is_empty())
+            .filter(|meeting| has_lookup_candidates(meeting))
         {
             mark_incomplete(meeting, &user.email, true);
         }
@@ -331,9 +353,13 @@ pub(crate) async fn resolve_meetings(
     for meeting in meetings {
         let mut expansions = Vec::with_capacity(meeting.attendees.len());
         for attendee in &meeting.attendees {
+            if !needs_lookup(attendee) {
+                continue;
+            }
             let result = timeout_at(resolver.deadline, resolver.expand(&attendee.email)).await;
             let outcome = match result {
-                Ok(Ok(members)) => GroupExpansionOutcome::Complete(members),
+                Ok(Ok(Some(members))) => GroupExpansionOutcome::Complete(members),
+                Ok(Ok(None)) => continue,
                 _ => GroupExpansionOutcome::Incomplete {
                     reauthorization_required: false,
                 },
@@ -348,6 +374,18 @@ pub(crate) async fn resolve_meetings(
         meeting.participant_resolution = resolved.resolution;
     }
     Ok(())
+}
+
+/// True when `attendee` could be a group invitation. A group cannot answer an
+/// invitation, so the signed-in user and anyone who accepted, declined or
+/// answered maybe is a person and needs no Cloud Identity lookup.
+fn needs_lookup(attendee: &Attendee) -> bool {
+    !attendee.is_self && attendee.response == ResponseStatus::NeedsAction
+}
+
+/// True when at least one attendee of `meeting` needs a group lookup.
+fn has_lookup_candidates(meeting: &Meeting) -> bool {
+    meeting.attendees.iter().any(needs_lookup)
 }
 
 fn mark_incomplete(meeting: &mut Meeting, email: &str, reauthorization_required: bool) {
@@ -451,7 +489,7 @@ mod tests {
         let http = reqwest::Client::new();
         let base_url = server.uri();
         let mut resolver = Resolver::new(&http, &base_url, AccessToken::new("secret".into()));
-        let leaves = resolver.expand("team@example.com").await.unwrap();
+        let leaves = resolver.expand("team@example.com").await.unwrap().unwrap();
         assert_eq!(leaves.len(), 2);
         assert_eq!(resolver.requests, 3);
     }
@@ -476,9 +514,22 @@ mod tests {
         let http = reqwest::Client::new();
         let base_url = server.uri();
         let mut resolver = Resolver::new(&http, &base_url, AccessToken::new("secret".into()));
-        assert_eq!(resolver.expand("team@example.com").await.unwrap().len(), 1);
         assert_eq!(
-            resolver.expand("shared@example.com").await.unwrap().len(),
+            resolver
+                .expand("team@example.com")
+                .await
+                .unwrap()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            resolver
+                .expand("shared@example.com")
+                .await
+                .unwrap()
+                .unwrap()
+                .len(),
             1
         );
         assert_eq!(resolver.requests, 4);
@@ -530,6 +581,7 @@ mod tests {
                 .expand("team@example.com")
                 .await
                 .unwrap()
+                .unwrap()
                 .is_empty()
         );
     }
@@ -555,7 +607,7 @@ mod tests {
 
     #[tokio::test]
     async fn provider_failures_are_opaque_and_memoized() {
-        for status in [401, 403, 404, 429, 500, 503] {
+        for status in [401, 403, 429, 500, 503] {
             let server = MockServer::start().await;
             Mock::given(method("GET"))
                 .and(path("/groups:lookup"))
@@ -706,7 +758,7 @@ mod tests {
         let base_url = server.uri();
         for (token, email) in [("user-a", "ada@example.com"), ("user-b", "bob@example.com")] {
             let mut resolver = Resolver::new(&http, &base_url, AccessToken::new(token.into()));
-            let leaves = resolver.expand("team@example.com").await.unwrap();
+            let leaves = resolver.expand("team@example.com").await.unwrap().unwrap();
             assert_eq!(leaves.len(), 1);
             assert_eq!(leaves[0].email, email);
         }
@@ -780,7 +832,15 @@ mod tests {
         let http = reqwest::Client::new();
         let base_url = server.uri();
         let mut resolver = Resolver::new(&http, &base_url, AccessToken::new("secret".into()));
-        assert_eq!(resolver.expand("team@example.com").await.unwrap().len(), 1);
+        assert_eq!(
+            resolver
+                .expand("team@example.com")
+                .await
+                .unwrap()
+                .unwrap()
+                .len(),
+            1
+        );
         resolver.staged_leaves = MAX_RECORDS;
         assert!(resolver.expand("team@example.com").await.is_err());
         assert_eq!(resolver.requests, 2);
@@ -808,5 +868,76 @@ mod tests {
         assert!(started.elapsed() < Duration::from_millis(180));
         assert!(resolver.expand("other@example.com").await.is_err());
         assert_eq!(resolver.requests, 1);
+    }
+
+    #[tokio::test]
+    async fn root_unknown_to_cloud_identity_is_not_a_group_and_is_memoized() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/groups:lookup"))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let http = reqwest::Client::new();
+        let base_url = server.uri();
+        let mut resolver = Resolver::new(&http, &base_url, AccessToken::new("secret".into()));
+        assert!(resolver.expand("ada@example.com").await.unwrap().is_none());
+        assert!(resolver.expand("ada@example.com").await.unwrap().is_none());
+        assert_eq!(resolver.requests, 1);
+    }
+
+    #[tokio::test]
+    async fn nested_group_member_unknown_to_cloud_identity_is_incomplete() {
+        let server = MockServer::start().await;
+        lookup(&server, "team@example.com", "team").await;
+        members(
+            &server,
+            "team",
+            json!({"memberships":[group("gone@example.com")]}),
+        )
+        .await;
+        Mock::given(method("GET"))
+            .and(path("/groups:lookup"))
+            .and(query_param("groupKey.id", "gone@example.com"))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let http = reqwest::Client::new();
+        let base_url = server.uri();
+        let mut resolver = Resolver::new(&http, &base_url, AccessToken::new("secret".into()));
+        assert!(resolver.expand("team@example.com").await.is_err());
+    }
+
+    fn attendee(is_self: bool, response: ResponseStatus) -> Attendee {
+        Attendee {
+            email: "ada@example.com".to_string(),
+            name: String::new(),
+            is_self,
+            optional: false,
+            response,
+        }
+    }
+
+    #[test]
+    fn attendee_without_an_answer_needs_lookup() {
+        assert!(needs_lookup(&attendee(false, ResponseStatus::NeedsAction)));
+    }
+
+    #[test]
+    fn attendee_who_answered_is_a_person() {
+        for response in [
+            ResponseStatus::Accepted,
+            ResponseStatus::Declined,
+            ResponseStatus::Tentative,
+        ] {
+            assert!(!needs_lookup(&attendee(false, response)));
+        }
+    }
+
+    #[test]
+    fn signed_in_user_is_never_looked_up() {
+        assert!(!needs_lookup(&attendee(true, ResponseStatus::NeedsAction)));
     }
 }

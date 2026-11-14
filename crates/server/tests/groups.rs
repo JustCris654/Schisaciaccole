@@ -25,6 +25,10 @@ fn event() -> Value {
 }
 
 async fn setup(h: &Harness, scope: &str) -> String {
+    setup_with_event(h, scope, event()).await
+}
+
+async fn setup_with_event(h: &Harness, scope: &str, event: Value) -> String {
     let tokens = h.login_to_tokens().await;
     let user = h.user_id(&tokens.access_token);
     let encrypted = crypto::encrypt(
@@ -48,12 +52,12 @@ async fn setup(h: &Harness, scope: &str) -> String {
     );
     Mock::given(method("GET"))
         .and(path(CALENDAR_EVENTS_PATH))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"items":[event()]})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"items":[event.clone()]})))
         .mount(&h.google)
         .await;
     Mock::given(method("GET"))
         .and(path(format!("{CALENDAR_EVENTS_PATH}/daily")))
-        .respond_with(ResponseTemplate::new(200).set_body_json(event()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(event))
         .mount(&h.google)
         .await;
     tokens.access_token
@@ -168,6 +172,40 @@ async fn old_scope_grant_keeps_calendar_working_and_requires_explicit_reconnect(
             .iter()
             .any(|request| request.url.path().contains("identity"))
     );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn meeting_of_people_only_is_complete_and_skips_answered_attendees(pool: PgPool) {
+    let h = harness(pool).await;
+    let event = json!({
+        "id":"daily", "summary":"Daily",
+        "start":{"dateTime":"2026-11-05T09:00:00Z"},
+        "end":{"dateTime":"2026-11-05T09:30:00Z"},
+        "attendees":[
+            {"email":"ada@example.com","responseStatus":"accepted"},
+            {"email":"bob@example.com","responseStatus":"needsAction"}
+        ]
+    });
+    let token = setup_with_event(&h, GOOGLE_GROUPS_SCOPE, event).await;
+    Mock::given(method("GET"))
+        .and(path("/identity/v1/groups:lookup"))
+        .and(query_param("groupKey.id", "bob@example.com"))
+        .respond_with(ResponseTemplate::new(404))
+        .expect(1)
+        .mount(&h.google)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/identity/v1/groups:lookup"))
+        .and(query_param("groupKey.id", "ada@example.com"))
+        .respond_with(ResponseTemplate::new(404))
+        .expect(0)
+        .mount(&h.google)
+        .await;
+    let meetings = list(&h, &token).await;
+    let meeting = &meetings[0];
+    assert_eq!(meeting.attendees.len(), 2);
+    assert!(!meeting.participant_resolution.incomplete);
+    assert!(!meeting.participant_resolution.reauthorization_required);
 }
 
 #[sqlx::test(migrations = "./migrations")]
