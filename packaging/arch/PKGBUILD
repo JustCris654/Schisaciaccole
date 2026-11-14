@@ -9,7 +9,7 @@
 #     sudo pacman -U schisaciaccole-*.pkg.tar.zst
 #
 pkgname=schisaciaccole
-pkgver=1.0.0
+pkgver=1.1.0
 pkgrel=1
 pkgdesc="Countdown timer for time-boxed Scrum ceremonies"
 arch=('x86_64')
