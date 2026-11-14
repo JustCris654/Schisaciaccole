@@ -6,9 +6,9 @@ Read `AGENTS.md` first: its planning, delegation, validation, commit and Rust po
 
 `README.org` is the local source for behavior, setup, packaging and deployment.
 
-- `crates/core` (`schisaciaccole-core`): pure quarter-hour/countdown, speaking turn, Daily, slot/plan and attendee logic, plus shared API types and route constants. Time is passed into domain functions.
-- `crates/app` (`schisaciaccole`): Rust/Slint desktop app, UI in `ui/`, build script, assets, backend client, browser/loopback login and OS keychain sessions. The default build is a local timer. `SCHISACIACCOLE_BACKEND_URL` is fixed at compile time. The app uses meeting timers/turns/Daily; it does not use the server's slot templates or plans.
-- `crates/server` (`schisaciaccole-server`): axum Google OAuth/OIDC login, application sessions, Google Calendar meetings, slot templates/plans, SQLx PostgreSQL storage and startup migrations. Routes are assembled in `src/app.rs`; shared paths live in core `api.rs`.
+- `crates/core` (`schisaciaccole-core`): pure quarter-hour/countdown, speaking turn, Daily, attendee, editor-row and meeting preference logic, plus shared API types and route constants. Time is passed into domain functions.
+- `crates/app` (`schisaciaccole`): Rust/Slint desktop app, UI in `ui/`, build script, assets, backend client, browser/loopback login and OS keychain sessions. The default build is a local timer. `SCHISACIACCOLE_BACKEND_URL` is fixed at compile time. The app uses meeting timers/turns/Daily and the server's meeting preferences (attendee renames and people added by hand); the editor is local, on a per-event draft.
+- `crates/server` (`schisaciaccole-server`): axum Google OAuth/OIDC login, application sessions, Google Calendar meetings, meeting preferences, SQLx PostgreSQL storage and startup migrations. Routes are assembled in `src/app.rs`; shared paths live in core `api.rs`.
 - `deploy/`: server Dockerfile and Docker Compose with PostgreSQL 17 and persistent `pgdata`. `SERVER_TAG` defaults to `latest`; use the intended release version for deployment.
 - `.github/workflows/ci.yml`, `release.yml`: workspace checks and Linux/macOS packaging, server image publication to GHCR. Packaging also uses `Dockerfile.deb`, `packaging/arch/` and app bundle metadata.
 
