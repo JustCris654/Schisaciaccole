@@ -85,6 +85,7 @@ mod tests {
             participant_resolution: Default::default(),
             recurring_event_id: None,
             has_template: false,
+            preference: None,
         }
     }
 

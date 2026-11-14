@@ -929,6 +929,7 @@ mod tests {
             event_id: "talk".into(),
             recurring_event_id: None,
             has_template: false,
+            preference: None,
             title: "Talk".into(),
             start: now,
             end: now + chrono::Duration::hours(1),

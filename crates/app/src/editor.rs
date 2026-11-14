@@ -5,7 +5,7 @@
 //! so every operation ignores an index out of range instead of failing.
 
 use log::debug;
-use schisaciaccole_core::api::{EntryKind, Meeting, PutTemplateRequest, SlotPlan};
+use schisaciaccole_core::api::{Meeting, PersonKind, PutTemplateRequest, SlotPlan};
 use schisaciaccole_core::{
     EditorEntry, build_plan, editor_to_template, participants, plan_to_editor,
 };
@@ -117,7 +117,7 @@ impl ParticipantEditor {
     /// an index out of range is logged and ignored.
     pub fn set_included(&mut self, index: usize, included: bool) {
         match self.rows.get_mut(index) {
-            Some(row) if row.kind == EntryKind::Attendee => row.included = included,
+            Some(row) if row.kind == PersonKind::Attendee => row.included = included,
             Some(_) => debug!("set_included: row {index} is not an attendee"),
             None => debug!("set_included: ignoring out of range row {index}"),
         }
@@ -132,7 +132,7 @@ impl ParticipantEditor {
             return;
         }
         self.rows.push(EditorEntry {
-            kind: EntryKind::Manual,
+            kind: PersonKind::Manual,
             email: None,
             label: String::new(),
             included: true,
@@ -145,7 +145,7 @@ impl ParticipantEditor {
     /// unchanged.
     pub fn remove_row(&mut self, index: usize) {
         match self.rows.get(index) {
-            Some(row) if row.kind == EntryKind::Manual => {
+            Some(row) if row.kind == PersonKind::Manual => {
                 self.rows.remove(index);
             }
             Some(_) => debug!("remove_row: row {index} is not a manual row"),
@@ -184,7 +184,7 @@ impl ParticipantEditor {
 mod tests {
     use super::*;
     use chrono::{DateTime, FixedOffset, TimeZone};
-    use schisaciaccole_core::api::{Attendee, PlanEntry, PlanSource, ResponseStatus};
+    use schisaciaccole_core::api::{Attendee, EntryKind, PlanEntry, PlanSource, ResponseStatus};
     use schisaciaccole_core::{FREE_TIME_LABEL, PARTICIPANT_WEIGHT_SECS};
 
     fn at(hour: u32, minute: u32) -> DateTime<FixedOffset> {
@@ -216,6 +216,7 @@ mod tests {
             participant_resolution: Default::default(),
             recurring_event_id: None,
             has_template: false,
+            preference: None,
         }
     }
 
@@ -405,7 +406,7 @@ mod tests {
         editor.add_manual_row();
 
         let added = editor.rows().last().unwrap();
-        assert_eq!(added.kind, EntryKind::Manual);
+        assert_eq!(added.kind, PersonKind::Manual);
         assert_eq!(added.label, "");
         assert!(added.included);
         assert_eq!(added.email, None);

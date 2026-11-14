@@ -10,7 +10,7 @@ use crate::login::REAUTH_MESSAGE;
 use chrono::{DateTime, FixedOffset, Local, TimeZone};
 use log::{debug, error, info, warn};
 use schisaciaccole_core::api::{
-    EntryKind, Me, Meeting, PutTemplateRequest, SlotPlan, Template, error_codes,
+    Me, Meeting, PersonKind, PutTemplateRequest, SlotPlan, Template, error_codes,
 };
 use schisaciaccole_core::{
     DEFAULT_OPTION_COUNT, DailyRound, EditorEntry, QuarterOption, SpeakingTurn, TickOutcome,
@@ -1338,7 +1338,7 @@ fn editor_row(entry: &EditorEntry) -> EditorRow {
     EditorRow {
         label: entry.label.as_str().into(),
         included: entry.included,
-        attendee: entry.kind == EntryKind::Attendee,
+        attendee: entry.kind == PersonKind::Attendee,
         email: entry.email.as_deref().unwrap_or_default().into(),
     }
 }
@@ -1729,6 +1729,7 @@ pub mod tests {
             participant_resolution: Default::default(),
             recurring_event_id: None,
             has_template: false,
+            preference: None,
         }
     }
 

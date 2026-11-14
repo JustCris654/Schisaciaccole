@@ -108,6 +108,7 @@ fn to_meeting(event: GoogleEvent) -> Option<Meeting> {
         participant_resolution: Default::default(),
         recurring_event_id: event.recurring_event_id,
         has_template: false,
+        preference: None,
     })
 }
 

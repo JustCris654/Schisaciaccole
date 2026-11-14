@@ -23,6 +23,10 @@ pub const TEMPLATES_PATH: &str = "/api/v1/templates";
 pub const MEETING_PLAN_ROUTE: &str = "/api/v1/meetings/{event_id}/plan";
 /// Axum route pattern of a single slot template; see [`template_path`].
 pub const TEMPLATE_ROUTE: &str = "/api/v1/templates/{id}";
+/// Path of the endpoint that creates or replaces a meeting preference (`PUT`).
+pub const PREFERENCES_PATH: &str = "/api/v1/preferences";
+/// Axum route pattern of a single meeting preference; see [`preference_path`].
+pub const PREFERENCE_ROUTE: &str = "/api/v1/preferences/{id}";
 /// Path of the health check endpoint.
 pub const HEALTH_PATH: &str = "/healthz";
 
@@ -40,6 +44,14 @@ pub fn meeting_plan_path(event_id: &str) -> String {
 /// characters. Edge case: an empty id gives a path that matches no route.
 pub fn template_path(id: &str) -> String {
     format!("/api/v1/templates/{id}")
+}
+
+/// Builds the path of `/api/v1/preferences/{id}`.
+///
+/// The id is inserted as is, without escaping: callers must pass an id made only of URL-safe
+/// characters. Edge case: an empty id gives a path that matches no route.
+pub fn preference_path(id: &str) -> String {
+    format!("/api/v1/preferences/{id}")
 }
 
 /// Known values of [`ApiError::code`].
@@ -166,6 +178,53 @@ pub struct Meeting {
     /// True when the signed-in user saved a slot preference for this meeting's title.
     #[serde(default)]
     pub has_template: bool,
+    /// The signed-in user's saved preference for this meeting's normalized title.
+    #[serde(default)]
+    pub preference: Option<MeetingPreference>,
+}
+
+/// Kind of a person saved in a meeting preference or shown in the participant editor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PersonKind {
+    /// A meeting attendee identified by email; the saved entry renames them.
+    Attendee,
+    /// A person added by hand, not tied to an attendee.
+    Manual,
+}
+
+/// One person saved in a meeting preference.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct PreferencePerson {
+    /// Kind of the person.
+    pub kind: PersonKind,
+    /// Email of the attendee; `Some` only for [`PersonKind::Attendee`].
+    pub email: Option<String>,
+    /// Label shown for the person.
+    pub label: String,
+}
+
+/// Body of `PUT /api/v1/preferences`; creates or replaces the preference of the normalized title.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct PutPreferenceRequest {
+    /// Title of the meeting the preference applies to.
+    pub meeting_title: String,
+    /// Saved people: attendee renames first, then manual people.
+    pub people: Vec<PreferencePerson>,
+}
+
+/// Response of `PUT /api/v1/preferences`, and the preference embedded in [`Meeting`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct MeetingPreference {
+    /// Identifier of the preference.
+    pub id: String,
+    /// Title of the meeting the preference applies to.
+    pub meeting_title: String,
+    /// Saved people.
+    pub people: Vec<PreferencePerson>,
 }
 
 /// Kind of an entry of a slot template or plan.
@@ -306,6 +365,7 @@ mod tests {
             participant_resolution: ParticipantResolution::default(),
             recurring_event_id: Some("series1".to_string()),
             has_template: false,
+            preference: None,
         }
     }
 
@@ -428,6 +488,7 @@ mod tests {
             },
             "recurring_event_id": "series1",
             "has_template": false,
+            "preference": null,
         });
         assert_eq!(value, expected);
     }
@@ -637,5 +698,98 @@ mod tests {
     #[test]
     fn template_path_inserts_the_id() {
         assert_eq!(template_path("t1"), "/api/v1/templates/t1");
+    }
+
+    #[test]
+    fn preference_path_inserts_the_id() {
+        assert_eq!(preference_path("p1"), "/api/v1/preferences/p1");
+    }
+
+    fn sample_person(kind: PersonKind, email: Option<&str>) -> PreferencePerson {
+        PreferencePerson {
+            kind,
+            email: email.map(str::to_string),
+            label: "Anna".to_string(),
+        }
+    }
+
+    #[test]
+    fn person_kind_round_trips_every_variant() {
+        for kind in [PersonKind::Attendee, PersonKind::Manual] {
+            assert_eq!(round_trip(&kind), kind);
+        }
+    }
+
+    #[test]
+    fn person_kind_is_snake_case() {
+        assert_eq!(
+            serde_json::to_value(PersonKind::Attendee).unwrap(),
+            json!("attendee")
+        );
+        assert_eq!(
+            serde_json::to_value(PersonKind::Manual).unwrap(),
+            json!("manual")
+        );
+    }
+
+    #[test]
+    fn preference_person_json_field_names() {
+        let value = sample_person(PersonKind::Attendee, Some("a@x.it"));
+        let expected = json!({"kind": "attendee", "email": "a@x.it", "label": "Anna"});
+        assert_eq!(serde_json::to_value(value).unwrap(), expected);
+    }
+
+    #[test]
+    fn put_preference_request_round_trips() {
+        let value = PutPreferenceRequest {
+            meeting_title: "Retro".to_string(),
+            people: vec![
+                sample_person(PersonKind::Attendee, Some("a@x.it")),
+                sample_person(PersonKind::Manual, None),
+            ],
+        };
+        assert_eq!(round_trip(&value), value);
+    }
+
+    #[test]
+    fn put_preference_request_json_field_names() {
+        let value = PutPreferenceRequest {
+            meeting_title: "Retro".to_string(),
+            people: vec![sample_person(PersonKind::Manual, None)],
+        };
+        let expected = json!({
+            "meeting_title": "Retro",
+            "people": [{"kind": "manual", "email": null, "label": "Anna"}],
+        });
+        assert_eq!(serde_json::to_value(value).unwrap(), expected);
+    }
+
+    #[test]
+    fn meeting_preference_round_trips() {
+        let value = MeetingPreference {
+            id: "p1".to_string(),
+            meeting_title: "Retro".to_string(),
+            people: vec![sample_person(PersonKind::Manual, None)],
+        };
+        assert_eq!(round_trip(&value), value);
+    }
+
+    #[test]
+    fn meeting_with_preference_round_trips() {
+        let mut value = sample_meeting();
+        value.preference = Some(MeetingPreference {
+            id: "p1".to_string(),
+            meeting_title: "Daily".to_string(),
+            people: vec![sample_person(PersonKind::Attendee, Some("a@x.it"))],
+        });
+        assert_eq!(round_trip(&value), value);
+    }
+
+    #[test]
+    fn meeting_without_preference_field_deserializes_to_none() {
+        let mut value = serde_json::to_value(sample_meeting()).unwrap();
+        value.as_object_mut().unwrap().remove("preference");
+        let actual: Meeting = serde_json::from_value(value).unwrap();
+        assert_eq!(actual.preference, None);
     }
 }
