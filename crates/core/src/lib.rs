@@ -36,5 +36,5 @@ pub use plan::{
 pub use quarters::{
     DEFAULT_OPTION_COUNT, LEAD_SECONDS, QUARTER_MINUTES, QuarterOption, quarter_options,
 };
-pub use slots::{MIN_SLOT_MS, Participant, SlotSchedule, SlotView, allocate_ms, participants};
+pub use slots::{Participant, participants};
 pub use turn::{SpeakingTurn, max_turn_minutes};
