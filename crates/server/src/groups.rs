@@ -92,9 +92,9 @@ impl<'a> Resolver<'a> {
     /// Expands a whole root privately. A cycle or any incomplete descendant
     /// discards all leaves; empty groups successfully produce no people.
     ///
-    /// Returns `Ok(None)` when Cloud Identity answers 404 for the root itself:
-    /// the invitation is not a group and stays a direct attendee. A 404 for a
-    /// nested member of unknown type is still incomplete.
+    /// Returns `Ok(None)` when Cloud Identity shows no group for the root itself
+    /// (see [`Resolver::fetch`]): the invitation stays a direct attendee. The
+    /// same answer for a nested member of unknown type is still incomplete.
     async fn expand(&mut self, email: &str) -> Result<Option<Vec<GroupMember>>, Incomplete> {
         let mut leaves = Vec::new();
         let mut pending = vec![(email.to_string(), 0, HashSet::new())];
@@ -139,7 +139,7 @@ impl<'a> Resolver<'a> {
     }
 
     /// Looks up the group resource name of an address. `Ok(None)` means Cloud
-    /// Identity answered 404, so the address is not a visible group.
+    /// Identity does not show a group for it (404 or plain 403).
     async fn lookup(&mut self, email: &str) -> Result<Option<String>, Incomplete> {
         let key = email.trim().to_ascii_lowercase();
         if let Some(result) = self.lookups.get(&key) {
@@ -207,9 +207,12 @@ impl<'a> Resolver<'a> {
         Err(Incomplete)
     }
 
-    /// Bounds sending and body reads together. A 404 gives `Ok(None)` without
-    /// reading the body; every other non-success status and invalid JSON are
-    /// indistinguishable to callers and never expose provider content.
+    /// Bounds sending and body reads together. A 404, or a 403 that is a plain
+    /// `PERMISSION_DENIED` (see [`is_plain_permission_denied`]), gives
+    /// `Ok(None)`: Cloud Identity answers so for people, missing groups and
+    /// groups the caller cannot see alike. Every other non-success status and
+    /// invalid JSON are indistinguishable to callers and never expose provider
+    /// content.
     async fn fetch<T: serde::de::DeserializeOwned>(
         &mut self,
         url: reqwest::Url,
@@ -229,10 +232,11 @@ impl<'a> Resolver<'a> {
                 .send()
                 .await
                 .map_err(|_| Incomplete)?;
-            if response.status() == reqwest::StatusCode::NOT_FOUND {
+            let status = response.status();
+            if status == reqwest::StatusCode::NOT_FOUND {
                 return Ok(None);
             }
-            if !response.status().is_success() {
+            if !status.is_success() && status != reqwest::StatusCode::FORBIDDEN {
                 return Err(Incomplete);
             }
             let mut bytes = Vec::new();
@@ -241,6 +245,13 @@ impl<'a> Resolver<'a> {
                     return Err(Incomplete);
                 }
                 bytes.extend_from_slice(&chunk);
+            }
+            if status == reqwest::StatusCode::FORBIDDEN {
+                return if is_plain_permission_denied(&bytes) {
+                    Ok(None)
+                } else {
+                    Err(Incomplete)
+                };
             }
             serde_json::from_slice(&bytes)
                 .map(Some)
@@ -374,6 +385,30 @@ pub(crate) async fn resolve_meetings(
         meeting.participant_resolution = resolved.resolution;
     }
     Ok(())
+}
+
+#[derive(Deserialize)]
+struct ErrorBody {
+    error: ErrorStatus,
+}
+
+#[derive(Deserialize)]
+struct ErrorStatus {
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    details: Vec<serde_json::Value>,
+}
+
+/// True when a 403 body is a bare `PERMISSION_DENIED` without details. Cloud
+/// Identity answers so for people, missing groups and groups the caller cannot
+/// see. A disabled API or a token without the groups scope adds an `ErrorInfo`
+/// detail with a reason, so those, like any unparseable body, return false.
+fn is_plain_permission_denied(body: &[u8]) -> bool {
+    match serde_json::from_slice::<ErrorBody>(body) {
+        Ok(body) => body.error.status == "PERMISSION_DENIED" && body.error.details.is_empty(),
+        Err(_) => false,
+    }
 }
 
 /// True when `attendee` could be a group invitation. A group cannot answer an
@@ -908,6 +943,83 @@ mod tests {
         let base_url = server.uri();
         let mut resolver = Resolver::new(&http, &base_url, AccessToken::new("secret".into()));
         assert!(resolver.expand("team@example.com").await.is_err());
+    }
+
+    fn permission_denied(details: Value) -> Value {
+        json!({"error":{"code":403,"message":"The caller does not have permission","status":"PERMISSION_DENIED","details":details}})
+    }
+
+    #[tokio::test]
+    async fn root_plain_permission_denied_is_not_a_group() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/groups:lookup"))
+            .respond_with(ResponseTemplate::new(403).set_body_json(permission_denied(json!([]))))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let http = reqwest::Client::new();
+        let base_url = server.uri();
+        let mut resolver = Resolver::new(&http, &base_url, AccessToken::new("secret".into()));
+        assert!(resolver.expand("ada@example.com").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn root_permission_denied_with_a_reason_is_incomplete() {
+        let server = MockServer::start().await;
+        let details = json!([{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"SERVICE_DISABLED"}]);
+        Mock::given(method("GET"))
+            .and(path("/groups:lookup"))
+            .respond_with(ResponseTemplate::new(403).set_body_json(permission_denied(details)))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let http = reqwest::Client::new();
+        let base_url = server.uri();
+        let mut resolver = Resolver::new(&http, &base_url, AccessToken::new("secret".into()));
+        assert!(resolver.expand("ada@example.com").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn plain_permission_denied_on_memberships_is_incomplete() {
+        let server = MockServer::start().await;
+        lookup(&server, "team@example.com", "team").await;
+        Mock::given(method("GET"))
+            .and(path("/groups/team/memberships"))
+            .respond_with(ResponseTemplate::new(403).set_body_json(permission_denied(json!([]))))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let http = reqwest::Client::new();
+        let base_url = server.uri();
+        let mut resolver = Resolver::new(&http, &base_url, AccessToken::new("secret".into()));
+        assert!(resolver.expand("team@example.com").await.is_err());
+    }
+
+    #[test]
+    fn bare_permission_denied_body_is_plain() {
+        let body = permission_denied(json!([])).to_string();
+        assert!(is_plain_permission_denied(body.as_bytes()));
+    }
+
+    #[test]
+    fn permission_denied_without_details_field_is_plain() {
+        let body = json!({"error":{"code":403,"status":"PERMISSION_DENIED"}}).to_string();
+        assert!(is_plain_permission_denied(body.as_bytes()));
+    }
+
+    #[test]
+    fn permission_denied_with_details_is_not_plain() {
+        let body =
+            permission_denied(json!([{"reason":"ACCESS_TOKEN_SCOPE_INSUFFICIENT"}])).to_string();
+        assert!(!is_plain_permission_denied(body.as_bytes()));
+    }
+
+    #[test]
+    fn other_status_or_unparseable_body_is_not_plain() {
+        let other = json!({"error":{"code":403,"status":"RESOURCE_EXHAUSTED"}}).to_string();
+        assert!(!is_plain_permission_denied(other.as_bytes()));
+        assert!(!is_plain_permission_denied(b"private email and token"));
     }
 
     fn attendee(is_self: bool, response: ResponseStatus) -> Attendee {

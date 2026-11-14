@@ -190,7 +190,9 @@ async fn meeting_of_people_only_is_complete_and_skips_answered_attendees(pool: P
     Mock::given(method("GET"))
         .and(path("/identity/v1/groups:lookup"))
         .and(query_param("groupKey.id", "bob@example.com"))
-        .respond_with(ResponseTemplate::new(404))
+        .respond_with(ResponseTemplate::new(403).set_body_json(json!({"error":{
+            "code":403,"message":"The caller does not have permission","status":"PERMISSION_DENIED"
+        }})))
         .expect(1)
         .mount(&h.google)
         .await;
