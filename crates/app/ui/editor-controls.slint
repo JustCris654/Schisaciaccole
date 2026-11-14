@@ -126,8 +126,7 @@ export component CompactButton inherits VerticalLayout {
 export component ThemedField inherits Rectangle {
     in-out property <string> text <=> input.text;
     in property <string> accessible-name;
-    in property <bool> numeric;
-    in property <string> committed-text;
+    in property <string> placeholder-text;
     out property <bool> has-focus: input.has-focus;
     in property <int> font-weight: 700;
     in property <TextHorizontalAlignment> horizontal-alignment: left;
@@ -141,11 +140,18 @@ export component ThemedField inherits Rectangle {
     background: input.has-focus ? AppTheme.surface : transparent;
     clip: true;
 
-    changed has-focus => {
-        if (root.numeric && !root.has-focus) { input.text = root.committed-text; }
-    }
-    changed committed-text => {
-        if (root.numeric) { input.text = root.committed-text; }
+    if root.text == "" && root.placeholder-text != "" : Text {
+        x: 4px;
+        width: parent.width - 8px;
+        height: parent.height;
+        text: root.placeholder-text;
+        font-size: 16px;
+        font-weight: root.font-weight;
+        color: AppTheme.text-secondary;
+        vertical-alignment: center;
+        horizontal-alignment: root.horizontal-alignment;
+        overflow: elide;
+        accessible-role: none;
     }
 
     input := TextInput {
@@ -161,12 +167,8 @@ export component ThemedField inherits Rectangle {
         selection-foreground-color: AppTheme.on-brand;
         vertical-alignment: center;
         horizontal-alignment: root.horizontal-alignment;
-        input-type: root.numeric ? InputType.number : InputType.text;
         accessible-label: root.accessible-name;
         edited => { root.edited(self.text); }
-        accepted => {
-            if (root.numeric) { input.text = root.committed-text; }
-        }
         cursor-position-changed(position) => {
             if (position.x + self.offset < 4px) {
                 self.offset = 4px - position.x;

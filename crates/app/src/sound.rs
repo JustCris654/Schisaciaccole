@@ -87,7 +87,7 @@ pub fn play_sound() {
     });
 }
 
-/// Plays a short beep that marks the end of a speaking slot, on a background thread, and returns
+/// Plays a short beep that marks the end of a speaking turn, on a background thread, and returns
 /// at once.
 ///
 /// Every failure (no audio device) is logged and the beep is skipped; nothing is reported to the

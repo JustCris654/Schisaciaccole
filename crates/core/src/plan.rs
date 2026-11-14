@@ -1,32 +1,30 @@
-//! Slot plans built from saved templates, and the conversions used by the minutes editor.
+//! Plans built from saved templates, and the conversions used by the participant editor.
 //!
-//! A template stores weights in seconds per entry. A plan applies a template to the people who
-//! are actually in a meeting. The editor works in whole minutes over the nominal meeting
-//! duration and shows the time not given to anybody as unassigned. Nothing here reads the clock.
+//! A template stores a weight per entry. A plan applies a template to the people who are
+//! actually in a meeting. The participant editor only tells who takes part: a template saved
+//! from it gives every included person the same weight. Nothing here reads the clock.
 
 use crate::api::{EntryKind, PlanEntry, TemplateEntry};
 use crate::attendee::display_name_from_email;
-use crate::slots::{Participant, allocate_ms};
+use crate::slots::Participant;
 use std::collections::HashSet;
 
 /// Label of the entry that holds the time not assigned to anybody.
 pub const FREE_TIME_LABEL: &str = "Tempo libero";
 
-/// Label given to a non-attendee row left without a name.
-const DEFAULT_ROW_LABEL: &str = "Voce";
+/// Weight, in seconds, that [`editor_to_template`] gives to every included participant.
+pub const PARTICIPANT_WEIGHT_SECS: u32 = 60;
 
-/// One row of the minutes editor.
+/// One row of the participant editor.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EditorEntry {
-    /// Kind of the row; never [`EntryKind::FreeTime`], the editor shows unassigned time instead.
+    /// Kind of the row; never [`EntryKind::FreeTime`], the editor has no such rows.
     pub kind: EntryKind,
     /// Email of the attendee; `Some` only for [`EntryKind::Attendee`].
     pub email: Option<String>,
     /// Label shown for the row.
     pub label: String,
-    /// Assigned minutes; meaningful only when `included` is true.
-    pub minutes: u32,
-    /// False when the participant is excluded from the meeting slots.
+    /// False when the participant is excluded from the meeting.
     pub included: bool,
 }
 
@@ -169,132 +167,78 @@ fn template_entry_to_plan(entry: &TemplateEntry) -> PlanEntry {
     }
 }
 
-/// Converts template entries into plan entries one to one, keeping order and weights.
+/// Converts a plan into participant editor rows.
 ///
-/// Used to start a timer from editor rows without saving them. It does not match entries against
-/// participants and does not drop anything.
-pub fn template_to_plan(entries: &[TemplateEntry]) -> Vec<PlanEntry> {
-    entries.iter().map(template_entry_to_plan).collect()
-}
-
-/// Rounds seconds to the nearest whole minute, halves going up, as `u32` minutes.
-fn rounded_minutes(secs: i64) -> u32 {
-    let minutes = secs.saturating_add(30) / 60;
-    u32::try_from(minutes).unwrap_or(0)
-}
-
-/// Converts a plan into editor rows over a meeting of `duration_secs` seconds.
+/// For every entry that is not free time, the row is `included` when its weight is above 0.
+/// Order, kind, email and label are kept. Free time entries are skipped.
 ///
-/// The whole duration is split among all entries by weight with [`allocate_ms`] (used on
-/// seconds). For every entry that is not free time, the row is `included` when its weight is
-/// above 0 and then gets its share rounded to the nearest minute (half up); an excluded row gets
-/// 0 minutes. Free time entries are skipped: their time shows up as unassigned.
-///
-/// Edge cases: when the split is impossible (`duration_secs <= 0`, no entries or all weights 0)
-/// every row gets 0 minutes and `included` still follows the weight. Rounding can make the sum
-/// of minutes differ from the duration by a few minutes, see [`unassigned_minutes`].
-pub fn plan_to_editor(entries: &[PlanEntry], duration_secs: i64) -> Vec<EditorEntry> {
-    let weights: Vec<u64> = entries.iter().map(|entry| entry.weight).collect();
-    let shares = allocate_ms(&weights, duration_secs);
-
+/// Edge cases: an empty plan gives no rows; a plan of only free time gives no rows.
+pub fn plan_to_editor(entries: &[PlanEntry]) -> Vec<EditorEntry> {
     let mut rows = Vec::with_capacity(entries.len());
-    for (position, entry) in entries.iter().enumerate() {
+    for entry in entries {
         if entry.kind == EntryKind::FreeTime {
             continue;
         }
-        let included = entry.weight > 0;
-        let share = shares
-            .as_ref()
-            .and_then(|shares| shares.get(position))
-            .copied()
-            .unwrap_or(0);
-        let minutes = if included { rounded_minutes(share) } else { 0 };
         rows.push(EditorEntry {
             kind: entry.kind,
             email: entry.email.clone(),
             label: entry.label.clone(),
-            minutes,
-            included,
+            included: entry.weight > 0,
         });
     }
     rows
 }
 
-/// Returns the minutes of the meeting not assigned to any included row.
-///
-/// It is `duration_secs / 60` (floor) minus the sum of the minutes of the included rows.
-/// A negative result means the rows take more time than the meeting has.
-///
-/// Edge cases: a negative duration gives a negative result; sums saturate instead of
-/// overflowing.
-pub fn unassigned_minutes(rows: &[EditorEntry], duration_secs: i64) -> i64 {
-    let mut assigned: i64 = 0;
-    for row in rows {
-        if row.included {
-            assigned = assigned.saturating_add(i64::from(row.minutes));
-        }
-    }
-    (duration_secs / 60).saturating_sub(assigned)
-}
-
 /// Converts editor rows into template entries to save.
 ///
-/// Every row becomes one entry in order, with `weight_secs = minutes * 60` when included and 0
-/// otherwise. The email is kept only for attendees. Labels are trimmed; an empty label becomes
-/// the name built from the email with [`display_name_from_email`] for attendees, or `"Voce"`
-/// otherwise (also for an attendee without email). When `duration_secs` minus the assigned
-/// seconds is above 0, a free time entry labelled [`FREE_TIME_LABEL`] with that difference as
-/// weight is added at the end.
+/// Rows keep their order. An included row gets [`PARTICIPANT_WEIGHT_SECS`] and an excluded row
+/// 0, so the person stays in the template as excluded. The email is kept only for attendees.
+/// Labels are trimmed. No free time entry is added.
 ///
-/// Edge cases: over-assigned rows or a non-positive duration add no free time entry. Seconds
-/// saturate at `u32::MAX` instead of overflowing.
-pub fn editor_to_template(rows: &[EditorEntry], duration_secs: i64) -> Vec<TemplateEntry> {
-    let mut entries = Vec::with_capacity(rows.len() + 1);
-    let mut assigned: i64 = 0;
+/// Edge cases: a row with an empty label is skipped, except an attendee, which is named from
+/// its email with [`display_name_from_email`]; an attendee without email and without a label is
+/// skipped too. A row of kind [`EntryKind::FreeTime`] is skipped. Nothing here limits the number
+/// of entries, and an input with no included row gives a template the server rejects.
+pub fn editor_to_template(rows: &[EditorEntry]) -> Vec<TemplateEntry> {
+    let mut entries = Vec::with_capacity(rows.len());
     for row in rows {
-        let weight_secs = if row.included {
-            row.minutes.saturating_mul(60)
-        } else {
-            0
-        };
-        assigned = assigned.saturating_add(i64::from(weight_secs));
+        if row.kind == EntryKind::FreeTime {
+            continue;
+        }
+        let label = row_label(row);
+        if label.is_empty() {
+            continue;
+        }
         let email = match row.kind {
             EntryKind::Attendee => row.email.clone(),
             _ => None,
         };
+        let weight_secs = if row.included {
+            PARTICIPANT_WEIGHT_SECS
+        } else {
+            0
+        };
         entries.push(TemplateEntry {
             kind: row.kind,
-            label: row_label(row),
+            label,
             email,
             weight_secs,
-        });
-    }
-
-    let free_secs = duration_secs.saturating_sub(assigned);
-    if free_secs > 0 {
-        entries.push(TemplateEntry {
-            kind: EntryKind::FreeTime,
-            email: None,
-            label: FREE_TIME_LABEL.to_string(),
-            weight_secs: u32::try_from(free_secs).unwrap_or(u32::MAX),
         });
     }
     entries
 }
 
-/// Returns the trimmed label of a row, or a fallback name when it is empty.
+/// Returns the trimmed label of a row. For an attendee with an empty label it is the name built
+/// from the email; it is empty when there is nothing to show.
 fn row_label(row: &EditorEntry) -> String {
     let label = row.label.trim();
     if !label.is_empty() {
         return label.to_string();
     }
     if row.kind == EntryKind::Attendee {
-        let name = display_name_from_email(row.email.as_deref().unwrap_or(""));
-        if !name.is_empty() {
-            return name;
-        }
+        return display_name_from_email(row.email.as_deref().unwrap_or(""));
     }
-    DEFAULT_ROW_LABEL.to_string()
+    String::new()
 }
 
 #[cfg(test)]
@@ -335,14 +279,26 @@ mod tests {
         }
     }
 
-    fn row(label: &str, email: &str, minutes: u32, included: bool) -> EditorEntry {
+    fn row(label: &str, email: &str, included: bool) -> EditorEntry {
         EditorEntry {
             kind: EntryKind::Attendee,
             email: Some(email.to_string()),
             label: label.to_string(),
-            minutes,
             included,
         }
+    }
+
+    fn manual_row(label: &str, included: bool) -> EditorEntry {
+        EditorEntry {
+            kind: EntryKind::Manual,
+            email: None,
+            label: label.to_string(),
+            included,
+        }
+    }
+
+    fn plan_of(entries: &[TemplateEntry]) -> Vec<PlanEntry> {
+        entries.iter().map(template_entry_to_plan).collect()
     }
 
     fn four_people() -> Vec<Participant> {
@@ -584,169 +540,120 @@ mod tests {
     }
 
     #[test]
-    fn template_to_plan_converts_one_to_one() {
-        let entries = vec![
-            attendee("Anna", "anna@x.it", 300),
-            manual("Demo", 0),
-            free(60),
-        ];
+    fn plan_to_editor_includes_entries_with_a_positive_weight() {
+        let plan = plan_of(&design_doc_template());
 
-        let plan = template_to_plan(&entries);
+        let rows = plan_to_editor(&plan);
 
-        assert_eq!(labels(&plan), ["Anna", "Demo", FREE_TIME_LABEL]);
-        assert_eq!(weights(&plan), [300, 0, 60]);
-        assert_eq!(plan[0].email.as_deref(), Some("anna@x.it"));
-        assert_eq!(plan[2].kind, EntryKind::FreeTime);
-    }
-
-    #[test]
-    fn plan_to_editor_rebuilds_the_design_doc_minutes() {
-        let plan = template_to_plan(&design_doc_template());
-
-        let rows = plan_to_editor(&plan, 3600);
-
-        let minutes: Vec<u32> = rows.iter().map(|row| row.minutes).collect();
-        assert_eq!(minutes, [25, 5, 5, 5]);
+        let names: Vec<&str> = rows.iter().map(|row| row.label.as_str()).collect();
+        assert_eq!(names, ["Anna", "Bruno", "Carla", "Dario"]);
         assert!(rows.iter().all(|row| row.included));
-        assert_eq!(unassigned_minutes(&rows, 3600), 20);
+        assert_eq!(rows[0].email.as_deref(), Some("anna@x.it"));
     }
 
     #[test]
-    fn plan_to_editor_scales_to_a_shorter_meeting_rounding_half_up() {
-        let plan = template_to_plan(&design_doc_template());
-
-        let rows = plan_to_editor(&plan, 1800);
-
-        // 750 s = 12.5 min -> 13; 150 s = 2.5 min -> 3
-        let minutes: Vec<u32> = rows.iter().map(|row| row.minutes).collect();
-        assert_eq!(minutes, [13, 3, 3, 3]);
-        assert_eq!(unassigned_minutes(&rows, 1800), 30 - 22);
-    }
-
-    #[test]
-    fn plan_to_editor_gives_excluded_rows_zero_minutes() {
-        let plan = template_to_plan(&[
+    fn plan_to_editor_excludes_an_entry_with_weight_zero() {
+        let plan = plan_of(&[
             attendee("Anna", "anna@x.it", 300),
             attendee("Bruno", "bruno@x.it", 0),
         ]);
 
-        let rows = plan_to_editor(&plan, 600);
+        let rows = plan_to_editor(&plan);
 
-        assert_eq!(rows[0].minutes, 10);
         assert!(rows[0].included);
-        assert_eq!(rows[1].minutes, 0);
         assert!(!rows[1].included);
     }
 
     #[test]
     fn plan_to_editor_skips_free_time_entries() {
-        let plan = template_to_plan(&[manual("Demo", 300), free(300)]);
+        let plan = plan_of(&[manual("Demo", 300), free(300)]);
 
-        let rows = plan_to_editor(&plan, 600);
+        let rows = plan_to_editor(&plan);
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].kind, EntryKind::Manual);
-        assert_eq!(rows[0].minutes, 5);
     }
 
     #[test]
-    fn plan_to_editor_gives_zero_minutes_for_a_zero_duration() {
-        let plan = template_to_plan(&[attendee("Anna", "anna@x.it", 300)]);
+    fn plan_to_editor_keeps_the_plan_order() {
+        let plan = plan_of(&[
+            attendee("Dario", "dario@x.it", 60),
+            manual("Demo", 60),
+            attendee("Anna", "anna@x.it", 60),
+        ]);
 
-        let rows = plan_to_editor(&plan, 0);
+        let rows = plan_to_editor(&plan);
 
-        assert_eq!(rows[0].minutes, 0);
-        assert!(rows[0].included);
-    }
-
-    #[test]
-    fn plan_to_editor_gives_zero_minutes_when_all_weights_are_zero() {
-        let plan = template_to_plan(&[attendee("Anna", "anna@x.it", 0)]);
-
-        let rows = plan_to_editor(&plan, 600);
-
-        assert_eq!(rows[0].minutes, 0);
-        assert!(!rows[0].included);
+        let names: Vec<&str> = rows.iter().map(|row| row.label.as_str()).collect();
+        assert_eq!(names, ["Dario", "Demo", "Anna"]);
     }
 
     #[test]
     fn plan_to_editor_of_nothing_is_empty() {
-        assert!(plan_to_editor(&[], 600).is_empty());
+        assert!(plan_to_editor(&[]).is_empty());
     }
 
     #[test]
-    fn unassigned_minutes_ignores_excluded_rows() {
+    fn editor_to_template_gives_included_rows_the_participant_weight() {
         let rows = vec![
-            row("Anna", "a@x.it", 10, true),
-            row("Bruno", "b@x.it", 7, false),
+            row("Anna", "anna@x.it", true),
+            row("Bruno", "bruno@x.it", true),
         ];
 
-        assert_eq!(unassigned_minutes(&rows, 1800), 20);
-    }
+        let entries = editor_to_template(&rows);
 
-    #[test]
-    fn unassigned_minutes_is_negative_when_over_assigned() {
-        let rows = vec![row("Anna", "a@x.it", 40, true)];
-
-        assert_eq!(unassigned_minutes(&rows, 1800), -10);
-    }
-
-    #[test]
-    fn unassigned_minutes_floors_the_duration() {
-        assert_eq!(unassigned_minutes(&[], 119), 1);
-    }
-
-    #[test]
-    fn editor_to_template_adds_free_time_for_unassigned_seconds() {
-        let rows = vec![
-            row("Anna", "anna@x.it", 25, true),
-            row("Bruno", "bruno@x.it", 5, true),
-            row("Carla", "carla@x.it", 5, true),
-            row("Dario", "dario@x.it", 5, true),
-        ];
-
-        let entries = editor_to_template(&rows, 3600);
-
-        assert_eq!(entries, design_doc_template());
-    }
-
-    #[test]
-    fn editor_to_template_has_no_free_time_when_fully_assigned() {
-        let rows = vec![row("Anna", "anna@x.it", 30, true)];
-
-        let entries = editor_to_template(&rows, 1800);
-
-        assert_eq!(entries.len(), 1);
-    }
-
-    #[test]
-    fn editor_to_template_has_no_free_time_when_over_assigned() {
-        let rows = vec![row("Anna", "anna@x.it", 40, true)];
-
-        let entries = editor_to_template(&rows, 1800);
-
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].weight_secs, 2400);
+        assert_eq!(
+            entries,
+            vec![
+                attendee("Anna", "anna@x.it", PARTICIPANT_WEIGHT_SECS),
+                attendee("Bruno", "bruno@x.it", PARTICIPANT_WEIGHT_SECS),
+            ]
+        );
     }
 
     #[test]
     fn editor_to_template_saves_excluded_rows_with_weight_zero() {
-        let rows = vec![row("Anna", "anna@x.it", 10, false)];
+        let rows = vec![row("Anna", "anna@x.it", false)];
 
-        let entries = editor_to_template(&rows, 600);
+        let entries = editor_to_template(&rows);
 
-        assert_eq!(entries[0].weight_secs, 0);
-        assert_eq!(entries[1].kind, EntryKind::FreeTime);
-        assert_eq!(entries[1].weight_secs, 600);
+        assert_eq!(entries, vec![attendee("Anna", "anna@x.it", 0)]);
+    }
+
+    #[test]
+    fn editor_to_template_adds_no_free_time_entry() {
+        let rows = vec![row("Anna", "anna@x.it", true)];
+
+        let entries = editor_to_template(&rows);
+
+        assert!(
+            entries
+                .iter()
+                .all(|entry| entry.kind != EntryKind::FreeTime)
+        );
+    }
+
+    #[test]
+    fn editor_to_template_keeps_the_row_order() {
+        let rows = vec![
+            row("Dario", "dario@x.it", true),
+            manual_row("Demo", true),
+            row("Anna", "anna@x.it", false),
+        ];
+
+        let entries = editor_to_template(&rows);
+
+        let labels: Vec<&str> = entries.iter().map(|entry| entry.label.as_str()).collect();
+        assert_eq!(labels, ["Dario", "Demo", "Anna"]);
     }
 
     #[test]
     fn editor_to_template_keeps_email_only_for_attendees() {
-        let mut manual_row = row("Demo", "stale@x.it", 5, true);
-        manual_row.kind = EntryKind::Manual;
-        let rows = vec![row("Anna", "anna@x.it", 5, true), manual_row];
+        let mut stale = manual_row("Demo", true);
+        stale.email = Some("stale@x.it".to_string());
+        let rows = vec![row("Anna", "anna@x.it", true), stale];
 
-        let entries = editor_to_template(&rows, 600);
+        let entries = editor_to_template(&rows);
 
         assert_eq!(entries[0].email.as_deref(), Some("anna@x.it"));
         assert_eq!(entries[1].email, None);
@@ -754,58 +661,56 @@ mod tests {
 
     #[test]
     fn editor_to_template_trims_labels() {
-        let rows = vec![row("  Anna  ", "anna@x.it", 5, true)];
+        let rows = vec![row("  Anna  ", "anna@x.it", true)];
 
-        let entries = editor_to_template(&rows, 300);
+        let entries = editor_to_template(&rows);
 
         assert_eq!(entries[0].label, "Anna");
     }
 
     #[test]
     fn editor_to_template_names_an_empty_attendee_label_from_the_email() {
-        let rows = vec![row("  ", "anna.rossi@x.it", 5, true)];
+        let rows = vec![row("  ", "anna.rossi@x.it", true)];
 
-        let entries = editor_to_template(&rows, 300);
+        let entries = editor_to_template(&rows);
 
         assert_eq!(entries[0].label, "Anna Rossi");
     }
 
     #[test]
-    fn editor_to_template_names_an_empty_manual_label_voce() {
-        let mut manual_row = row("", "", 5, true);
-        manual_row.kind = EntryKind::Manual;
-        manual_row.email = None;
+    fn editor_to_template_skips_a_blank_manual_row() {
+        let rows = vec![manual_row("   ", true), row("Anna", "anna@x.it", true)];
 
-        let entries = editor_to_template(&[manual_row], 300);
+        let entries = editor_to_template(&rows);
 
-        assert_eq!(entries[0].label, "Voce");
+        assert_eq!(
+            entries,
+            vec![attendee("Anna", "anna@x.it", PARTICIPANT_WEIGHT_SECS)]
+        );
     }
 
     #[test]
-    fn editor_to_template_names_an_empty_attendee_without_email_voce() {
-        let mut attendee_row = row("", "", 5, true);
-        attendee_row.email = None;
+    fn editor_to_template_skips_a_nameless_attendee_without_email() {
+        let mut nameless = row("", "", true);
+        nameless.email = None;
 
-        let entries = editor_to_template(&[attendee_row], 300);
+        let entries = editor_to_template(&[nameless]);
 
-        assert_eq!(entries[0].label, "Voce");
+        assert!(entries.is_empty());
     }
 
     #[test]
-    fn editor_to_template_saturates_instead_of_overflowing() {
-        let rows = vec![row("Anna", "anna@x.it", u32::MAX, true)];
+    fn editor_to_template_skips_free_time_rows() {
+        let mut free_row = manual_row("Tempo libero", true);
+        free_row.kind = EntryKind::FreeTime;
 
-        let entries = editor_to_template(&rows, i64::MAX);
+        let entries = editor_to_template(&[free_row]);
 
-        assert_eq!(entries[0].weight_secs, u32::MAX);
-        assert_eq!(entries[1].kind, EntryKind::FreeTime);
-        assert_eq!(entries[1].weight_secs, u32::MAX);
+        assert!(entries.is_empty());
     }
 
     #[test]
-    fn editor_to_template_of_nothing_is_only_free_time() {
-        let entries = editor_to_template(&[], 600);
-
-        assert_eq!(entries, vec![free(600)]);
+    fn editor_to_template_of_nothing_is_empty() {
+        assert!(editor_to_template(&[]).is_empty());
     }
 }

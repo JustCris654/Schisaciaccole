@@ -30,8 +30,8 @@ pub use countdown::{FINISH_GRACE_MS, TickOutcome, evaluate, resolve_target};
 pub use daily::{DailyRound, MIN_TURN_MS, looks_daily, shuffled};
 pub use error::TimeError;
 pub use plan::{
-    EditorEntry, FREE_TIME_LABEL, build_plan, editor_to_template, normalize_title, plan_to_editor,
-    template_to_plan, unassigned_minutes,
+    EditorEntry, FREE_TIME_LABEL, PARTICIPANT_WEIGHT_SECS, build_plan, editor_to_template,
+    normalize_title, plan_to_editor,
 };
 pub use quarters::{
     DEFAULT_OPTION_COUNT, LEAD_SECONDS, QUARTER_MINUTES, QuarterOption, quarter_options,

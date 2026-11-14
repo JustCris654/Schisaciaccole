@@ -5,17 +5,17 @@ use std::fmt::Display;
 use std::rc::Rc;
 
 use crate::backend::BackendError;
-use crate::editor::SlotEditor;
+use crate::editor::ParticipantEditor;
 use crate::login::REAUTH_MESSAGE;
 use chrono::{DateTime, FixedOffset, Local, TimeZone};
 use log::{debug, error, info, warn};
 use schisaciaccole_core::api::{
-    EntryKind, Me, Meeting, PlanEntry, PutTemplateRequest, SlotPlan, Template, error_codes,
+    EntryKind, Me, Meeting, PutTemplateRequest, SlotPlan, Template, error_codes,
 };
 use schisaciaccole_core::{
-    DEFAULT_OPTION_COUNT, DailyRound, EditorEntry, FREE_TIME_LABEL, QuarterOption, SlotSchedule,
-    SpeakingTurn, TickOutcome, TimeError, abbreviate_name, evaluate, looks_daily, max_turn_minutes,
-    participants, quarter_options, shuffled,
+    DEFAULT_OPTION_COUNT, DailyRound, EditorEntry, QuarterOption, SpeakingTurn, TickOutcome,
+    TimeError, abbreviate_name, evaluate, looks_daily, max_turn_minutes, participants,
+    quarter_options, shuffled,
 };
 use slint::{ComponentHandle, LogicalSize, Model, ModelRc, SharedString, VecModel};
 
@@ -31,7 +31,7 @@ pub const LOCAL_MODE_NOTICE: &str = "Accesso non disponibile: modalità locale";
 pub const LOGOUT_NOTICE: &str = "Disconnessione…";
 
 /// Editor notice when the saved plan could not be loaded.
-const EDITOR_PLAN_FALLBACK_NOTICE: &str = "Preferenza non caricata: slot uguali";
+const EDITOR_PLAN_FALLBACK_NOTICE: &str = "Preferenza non caricata: partecipanti del calendario";
 /// Editor notice while a template save runs.
 const TEMPLATE_SAVING_NOTICE: &str = "Salvataggio…";
 /// Editor notice after a template save.
@@ -127,7 +127,7 @@ pub struct TemplateDelete {
 
 /// Editor page open on one meeting.
 struct OpenEditor {
-    editor: SlotEditor,
+    editor: ParticipantEditor,
     /// True until the plan result (or its fallback) has filled the rows.
     loading: bool,
     /// True while a template save or deletion runs.
@@ -141,9 +141,6 @@ pub struct AppState {
     page: Page,
     editor: Option<OpenEditor>,
     editor_model: Rc<VecModel<EditorRow>>,
-    slots: Option<SlotSchedule<Local>>,
-    slot_index: Option<usize>,
-    free_time: bool,
     options: Vec<DateTime<Local>>,
     /// End instant of the slot picked on the manual page; `None` when no slot is picked.
     selected: Option<DateTime<Local>>,
@@ -207,9 +204,6 @@ impl AppState {
             page: Page::ManualPage,
             editor: None,
             editor_model: Rc::new(VecModel::from(Vec::new())),
-            slots: None,
-            slot_index: None,
-            free_time: false,
             options,
             selected: None,
             target: None,
@@ -363,7 +357,7 @@ impl AppState {
         self.tick()
     }
 
-    /// Opens the slot editor on the meeting in row `index` and moves to the editor page.
+    /// Opens the participant editor on the meeting in row `index` and moves to the editor page.
     ///
     /// The editor starts without rows, loading: the caller must fetch the slot plan of the
     /// returned event id for the editor and pass the result to
@@ -381,7 +375,7 @@ impl AppState {
             return None;
         };
 
-        let editor = SlotEditor::new(meeting.clone());
+        let editor = ParticipantEditor::new(meeting.clone());
         let event_id = editor.event_id().to_string();
         self.editor = Some(OpenEditor {
             editor,
@@ -402,11 +396,10 @@ impl AppState {
 
     /// Fills the editor rows from the slot plan fetched for `event_id`.
     ///
-    /// On success the rows come from the plan over the nominal meeting duration and the
+    /// On success the rows come from the plan (included when its weight is above 0) and the
     /// template id of the plan is remembered. Fresh participant data also updates the list and
-    /// future equal resets. On any error, whatever it is, the rows come from
-    /// the equal plan of the participants and a notice says so; the session is never ended by
-    /// a plan failure.
+    /// future resets. On any error, whatever it is, the rows are the calendar participants and
+    /// a notice says so; the session is never ended by a plan failure.
     ///
     /// Edge cases: the result is dropped when the editor is not open on `event_id` or its plan
     /// was already applied.
@@ -427,8 +420,8 @@ impl AppState {
         match result {
             Ok(plan) => open.editor.load_plan(&plan),
             Err(err) => {
-                warn!("on_editor_plan_loaded: plan not loaded, using equal slots: {err}");
-                open.editor.reset_to_equal();
+                warn!("on_editor_plan_loaded: plan not loaded, using calendar participants: {err}");
+                open.editor.reset_participants();
                 open.notice = EDITOR_PLAN_FALLBACK_NOTICE;
             }
         }
@@ -443,7 +436,7 @@ impl AppState {
         self.rebuild_meeting_rows();
     }
 
-    /// Sets the label of editor row `index`; see [`SlotEditor::set_label`].
+    /// Sets the label of editor row `index`; see [`ParticipantEditor::set_label`].
     ///
     /// Edge cases: ignored without an editor, while its plan loads, or for a negative or out of
     /// range index (logged).
@@ -453,17 +446,8 @@ impl AppState {
         }
     }
 
-    /// Sets the minutes of editor row `index`, clamped; see [`SlotEditor::set_minutes`].
-    ///
-    /// Edge cases: as for [`AppState::editor_set_label`].
-    pub fn editor_set_minutes(&mut self, index: i32, minutes: i32) {
-        if let (Some(row), Some(editor)) = (row_index(index), self.editable()) {
-            editor.set_minutes(row, minutes);
-        }
-    }
-
     /// Includes or excludes the attendee of editor row `index`; see
-    /// [`SlotEditor::set_included`].
+    /// [`ParticipantEditor::set_included`].
     ///
     /// Edge cases: as for [`AppState::editor_set_label`]; manual rows stay included.
     pub fn editor_set_included(&mut self, index: i32, included: bool) {
@@ -472,25 +456,7 @@ impl AppState {
         }
     }
 
-    /// Moves editor row `index` one place up; see [`SlotEditor::move_up`].
-    ///
-    /// Edge cases: as for [`AppState::editor_set_label`]; the first row does not move.
-    pub fn editor_move_up(&mut self, index: i32) {
-        if let (Some(row), Some(editor)) = (row_index(index), self.editable()) {
-            editor.move_up(row);
-        }
-    }
-
-    /// Moves editor row `index` one place down; see [`SlotEditor::move_down`].
-    ///
-    /// Edge cases: as for [`AppState::editor_set_label`]; the last row does not move.
-    pub fn editor_move_down(&mut self, index: i32) {
-        if let (Some(row), Some(editor)) = (row_index(index), self.editable()) {
-            editor.move_down(row);
-        }
-    }
-
-    /// Removes editor row `index` when it was added by hand; see [`SlotEditor::remove_row`].
+    /// Removes editor row `index` when it was added by hand; see [`ParticipantEditor::remove_row`].
     ///
     /// Edge cases: as for [`AppState::editor_set_label`]; attendee rows are kept.
     pub fn editor_remove_row(&mut self, index: i32) {
@@ -499,7 +465,7 @@ impl AppState {
         }
     }
 
-    /// Appends a manual row to the editor; see [`SlotEditor::add_manual_row`].
+    /// Appends a manual row to the editor; see [`ParticipantEditor::add_manual_row`].
     ///
     /// Edge cases: ignored without an editor, while its plan loads, or at the row limit.
     pub fn editor_add_row(&mut self) {
@@ -508,26 +474,24 @@ impl AppState {
         }
     }
 
-    /// Replaces the editor rows with the equal plan, keeping the template id; see
-    /// [`SlotEditor::reset_to_equal`].
+    /// Replaces the editor rows with all the calendar participants, keeping the template id;
+    /// see [`ParticipantEditor::reset_participants`].
     ///
     /// Edge cases: ignored without an editor or while its plan loads.
-    pub fn editor_reset(&mut self) {
+    pub fn editor_reset_participants(&mut self) {
         if let Some(editor) = self.editable() {
-            editor.reset_to_equal();
+            editor.reset_participants();
         }
     }
 
-    /// Starts the countdown of the edited meeting now, with speaking slots from the editor rows,
-    /// and moves to the timer page. No plan is fetched: the slots are built at once.
-    ///
-    /// The time from now to the meeting end is split by the saved form of the rows (see
-    /// [`SlotEditor::start_slots`]) with the same rules as a fetched plan. Returns the sound of
+    /// Starts the countdown of the edited meeting and moves to the timer page. It is the plain
+    /// countdown of [`AppState::select_meeting`], never Daily, with the speaking turns offered to
+    /// the included editor rows (see [`ParticipantEditor::start_names`]). Returns the sound of
     /// the first update (see [`AppState::tick`]).
     ///
     /// Edge cases: without an editor or while its plan loads nothing happens. When the meeting
-    /// is already over the editor stays open with a notice. With fewer than two slots, or slots
-    /// too short, the countdown is plain.
+    /// is already over the editor stays open with a notice. Without usable names the countdown
+    /// starts without speaking turns.
     #[must_use]
     pub fn start_from_editor(&mut self) -> TickSound {
         let now = Local::now();
@@ -545,26 +509,19 @@ impl AppState {
             return TickSound::None;
         }
 
-        let meeting = open.editor.meeting().clone();
-        let weighted = open.editor.start_slots();
+        let target = open.editor.meeting().end.with_timezone(&Local);
+        let names = open.editor.start_names();
         info!(
-            "start_from_editor: target={}",
-            meeting.end.with_timezone(&Local).format("%H:%M")
+            "start_from_editor: target={} names={}",
+            target.format("%H:%M"),
+            names.len()
         );
         self.editor = None;
-        self.reset_turns(Vec::new());
+        self.reset_turns(names);
         self.origin = Some(TimerOrigin::Meeting);
         self.page = Page::TimerPage;
-        self.target = Some(meeting.end.with_timezone(&Local));
-        self.turn_view = TurnView::Scheduled;
-        let sound = self.tick();
-        if let Some(target) = self.target {
-            self.install_slots(weighted, &now, &target, &now);
-            if self.slots.is_none() {
-                self.turn_view = TurnView::Plain;
-            }
-        }
-        sound
+        self.target = Some(target);
+        self.tick()
     }
 
     /// Starts saving the editor rows as the template of the meeting title.
@@ -638,7 +595,7 @@ impl AppState {
     /// Applies the result of the template deletion started for `event_id`.
     ///
     /// On success, or when the template was already gone (404 `not_found`), the template id is
-    /// forgotten, the rows go back to the equal plan and a notice confirms it; the return value
+    /// forgotten, the rows go back to the calendar participants and a notice confirms it; the return value
     /// is then `true`: the caller must fetch the meetings again. Other errors are handled as for
     /// [`AppState::on_template_saved`], with a deletion failure notice.
     ///
@@ -666,7 +623,7 @@ impl AppState {
             }
             _ => {
                 open.editor.set_template_id(None);
-                open.editor.reset_to_equal();
+                open.editor.reset_participants();
                 open.notice = TEMPLATE_DELETED_NOTICE;
                 true
             }
@@ -717,84 +674,13 @@ impl AppState {
     }
 
     /// Editor whose rows may change: open and loaded.
-    fn editable(&mut self) -> Option<&mut SlotEditor> {
+    fn editable(&mut self) -> Option<&mut ParticipantEditor> {
         match self.editor.as_mut() {
             Some(open) if !open.loading => Some(&mut open.editor),
             _ => {
                 debug!("Editor not open or still loading, ignoring the change");
                 None
             }
-        }
-    }
-
-    /// Splits the time from `started_at` to `target` into speaking slots by the `weighted`
-    /// entries, in order, and stores the index of the slot covering `now`.
-    ///
-    /// Edge cases: with fewer than two slots, or slots that would be too short, the countdown
-    /// stays plain (no slots).
-    fn install_slots(
-        &mut self,
-        weighted: Vec<(String, u64)>,
-        started_at: &DateTime<Local>,
-        target: &DateTime<Local>,
-        now: &DateTime<Local>,
-    ) {
-        let slots = SlotSchedule::new(weighted, started_at, target);
-        self.slot_index = slots
-            .as_ref()
-            .and_then(|schedule| schedule.current(now))
-            .map(|view| view.index);
-        info!(
-            "install_slots: slots={}",
-            slots.as_ref().map_or(0, SlotSchedule::len)
-        );
-        self.slots = slots;
-    }
-
-    /// Stores the current slot index and tells whether it moved forward. Without a current
-    /// slot or during free time, returns no sound.
-    fn update_slot_index(&mut self, now: &DateTime<Local>) -> TickSound {
-        if self.free_time {
-            return TickSound::None;
-        }
-        let Some(view) = self
-            .slots
-            .as_ref()
-            .and_then(|schedule| schedule.current(now))
-        else {
-            return TickSound::None;
-        };
-        let advanced = self.slot_index.is_some_and(|seen| view.index > seen);
-        self.slot_index = Some(view.index);
-        if advanced {
-            TickSound::TurnEnd
-        } else {
-            TickSound::None
-        }
-    }
-
-    /// Ends the current speaking slot now and shares the time left among the next ones.
-    ///
-    /// Ending the last slot enters free time without changing the meeting countdown.
-    /// No sound is played for a manual skip.
-    ///
-    /// Edge cases: nothing happens without a current slot, outside the timer page, or once
-    /// free time has started.
-    pub fn next_slot(&mut self) {
-        if self.page != Page::TimerPage || self.free_time {
-            return;
-        }
-        let now = Local::now();
-        let Some(schedule) = self.slots.as_mut() else {
-            return;
-        };
-        let Some(view) = schedule.current(&now) else {
-            return;
-        };
-        if view.next_name.is_none() {
-            self.free_time = true;
-        } else if schedule.skip(&now) {
-            self.slot_index = schedule.current(&now).map(|view| view.index);
         }
     }
 
@@ -821,11 +707,7 @@ impl AppState {
             TickOutcome::Running { remaining_ms } => {
                 self.timer_ms = remaining_ms;
                 debug!("Remaining: {remaining_ms}");
-                if self.turn_view == TurnView::Scheduled {
-                    self.update_slot_index(&now)
-                } else {
-                    self.tick_turns(now.timestamp_millis(), target.timestamp_millis())
-                }
+                self.tick_turns(now.timestamp_millis(), target.timestamp_millis())
             }
             TickOutcome::Finished => {
                 self.stop(StopType::TimerFinished);
@@ -863,8 +745,7 @@ impl AppState {
     /// True when the running countdown is a meeting with at least one participant, so speaking
     /// turns can be used.
     pub fn turns_available(&self) -> bool {
-        self.slots.is_none()
-            && self.target.is_some()
+        self.target.is_some()
             && self.origin == Some(TimerOrigin::Meeting)
             && !self.turn_names.is_empty()
     }
@@ -1031,9 +912,6 @@ impl AppState {
     /// Forgets every turn setting and installs `names` as the participants of a new countdown:
     /// plain view, first participant chosen, default minutes.
     fn reset_turns(&mut self, names: Vec<String>) {
-        self.slots = None;
-        self.slot_index = None;
-        self.free_time = false;
         let rows: Vec<SharedString> = names.iter().map(|name| name.as_str().into()).collect();
         self.turn_names_model.set_vec(rows);
         self.turn_names = names;
@@ -1061,7 +939,7 @@ impl AppState {
     /// ran out.
     fn tick_turns(&mut self, now_ms: i64, end_ms: i64) -> TickSound {
         match self.turn_view {
-            TurnView::Plain | TurnView::Scheduled => TickSound::None,
+            TurnView::Plain => TickSound::None,
             TurnView::Settings => {
                 self.turn_minutes = clamp_turn_minutes(self.turn_minutes, now_ms, end_ms);
                 TickSound::None
@@ -1378,7 +1256,7 @@ impl AppState {
         window.set_editor_rows(ModelRc::from(self.editor_model.clone()));
     }
 
-    /// Pushes the editor header, rows, footer and status to `window`. Without an editor the
+    /// Pushes the editor header, rows and status to `window`. Without an editor the
     /// rows are emptied and the other editor properties are left as they are (not shown).
     fn render_editor(&self, window: &MainWindow) {
         let Some(open) = self.editor.as_ref() else {
@@ -1396,17 +1274,6 @@ impl AppState {
         window.set_editor_loading(open.loading);
         window.set_editor_busy(open.busy);
         window.set_editor_notice(open.notice.into());
-        let unassigned = if open.loading {
-            String::new()
-        } else if editor.is_over() {
-            editor.unassigned_text()
-        } else {
-            let duration = editor.duration_minutes();
-            let assigned = duration - editor.unassigned_minutes();
-            format!("{assigned} di {duration} minuti assegnati")
-        };
-        window.set_editor_unassigned(unassigned.into());
-        window.set_editor_over(editor.is_over());
         window.set_editor_has_template(editor.template_id().is_some());
     }
 
@@ -1431,25 +1298,6 @@ impl AppState {
         window.set_finish_seed(self.finish_seed);
         self.render_turns(window);
         self.render_editor(window);
-        let view = self
-            .slots
-            .as_ref()
-            .and_then(|schedule| schedule.current(&Local::now()));
-        window.set_slot_name(if self.free_time {
-            FREE_TIME_LABEL.into()
-        } else {
-            view.as_ref().map_or("", |view| view.name.as_str()).into()
-        });
-        window.set_slot_time(view.as_ref().map_or(0, |view| view.remaining_ms));
-        window.set_next_slot_name(if self.free_time {
-            "".into()
-        } else {
-            view.as_ref()
-                .and_then(|view| view.next_name.clone())
-                .unwrap_or_default()
-                .into()
-        });
-        window.set_slot_free_time(self.free_time);
         window.set_selected_slot(self.selected_index());
         window.set_signed_in(self.account.is_some());
         window.set_account_name(self.account.as_deref().unwrap_or_default().into());
@@ -1485,12 +1333,10 @@ fn is_not_found(error: &BackendError) -> bool {
     )
 }
 
-/// Builds the UI row of an editor entry. Minutes above `i32::MAX` (never produced by the
-/// editor) are shown as `i32::MAX`.
+/// Builds the UI row of an editor entry.
 fn editor_row(entry: &EditorEntry) -> EditorRow {
     EditorRow {
         label: entry.label.as_str().into(),
-        minutes: i32::try_from(entry.minutes).unwrap_or(i32::MAX),
         included: entry.included,
         attendee: entry.kind == EntryKind::Attendee,
         email: entry.email.as_deref().unwrap_or_default().into(),
@@ -1510,18 +1356,6 @@ fn sync_editor_rows(model: &VecModel<EditorRow>, entries: &[EditorEntry]) {
             model.set_row_data(position, row);
         }
     }
-}
-
-/// Turns plan entries into `(label, weight)` slots: entries with weight 0 are skipped, the order
-/// is kept. Empty input gives an empty list.
-pub(crate) fn weighted_slots(entries: &[PlanEntry]) -> Vec<(String, u64)> {
-    let mut weighted = Vec::with_capacity(entries.len());
-    for entry in entries {
-        if entry.weight > 0 {
-            weighted.push((entry.label.clone(), entry.weight));
-        }
-    }
-    weighted
 }
 
 #[cfg(test)]
@@ -3166,23 +3000,23 @@ pub mod tests {
     }
 
     #[test]
-    fn editor_plan_failure_uses_equal_participant_minutes() {
+    fn editor_plan_failure_lists_the_calendar_participants() {
         let state = editing_meeting();
         let open = state.editor.as_ref().unwrap();
         assert!(!open.loading);
         assert_eq!(open.notice, EDITOR_PLAN_FALLBACK_NOTICE);
         let rows = open.editor.rows();
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].minutes, 60);
-        assert_eq!(rows[1].minutes, 60);
+        assert!(rows.iter().all(|row| row.included));
     }
 
     #[test]
-    fn editor_start_uses_custom_order_and_excludes_daily() {
+    fn editor_start_is_a_plain_countdown_with_the_included_names_and_never_daily() {
         let mut state = editing_meeting();
         state.set_daily(0, true);
-        state.editor_move_down(0);
-        state.editor_set_minutes(0, 20);
+        state.editor_add_row();
+        state.editor_set_label(2, " C ");
+        state.editor_set_included(0, false);
         let target = state
             .editor
             .as_ref()
@@ -3192,20 +3026,13 @@ pub mod tests {
             .end
             .with_timezone(&Local);
         assert_eq!(state.start_from_editor(), TickSound::None);
+        assert_eq!(state.page, Page::TimerPage);
         assert_eq!(state.target, Some(target));
-        assert_eq!(state.turn_view, TurnView::Scheduled);
+        assert_eq!(state.turn_view, TurnView::Plain);
         assert!(state.daily.is_none());
         assert!(state.editor.is_none());
-        assert_eq!(
-            state
-                .slots
-                .as_ref()
-                .unwrap()
-                .current(&Local::now())
-                .unwrap()
-                .name,
-            "B"
-        );
+        assert_eq!(state.turn_names, vec!["B", "C"]);
+        assert!(state.turns_available());
     }
 
     #[test]
@@ -3223,8 +3050,8 @@ pub mod tests {
         let expired = Local::now().fixed_offset() - chrono::Duration::seconds(1);
         let mut talk = state.editor.as_ref().unwrap().editor.meeting().clone();
         talk.end = expired;
-        let mut editor = SlotEditor::new(talk);
-        editor.reset_to_equal();
+        let mut editor = ParticipantEditor::new(talk);
+        editor.reset_participants();
         state.editor.as_mut().unwrap().editor = editor;
         assert_eq!(state.start_from_editor(), TickSound::None);
         assert!(state.target.is_none());
@@ -3263,54 +3090,43 @@ pub mod tests {
     }
 
     #[test]
-    fn last_editor_turn_enters_free_time_and_stop_returns_to_meetings() {
-        let mut state = editing_meeting();
-        let _ = state.start_from_editor();
-        state.next_slot();
-        state.next_slot();
-        assert!(state.free_time);
-        assert!(state.target.is_some());
-        state.stop(StopType::UserStopped);
-        assert!(state.slots.is_none());
-        assert_eq!(state.page, Page::MeetingsPage);
-    }
-
-    #[test]
-    fn editor_without_participants_falls_back_to_plain_countdown() {
+    fn editor_without_participants_starts_without_turns() {
         let mut state = state_with_meetings();
         let event_id = state.open_editor(0).unwrap();
         state.on_editor_plan_loaded(&event_id, Err(BackendError::Unreachable));
         let _ = state.start_from_editor();
         assert!(state.target.is_some());
-        assert!(state.slots.is_none());
         assert_eq!(state.turn_view, TurnView::Plain);
+        assert!(state.turn_names.is_empty());
+        assert!(!state.turns_available());
     }
 
     #[test]
-    fn editor_slots_advance_with_one_beep() {
+    fn editor_started_countdown_opens_the_turn_settings_with_the_editor_names() {
+        let mut state = editing_meeting();
+        state.editor_set_included(0, false);
+        let _ = state.start_from_editor();
+        state.show_turns();
+        assert_eq!(state.turn_view, TurnView::Settings);
+        assert_eq!(state.turn_names, vec!["B"]);
+    }
+
+    #[test]
+    fn editor_stop_returns_to_meetings() {
         let mut state = editing_meeting();
         let _ = state.start_from_editor();
-        let now = Local::now();
-        let remaining = state
-            .slots
-            .as_ref()
-            .unwrap()
-            .current(&now)
-            .unwrap()
-            .remaining_ms;
-        let next = now + chrono::Duration::milliseconds(remaining + 1);
-        assert_eq!(state.update_slot_index(&next), TickSound::TurnEnd);
-        assert_eq!(state.update_slot_index(&next), TickSound::None);
+        state.stop(StopType::UserStopped);
+        assert!(state.turn_names.is_empty());
+        assert_eq!(state.page, Page::MeetingsPage);
     }
 
     #[test]
-    fn editor_meeting_finish_clears_slots_and_keeps_return_origin() {
+    fn editor_meeting_finish_keeps_return_origin() {
         let mut state = editing_meeting();
         let _ = state.start_from_editor();
         state.target = Some(Local::now() - chrono::Duration::milliseconds(1));
         assert_eq!(state.tick(), TickSound::MeetingEnd);
         assert_eq!(state.page, Page::TimerFinished);
-        assert!(state.slots.is_none());
         state.show_home();
         assert_eq!(state.page, Page::MeetingsPage);
     }
@@ -3391,7 +3207,7 @@ pub mod tests {
     }
 
     #[test]
-    fn fresh_members_drive_equal_reset_and_direct_start() {
+    fn fresh_members_drive_participant_reset_and_direct_start() {
         let mut state = state_with_one_meeting("Review", &["Group"]);
         let event_id = state.open_editor(0).unwrap();
         let mut fresh = state.shown.first().unwrap().clone();
@@ -3402,7 +3218,7 @@ pub mod tests {
         state.on_editor_plan_loaded(&event_id, Ok(fresh_plan(&fresh)));
 
         state.editor_add_row();
-        state.editor_reset();
+        state.editor_reset_participants();
 
         let rows = state.editor.as_ref().unwrap().editor.rows();
         assert_eq!(rows.len(), 2);

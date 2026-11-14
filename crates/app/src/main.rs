@@ -295,16 +295,6 @@ fn main() -> anyhow::Result<()> {
         }
     });
 
-    main_window.on_editor_set_minutes({
-        let window_weak = main_window.as_weak();
-        let state = app_state.clone();
-        move |index, minutes| {
-            update_state(&window_weak, &state, |state| {
-                state.editor_set_minutes(index, minutes);
-            });
-        }
-    });
-
     main_window.on_editor_set_included({
         let window_weak = main_window.as_weak();
         let state = app_state.clone();
@@ -313,18 +303,6 @@ fn main() -> anyhow::Result<()> {
                 state.editor_set_included(index, included);
             });
         }
-    });
-
-    main_window.on_editor_move_up({
-        let window_weak = main_window.as_weak();
-        let state = app_state.clone();
-        move |index| update_state(&window_weak, &state, |state| state.editor_move_up(index))
-    });
-
-    main_window.on_editor_move_down({
-        let window_weak = main_window.as_weak();
-        let state = app_state.clone();
-        move |index| update_state(&window_weak, &state, |state| state.editor_move_down(index))
     });
 
     main_window.on_editor_remove_row({
@@ -339,10 +317,10 @@ fn main() -> anyhow::Result<()> {
         move || update_state(&window_weak, &state, AppState::editor_add_row)
     });
 
-    main_window.on_editor_reset({
+    main_window.on_editor_reset_participants({
         let window_weak = main_window.as_weak();
         let state = app_state.clone();
-        move || update_state(&window_weak, &state, AppState::editor_reset)
+        move || update_state(&window_weak, &state, AppState::editor_reset_participants)
     });
 
     main_window.on_editor_save({
@@ -396,12 +374,6 @@ fn main() -> anyhow::Result<()> {
         let window_weak = main_window.as_weak();
         let state = app_state.clone();
         move || update_state(&window_weak, &state, AppState::close_editor)
-    });
-
-    main_window.on_next_slot({
-        let window_weak = main_window.as_weak();
-        let state = app_state.clone();
-        move || update_state(&window_weak, &state, AppState::next_slot)
     });
 
     main_window.on_refresh_meetings({
