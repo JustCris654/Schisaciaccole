@@ -1887,7 +1887,6 @@ export component MainWindow inherits Window {
 
         KeyBinding {
             keys: @keys(M);
-            enabled: root.page != Page.EditorPage;
             activated => { fullscreen(false); }
         }
 
@@ -1898,13 +1897,11 @@ export component MainWindow inherits Window {
 
         KeyBinding {
             keys: @keys(T);
-            enabled: root.page != Page.EditorPage;
             activated => { on-top = !on-top; }
         }
 
         KeyBinding {
             keys: @keys(H);
-            enabled: root.page != Page.EditorPage;
             activated => { help(); }
         }
 
