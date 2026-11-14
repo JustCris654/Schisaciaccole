@@ -16,4 +16,6 @@ Quando codice e documentazione divergono, vale il codice.
 
 ## Design
 
-Nessun documento di design per ora. Le convenzioni per aggiungerne sono in [`design/README.md`](./design/README.md).
+- [Preferenze dei meeting senza pesi, editor locale](./design/preferenze-meeting/design.md) (accepted): dati tutti dalla lista, editor locale con bozza per evento, preferenze senza pesi
+
+Le convenzioni sono in [`design/README.md`](./design/README.md).
