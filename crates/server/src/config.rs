@@ -14,6 +14,11 @@ const DEFAULT_GOOGLE_CALENDAR_BASE_URL: &str = "https://www.googleapis.com/calen
 const DEFAULT_GOOGLE_CALENDAR_SCOPE: &str =
     "https://www.googleapis.com/auth/calendar.events.owned.readonly";
 
+/// Read-only permission used for Cloud Identity group expansion.
+pub const GOOGLE_GROUPS_SCOPE: &str =
+    "https://www.googleapis.com/auth/cloud-identity.groups.readonly";
+const DEFAULT_GOOGLE_GROUPS_BASE_URL: &str = "https://cloudidentity.googleapis.com/v1";
+
 const DEFAULT_TRUSTED_PROXY_HOPS: u8 = 0;
 
 const TOKEN_ENC_KEY_LEN: usize = 32;
@@ -89,6 +94,8 @@ pub struct Config {
     pub google_issuer_url: String,
     /// Base URL of the Google Calendar API.
     pub google_calendar_base_url: String,
+    /// Base URL of Cloud Identity; overridden for mock endpoints.
+    pub google_groups_base_url: String,
     /// OAuth scope requested for Google Calendar access.
     pub google_calendar_scope: String,
     /// Number of reverse proxies in front of the server that append the
@@ -173,6 +180,10 @@ impl Config {
                 "GOOGLE_CALENDAR_BASE_URL",
                 DEFAULT_GOOGLE_CALENDAR_BASE_URL,
             ),
+            google_groups_base_url: optional(
+                "GOOGLE_GROUPS_BASE_URL",
+                DEFAULT_GOOGLE_GROUPS_BASE_URL,
+            ),
             google_calendar_scope: optional("GOOGLE_CALENDAR_SCOPE", DEFAULT_GOOGLE_CALENDAR_SCOPE),
             trusted_proxy_hops,
         })
@@ -229,6 +240,7 @@ impl fmt::Debug for Config {
             .field("jwt_signing_key", &REDACTED)
             .field("google_issuer_url", &self.google_issuer_url)
             .field("google_calendar_base_url", &self.google_calendar_base_url)
+            .field("google_groups_base_url", &self.google_groups_base_url)
             .field("google_calendar_scope", &self.google_calendar_scope)
             .field("trusted_proxy_hops", &self.trusted_proxy_hops)
             .finish()

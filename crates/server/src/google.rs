@@ -159,6 +159,8 @@ pub struct GoogleAccessToken {
     pub token: AccessToken,
     /// Lifetime announced by Google; `None` when the response has none.
     pub expires_in: Option<Duration>,
+    /// Actual scopes when explicitly returned by the token endpoint.
+    pub scopes: Option<Vec<String>>,
 }
 
 /// Google OpenID Connect client: builds authorization URLs and exchanges
@@ -341,9 +343,12 @@ impl GoogleOidc {
             .name()
             .and_then(|names| names.get(None))
             .map(|name| name.as_str().to_string());
-        let scopes = response
-            .scopes()
-            .map(|scopes| scopes.iter().map(|scope| scope.to_string()).collect());
+        let scopes = response.scopes().map(|scopes| {
+            scopes
+                .iter()
+                .map(|scope| scope.as_str().to_string())
+                .collect()
+        });
         Ok(GoogleIdentity {
             sub: claims.subject().as_str().to_string(),
             email: claims.email().map(|email| email.as_str().to_string()),
@@ -364,7 +369,8 @@ impl GoogleOidc {
     /// Exchanges `refresh_token` for a new access token at the token
     /// endpoint found by discovery (`grant_type=refresh_token`).
     ///
-    /// The scopes and any ID token of the response are ignored.
+    /// Explicit scopes are returned so callers can detect a reduced grant.
+    /// Any ID token in the response is ignored.
     ///
     /// # Errors
     ///
@@ -387,6 +393,12 @@ impl GoogleOidc {
         Ok(GoogleAccessToken {
             token: response.access_token().clone(),
             expires_in: response.expires_in(),
+            scopes: response.scopes().map(|scopes| {
+                scopes
+                    .iter()
+                    .map(|scope| scope.as_str().to_string())
+                    .collect()
+            }),
         })
     }
 }
@@ -407,12 +419,14 @@ where
     T: openidconnect::ErrorResponse + 'static,
 {
     match err {
-        RequestTokenError::ServerResponse(response) => GoogleError::Rejected(response.to_string()),
-        RequestTokenError::Request(source) => GoogleError::TokenRequest(error_chain(&source)),
-        RequestTokenError::Parse(source, _body) => {
-            GoogleError::TokenRequest(format!("unparsable response: {source}"))
+        RequestTokenError::ServerResponse(_) => {
+            GoogleError::Rejected("authorization rejected".into())
         }
-        RequestTokenError::Other(message) => GoogleError::TokenRequest(message),
+        RequestTokenError::Request(_) => GoogleError::TokenRequest("transport failure".into()),
+        RequestTokenError::Parse(_, _) => {
+            GoogleError::TokenRequest("invalid token response".into())
+        }
+        RequestTokenError::Other(_) => GoogleError::TokenRequest("token exchange failed".into()),
     }
 }
 
@@ -560,6 +574,34 @@ mod tests {
     #[test]
     fn http_client_builds_with_timeouts() {
         assert!(build_http_client().is_ok());
+    }
+
+    #[test]
+    fn oauth_provider_error_description_and_uri_are_not_exposed() {
+        let response = StandardErrorResponse::new(
+            CoreErrorResponseType::InvalidRequest,
+            Some("private@example.com secret-token".to_string()),
+            Some("https://private.example.com/?token=secret".to_string()),
+        );
+        let error =
+            token_request_error::<std::io::Error, _>(RequestTokenError::ServerResponse(response));
+        assert_eq!(
+            error.to_string(),
+            "Google rejected the code exchange: authorization rejected"
+        );
+        assert!(!format!("{error:?}").contains("private"));
+    }
+
+    #[test]
+    fn opaque_token_failures_do_not_expose_provider_text() {
+        let error =
+            token_request_error::<std::io::Error, StandardErrorResponse<CoreErrorResponseType>>(
+                RequestTokenError::Other("private@example.com secret-token".to_string()),
+            );
+        assert_eq!(
+            error.to_string(),
+            "token request failed: token exchange failed"
+        );
     }
 
     #[test]

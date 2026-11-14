@@ -132,6 +132,16 @@ pub struct Attendee {
     pub response: ResponseStatus,
 }
 
+/// Completeness of the participant list after group resolution.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "snake_case")]
+pub struct ParticipantResolution {
+    /// True when at least one invited address could not be fully resolved.
+    pub incomplete: bool,
+    /// True when granting additional Google access may allow resolution.
+    pub reauthorization_required: bool,
+}
+
 /// A calendar event as returned by `GET /api/v1/meetings`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -148,6 +158,9 @@ pub struct Meeting {
     pub attendees: Vec<Attendee>,
     /// True when the calendar left out some attendees (very large events).
     pub attendees_omitted: bool,
+    /// Group resolution status; independent of Calendar's omitted attendees.
+    #[serde(default)]
+    pub participant_resolution: ParticipantResolution,
     /// Identifier of the recurring series this event belongs to, if any.
     pub recurring_event_id: Option<String>,
     /// True when the signed-in user saved a slot preference for this meeting's title.
@@ -237,6 +250,15 @@ pub struct SlotPlan {
     pub template_id: Option<String>,
     /// Entries in speaking order.
     pub entries: Vec<PlanEntry>,
+    /// Freshly resolved attendees; absent in responses from older servers.
+    #[serde(default)]
+    pub attendees: Option<Vec<Attendee>>,
+    /// True when Calendar omitted attendees from the freshly read event.
+    #[serde(default)]
+    pub attendees_omitted: bool,
+    /// Group resolution status of the event read to build this plan.
+    #[serde(default)]
+    pub participant_resolution: ParticipantResolution,
 }
 
 /// Error body returned by the backend on failure.
@@ -281,6 +303,7 @@ mod tests {
             end: DateTime::parse_from_rfc3339("2026-11-05T10:00:00+01:00").unwrap(),
             attendees: vec![sample_attendee()],
             attendees_omitted: false,
+            participant_resolution: ParticipantResolution::default(),
             recurring_event_id: Some("series1".to_string()),
             has_template: false,
         }
@@ -399,6 +422,10 @@ mod tests {
                 "response": "needsAction",
             }],
             "attendees_omitted": false,
+            "participant_resolution": {
+                "incomplete": false,
+                "reauthorization_required": false,
+            },
             "recurring_event_id": "series1",
             "has_template": false,
         });
@@ -435,6 +462,9 @@ mod tests {
                 label: "Tempo libero".to_string(),
                 weight: 1200,
             }],
+            attendees: Some(vec![sample_attendee()]),
+            attendees_omitted: false,
+            participant_resolution: ParticipantResolution::default(),
         }
     }
 
@@ -523,6 +553,18 @@ mod tests {
         let expected = json!({
             "source": "template",
             "template_id": "t1",
+            "attendees": [{
+                "email": "anna.rossi@openmove.com",
+                "name": "Anna Rossi",
+                "is_self": true,
+                "optional": false,
+                "response": "needsAction",
+            }],
+            "attendees_omitted": false,
+            "participant_resolution": {
+                "incomplete": false,
+                "reauthorization_required": false,
+            },
             "entries": [{
                 "kind": "free_time",
                 "email": null,
@@ -531,6 +573,42 @@ mod tests {
             }],
         });
         assert_eq!(serde_json::to_value(sample_plan()).unwrap(), expected);
+    }
+
+    #[test]
+    fn meeting_without_resolution_uses_complete_default() {
+        let expected = sample_meeting();
+        let mut value = serde_json::to_value(&expected).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("participant_resolution");
+        let actual: Meeting = serde_json::from_value(value).unwrap();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn old_slot_plan_has_no_fresh_attendees_or_resolution_warning() {
+        let value = json!({ "source": "equal", "template_id": null, "entries": [] });
+        let actual: SlotPlan = serde_json::from_value(value).unwrap();
+        assert_eq!(actual.attendees, None);
+        assert!(!actual.attendees_omitted);
+        assert_eq!(
+            actual.participant_resolution,
+            ParticipantResolution::default()
+        );
+    }
+
+    #[test]
+    fn fresh_empty_attendees_are_distinct_from_missing_attendees() {
+        let value = json!({
+            "source": "equal", "template_id": null, "entries": [], "attendees": [],
+            "participant_resolution": { "incomplete": true },
+        });
+        let actual: SlotPlan = serde_json::from_value(value).unwrap();
+        assert_eq!(actual.attendees, Some(Vec::new()));
+        assert!(actual.participant_resolution.incomplete);
+        assert!(!actual.participant_resolution.reauthorization_required);
     }
 
     #[test]

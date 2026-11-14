@@ -314,6 +314,7 @@ mod tests {
             end: start + TimeDelta::hours(1),
             attendees,
             attendees_omitted: false,
+            participant_resolution: Default::default(),
             recurring_event_id: None,
             has_template: false,
         }

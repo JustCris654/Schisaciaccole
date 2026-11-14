@@ -476,6 +476,7 @@ mod tests {
             end: DateTime::parse_from_rfc3339("2026-11-05T10:00:00+01:00").unwrap(),
             attendees: Vec::<Attendee>::new(),
             attendees_omitted: false,
+            participant_resolution: Default::default(),
             recurring_event_id: None,
             has_template: false,
         }

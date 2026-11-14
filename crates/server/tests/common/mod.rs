@@ -85,6 +85,7 @@ pub fn config(issuer: &str) -> Config {
         "JWT_SIGNING_KEY" => Some("0123456789abcdef0123456789abcdef".to_string()),
         "GOOGLE_ISSUER_URL" => Some(issuer.to_string()),
         "GOOGLE_CALENDAR_SCOPE" => Some(CALENDAR_SCOPE.to_string()),
+        "GOOGLE_GROUPS_BASE_URL" => Some(format!("{issuer}/identity/v1")),
         "GOOGLE_CALENDAR_BASE_URL" => Some(format!("{issuer}/calendar/v3")),
         _ => None,
     })

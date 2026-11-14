@@ -1,7 +1,7 @@
 //! Database access for users, Google credentials, app sessions and slot templates.
 //!
-//! Every function takes a [`PgPool`] and runs one statement, except
-//! [`upsert_template`], which runs one transaction. The tests need
+//! Most operations take a [`PgPool`]; credential operations also accept a
+//! transaction connection so refresh and login can share an advisory lock. The tests need
 //! a PostgreSQL reachable through `DATABASE_URL`: `#[sqlx::test]` creates a
 //! throwaway database per test and applies the migrations.
 
@@ -9,7 +9,7 @@ use std::collections::HashSet;
 
 use chrono::{DateTime, Utc};
 use schisaciaccole_core::api::{EntryKind, TemplateEntry};
-use sqlx::PgPool;
+use sqlx::{Executor, PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 /// A user, identified by the stable Google account id (`sub`).
@@ -92,14 +92,36 @@ pub async fn find_user(pool: &PgPool, id: Uuid) -> Result<Option<User>, sqlx::Er
     .await
 }
 
+/// Serializes credential changes and access-token refreshes for one user.
+///
+/// The lock lasts until commit or rollback. Callers must run credential queries
+/// on the returned transaction to avoid acquiring another pool connection.
+/// Different users normally proceed independently; a hash collision only adds
+/// harmless serialization. Google HTTP calls keep their existing timeout.
+///
+/// # Errors
+///
+/// Returns an error when acquiring the connection or advisory lock fails.
+pub(crate) async fn lock_google_credentials(
+    pool: &PgPool,
+    user_id: Uuid,
+) -> Result<Transaction<'_, Postgres>, sqlx::Error> {
+    let mut transaction = pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(user_id.to_string())
+        .execute(&mut *transaction)
+        .await?;
+    Ok(transaction)
+}
+
 /// Stores the encrypted refresh token of `user_id`, replacing any previous one.
 ///
 /// # Errors
 ///
 /// Returns `Err` when the query fails, including when `user_id` does not
 /// exist (foreign key violation).
-pub async fn save_google_credentials(
-    pool: &PgPool,
+pub async fn save_google_credentials<'executor>(
+    executor: impl Executor<'executor, Database = Postgres>,
     user_id: Uuid,
     refresh_token_enc: &[u8],
     scopes: &str,
@@ -115,7 +137,7 @@ pub async fn save_google_credentials(
         refresh_token_enc,
         scopes,
     )
-    .execute(pool)
+    .execute(executor)
     .await?;
     Ok(())
 }
@@ -128,8 +150,8 @@ pub async fn save_google_credentials(
 /// # Errors
 ///
 /// Returns `Err` when the query fails.
-pub async fn google_credentials(
-    pool: &PgPool,
+pub async fn google_credentials<'executor>(
+    executor: impl Executor<'executor, Database = Postgres>,
     user_id: Uuid,
 ) -> Result<Option<GoogleCredentials>, sqlx::Error> {
     sqlx::query_as!(
@@ -137,7 +159,7 @@ pub async fn google_credentials(
         "SELECT refresh_token_enc, scopes FROM google_credentials WHERE user_id = $1",
         user_id,
     )
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await
 }
 
@@ -148,9 +170,12 @@ pub async fn google_credentials(
 /// # Errors
 ///
 /// Returns `Err` when the query fails.
-pub async fn delete_google_credentials(pool: &PgPool, user_id: Uuid) -> Result<(), sqlx::Error> {
+pub async fn delete_google_credentials<'executor>(
+    executor: impl Executor<'executor, Database = Postgres>,
+    user_id: Uuid,
+) -> Result<(), sqlx::Error> {
     sqlx::query!("DELETE FROM google_credentials WHERE user_id = $1", user_id)
-        .execute(pool)
+        .execute(executor)
         .await?;
     Ok(())
 }

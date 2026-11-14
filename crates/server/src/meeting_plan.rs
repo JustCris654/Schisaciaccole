@@ -72,7 +72,9 @@ pub async fn get_meeting_plan(
         CalendarError::NotFound => ApiFailure::NotFound,
         other => calendar_failure(other),
     })?;
-    let meeting = map_event(&item).ok_or(ApiFailure::NotFound)?;
+    let mut meeting = map_event(&item).ok_or(ApiFailure::NotFound)?;
+    crate::groups::resolve_meetings(&state, user.user_id, std::slice::from_mut(&mut meeting))
+        .await?;
 
     let template =
         store::template_by_key(&state.pool, user.user_id, &normalize_title(&meeting.title)).await?;
@@ -81,11 +83,17 @@ pub async fn get_meeting_plan(
         Some(template) => SlotPlan {
             source: PlanSource::Template,
             template_id: Some(template.id.to_string()),
+            attendees: Some(meeting.attendees.clone()),
+            attendees_omitted: meeting.attendees_omitted,
+            participant_resolution: meeting.participant_resolution,
             entries: build_plan(&people, Some(&template.entries)),
         },
         None => SlotPlan {
             source: PlanSource::Equal,
             template_id: None,
+            attendees: Some(meeting.attendees.clone()),
+            attendees_omitted: meeting.attendees_omitted,
+            participant_resolution: meeting.participant_resolution,
             entries: build_plan(&people, None),
         },
     };

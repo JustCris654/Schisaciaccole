@@ -18,11 +18,14 @@ pub use api::{
     meeting_plan_path, template_path,
 };
 pub use api::{
-    ApiError, Attendee, EntryKind, Me, Meeting, PlanEntry, PlanSource, PutTemplateRequest,
-    RefreshRequest, ResponseStatus, SlotPlan, Template, TemplateEntry, TokenRequest, TokenResponse,
-    error_codes,
+    ApiError, Attendee, EntryKind, Me, Meeting, ParticipantResolution, PlanEntry, PlanSource,
+    PutTemplateRequest, RefreshRequest, ResponseStatus, SlotPlan, Template, TemplateEntry,
+    TokenRequest, TokenResponse, error_codes,
 };
-pub use attendee::{abbreviate_name, display_name_from_email};
+pub use attendee::{
+    GroupExpansion, GroupExpansionOutcome, GroupMember, ResolvedAttendees, abbreviate_name,
+    display_name_from_email, merge_group_attendees,
+};
 pub use countdown::{FINISH_GRACE_MS, TickOutcome, evaluate, resolve_target};
 pub use daily::{DailyRound, MIN_TURN_MS, looks_daily, shuffled};
 pub use error::TimeError;

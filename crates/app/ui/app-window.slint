@@ -24,6 +24,7 @@ export struct MeetingRow {
     in-progress: bool,
     daily-on: bool,
     daily-auto: bool,
+    attendees-warning: bool,
 }
 
 component BrandMark inherits LogoMark {
@@ -386,7 +387,7 @@ component DailySwitch inherits Rectangle {
         text: root.tip,
     };
     changed tooltip => { root.tooltip-changed(root.tooltip); }
-    private property <string> tip: "Modalità Daily: il timer parte subito e il tempo del meeting viene ripartito in parti uguali tra i partecipanti accettati, chiamati a parlare in ordine casuale."
+    private property <string> tip: "Modalità Daily: il timer parte subito e il tempo del meeting viene ripartito in parti uguali tra i partecipanti, chiamati a parlare in ordine casuale."
         + (root.auto ? " Riconosciuto in automatico dal titolo: puoi comunque cambiarlo." : "");
     forward-focus: focus;
     preferred-width: content.preferred-width;
@@ -509,11 +510,49 @@ component DailyTooltip inherits Rectangle {
     }
 }
 
+component GroupsReconnect inherits VerticalLayout {
+    in property <bool> waiting;
+    in property <string> status;
+    callback reconnect();
+    callback cancel();
+    spacing: 6px;
+    AppText {
+        text: "Autorizza Google Groups per leggere i membri. Calendar resta disponibile.";
+        font-size: 12px;
+        wrap: word-wrap;
+        color: AppTheme.text-secondary;
+    }
+    HorizontalLayout {
+        spacing: 8px;
+        if !root.waiting : PillButton {
+            text: "Ricollega Google";
+            kind: PillKind.outline;
+            clicked => { root.reconnect(); }
+        }
+        if root.waiting : PillButton {
+            text: "Annulla accesso";
+            kind: PillKind.outline;
+            clicked => { root.cancel(); }
+        }
+        AppText {
+            text: root.status;
+            font-size: 12px;
+            wrap: word-wrap;
+            vertical-alignment: center;
+        }
+    }
+}
+
 component EditorPage inherits Rectangle {
     in property <string> title;
     in property <string> time-range;
     in property <string> duration;
     in property <bool> attendees-warning;
+    in property <bool> groups-reconnect;
+    in property <bool> login-waiting;
+    in property <string> login-status;
+    callback reconnect();
+    callback cancel-login();
     in property <bool> loading;
     in property <bool> busy;
     in property <string> notice;
@@ -547,6 +586,12 @@ component EditorPage inherits Rectangle {
             color: AppTheme.timer-title;
             font-size: 12px;
             wrap: word-wrap;
+        }
+        if root.groups-reconnect : GroupsReconnect {
+            waiting: root.login-waiting;
+            status: root.login-status;
+            reconnect => { root.reconnect(); }
+            cancel => { root.cancel-login(); }
         }
         if root.loading : AppText { text: "Caricamento…"; vertical-stretch: 1; }
         if !root.loading : ScrollList {
@@ -708,6 +753,11 @@ component MeetingsPage inherits Rectangle {
     in property <[MeetingRow]> meetings;
     in property <bool> loading;
     in property <string> error;
+    in property <bool> groups-reconnect;
+    in property <bool> login-waiting;
+    in property <string> login-status;
+    callback reconnect();
+    callback cancel-login();
     callback open-editor(int);
     callback select(int);
     callback set-daily(int, bool);
@@ -744,6 +794,12 @@ component MeetingsPage inherits Rectangle {
                 wrap: word-wrap;
             }
         }
+        if root.groups-reconnect : GroupsReconnect {
+            waiting: root.login-waiting;
+            status: root.login-status;
+            reconnect => { root.reconnect(); }
+            cancel => { root.cancel-login(); }
+        }
         if !root.loading && root.error == "" && root.meetings.length == 0 : VerticalLayout {
             padding-top: 16px;
             AppText { text: "Nessun altro meeting oggi."; color: AppTheme.text-secondary; font-size: 15px; }
@@ -752,10 +808,10 @@ component MeetingsPage inherits Rectangle {
         meeting-list := ListView {
             vertical-stretch: 1;
             for row[index] in root.meetings : Rectangle {
-                height: index == root.meetings.length - 1 ? 92px : 104px;
+                height: (row.attendees-warning ? 116px : 92px) + (index == root.meetings.length - 1 ? 0px : 12px);
                 Rectangle {
                     y: 0px;
-                    height: 92px;
+                    height: row.attendees-warning ? 116px : 92px;
                     border-radius: AppTheme.radius-card;
                     background: AppTheme.surface;
                     HorizontalLayout {
@@ -782,6 +838,12 @@ component MeetingsPage inherits Rectangle {
                                 font-weight: 400;
                                 color: AppTheme.text;
                                 overflow: elide;
+                            }
+                            if row.attendees-warning : Text {
+                                text: "Lista partecipanti incompleta";
+                                font-size: 12px;
+                                color: AppTheme.timer-title;
+                                wrap: word-wrap;
                             }
                             HorizontalLayout {
                                 spacing: 6px;
@@ -1840,6 +1902,8 @@ export component MainWindow inherits Window {
     in property     <string>   editor-time-range;
     in property     <string>   editor-duration;
     in property     <bool>     editor-attendees-warning;
+    in property     <bool>     editor-groups-reconnect;
+    in property     <bool>     groups-reconnect;
     in property     <bool>     editor-loading;
     in property     <bool>     editor-busy;
     in property     <string>   editor-notice;
@@ -1986,6 +2050,11 @@ export component MainWindow inherits Window {
                 meetings: root.meetings;
                 loading: root.meetings-loading;
                 error: root.meetings-error;
+                groups-reconnect: root.groups-reconnect;
+                login-waiting: root.login-waiting;
+                login-status: root.login-status;
+                reconnect => { root.login(); }
+                cancel-login => { root.cancel-login(); }
                 select(index) => { root.select-meeting(index); }
                 open-editor(index) => { root.open-editor(index); }
                 set-daily(index, on) => { root.set-daily(index, on); }
@@ -1999,6 +2068,11 @@ export component MainWindow inherits Window {
             time-range: root.editor-time-range;
             duration: root.editor-duration;
             attendees-warning: root.editor-attendees-warning;
+            groups-reconnect: root.editor-groups-reconnect;
+            login-waiting: root.login-waiting;
+            login-status: root.login-status;
+            reconnect => { root.login(); }
+            cancel-login => { root.cancel-login(); }
             loading: root.editor-loading;
             busy: root.editor-busy;
             notice: root.editor-notice;

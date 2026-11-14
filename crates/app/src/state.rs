@@ -403,7 +403,8 @@ impl AppState {
     /// Fills the editor rows from the slot plan fetched for `event_id`.
     ///
     /// On success the rows come from the plan over the nominal meeting duration and the
-    /// template id of the plan is remembered. On any error, whatever it is, the rows come from
+    /// template id of the plan is remembered. Fresh participant data also updates the list and
+    /// future equal resets. On any error, whatever it is, the rows come from
     /// the equal plan of the participants and a notice says so; the session is never ended by
     /// a plan failure.
     ///
@@ -431,6 +432,15 @@ impl AppState {
                 open.notice = EDITOR_PLAN_FALLBACK_NOTICE;
             }
         }
+        let fresh = open.editor.meeting().clone();
+        for meeting in &mut self.meetings {
+            if meeting.event_id == fresh.event_id {
+                meeting.attendees = fresh.attendees.clone();
+                meeting.attendees_omitted = fresh.attendees_omitted;
+                meeting.participant_resolution = fresh.participant_resolution;
+            }
+        }
+        self.rebuild_meeting_rows();
     }
 
     /// Sets the label of editor row `index`; see [`SlotEditor::set_label`].
@@ -1342,6 +1352,15 @@ impl AppState {
         self.on_login_required("");
     }
 
+    /// Whether a shown meeting needs an explicit Google grant update for groups.
+    ///
+    /// An empty list has no reconnect action. This never starts a browser login.
+    fn groups_reconnect_required(&self) -> bool {
+        self.shown
+            .iter()
+            .any(|meeting| meeting.participant_resolution.reauthorization_required)
+    }
+
     /// Binds the shared options model to `window`; call once after creating the window.
     ///
     /// Later option refreshes update the same model, so the UI follows without rebinding.
@@ -1372,7 +1391,8 @@ impl AppState {
         window.set_editor_title(meeting.title.as_str().into());
         window.set_editor_time_range(time_range(meeting, &Local).into());
         window.set_editor_duration(format!("Durata {} min", editor.duration_minutes()).into());
-        window.set_editor_attendees_warning(meeting.attendees_omitted);
+        window.set_editor_attendees_warning(participants_incomplete(meeting));
+        window.set_editor_groups_reconnect(meeting.participant_resolution.reauthorization_required);
         window.set_editor_loading(open.loading);
         window.set_editor_busy(open.busy);
         window.set_editor_notice(open.notice.into());
@@ -1436,6 +1456,7 @@ impl AppState {
         window.set_notice(self.notice.into());
         window.set_login_status(self.login_status.into());
         window.set_login_waiting(self.login_waiting);
+        window.set_groups_reconnect(self.groups_reconnect_required());
         window.set_meetings_loading(self.meetings_status == MeetingsStatus::Loading);
         let error = match self.meetings_status {
             MeetingsStatus::Failed(message) => message,
@@ -1694,7 +1715,17 @@ where
         title: meeting.title.as_str().into(),
         meta: meeting_meta(meeting, now).into(),
         in_progress: is_in_progress(meeting, now),
+        attendees_warning: participants_incomplete(meeting),
     }
+}
+
+/// True when Calendar omitted attendees or Google Groups could not be fully resolved.
+///
+/// Complete empty groups have no warning; reauthorization alone also requires attention.
+fn participants_incomplete(meeting: &Meeting) -> bool {
+    meeting.attendees_omitted
+        || meeting.participant_resolution.incomplete
+        || meeting.participant_resolution.reauthorization_required
 }
 
 /// Meta line of a meeting row: "In corso" or the time to the start, then the participant count.
@@ -1705,9 +1736,9 @@ where
 fn meeting_meta(meeting: &Meeting, now: &DateTime<FixedOffset>) -> String {
     let count = participants(meeting).len();
     let people = if count == 1 {
-        "1 partecipante accettato".to_string()
+        "1 partecipante".to_string()
     } else {
-        format!("{count} partecipanti accettati")
+        format!("{count} partecipanti")
     };
 
     if is_in_progress(meeting, now) {
@@ -1861,6 +1892,7 @@ pub mod tests {
             end,
             attendees: Vec::new(),
             attendees_omitted: false,
+            participant_resolution: Default::default(),
             recurring_event_id: None,
             has_template: false,
         }
@@ -1953,10 +1985,7 @@ pub mod tests {
         let mut meeting = meeting("Review", at(9, 0), at(10, 0));
         meeting.attendees = attendees(3);
 
-        assert_eq!(
-            meta(&meeting, at(9, 30)),
-            "In corso · 3 partecipanti accettati"
-        );
+        assert_eq!(meta(&meeting, at(9, 30)), "In corso · 3 partecipanti");
     }
 
     #[test]
@@ -1964,10 +1993,7 @@ pub mod tests {
         let mut meeting = meeting("Retro", at(9, 52), at(10, 30));
         meeting.attendees = attendees(7);
 
-        assert_eq!(
-            meta(&meeting, at(9, 0)),
-            "Tra 52 min · 7 partecipanti accettati"
-        );
+        assert_eq!(meta(&meeting, at(9, 0)), "Tra 52 min · 7 partecipanti");
     }
 
     #[test]
@@ -1991,17 +2017,14 @@ pub mod tests {
         let mut meeting = meeting("1:1", at(9, 0), at(10, 0));
         meeting.attendees = attendees(1);
 
-        assert_eq!(
-            meta(&meeting, at(9, 10)),
-            "In corso · 1 partecipante accettato"
-        );
+        assert_eq!(meta(&meeting, at(9, 10)), "In corso · 1 partecipante");
     }
 
     #[test]
     fn meta_uses_the_plural_for_no_participants() {
         let meeting = meeting("Solo", at(9, 0), at(10, 0));
 
-        assert!(meta(&meeting, at(8, 59)).ends_with("0 partecipanti accettati"));
+        assert!(meta(&meeting, at(8, 59)).ends_with("0 partecipanti"));
     }
 
     #[test]
@@ -2010,7 +2033,7 @@ pub mod tests {
         meeting.attendees = attendees(2);
         meeting.attendees[0].response = ResponseStatus::Declined;
 
-        assert!(meta(&meeting, at(9, 10)).ends_with("1 partecipante accettato"));
+        assert!(meta(&meeting, at(9, 10)).ends_with("1 partecipante"));
     }
 
     fn state_with_meetings() -> AppState {
@@ -3290,5 +3313,168 @@ pub mod tests {
         assert!(state.slots.is_none());
         state.show_home();
         assert_eq!(state.page, Page::MeetingsPage);
+    }
+
+    fn fresh_plan(meeting: &Meeting) -> SlotPlan {
+        SlotPlan {
+            source: schisaciaccole_core::api::PlanSource::Equal,
+            template_id: None,
+            entries: schisaciaccole_core::build_plan(&participants(meeting), None),
+            attendees: Some(meeting.attendees.clone()),
+            attendees_omitted: meeting.attendees_omitted,
+            participant_resolution: meeting.participant_resolution,
+        }
+    }
+
+    #[test]
+    fn calendar_omission_warns_in_the_meeting_row() {
+        let mut talk = meeting("Review", at(9, 0), at(10, 0));
+        talk.attendees_omitted = true;
+
+        let row = meeting_row(&talk, &at(9, 30), &Utc, None);
+
+        assert!(row.attendees_warning);
+    }
+
+    #[test]
+    fn incomplete_group_warns_without_calendar_omission() {
+        let mut talk = meeting("Review", at(9, 0), at(10, 0));
+        talk.participant_resolution.incomplete = true;
+
+        let row = meeting_row(&talk, &at(9, 30), &Utc, None);
+
+        assert!(row.attendees_warning);
+    }
+
+    #[test]
+    fn needs_action_members_have_a_neutral_participant_count() {
+        let mut talk = meeting("Review", at(9, 0), at(10, 0));
+        talk.attendees = attendees(2);
+        for attendee in &mut talk.attendees {
+            attendee.response = ResponseStatus::NeedsAction;
+        }
+
+        assert_eq!(meta(&talk, at(9, 30)), "In corso · 2 partecipanti");
+    }
+
+    #[test]
+    fn fresh_plan_failure_metadata_is_visible_in_editor_and_list() {
+        let mut state = state_with_one_meeting("Review", &["Ann"]);
+        let event_id = state.open_editor(0).unwrap();
+        let mut fresh = state.shown.first().unwrap().clone();
+        fresh.participant_resolution.incomplete = true;
+        fresh.participant_resolution.reauthorization_required = true;
+
+        state.on_editor_plan_loaded(&event_id, Ok(fresh_plan(&fresh)));
+
+        let open = state.editor.as_ref().unwrap();
+        assert!(participants_incomplete(open.editor.meeting()));
+        assert!(state.groups_reconnect_required());
+        assert!(row(&state, 0).attendees_warning);
+        assert_eq!(state.page, Page::EditorPage);
+        assert!(!state.login_waiting);
+        assert!(state.start_template_save().is_some());
+    }
+
+    #[test]
+    fn fresh_calendar_omission_warns_in_editor() {
+        let mut state = state_with_one_meeting("Review", &["Ann"]);
+        let event_id = state.open_editor(0).unwrap();
+        let mut fresh = state.shown.first().unwrap().clone();
+        fresh.attendees_omitted = true;
+
+        state.on_editor_plan_loaded(&event_id, Ok(fresh_plan(&fresh)));
+
+        assert!(participants_incomplete(
+            state.editor.as_ref().unwrap().editor.meeting()
+        ));
+    }
+
+    #[test]
+    fn fresh_members_drive_equal_reset_and_direct_start() {
+        let mut state = state_with_one_meeting("Review", &["Group"]);
+        let event_id = state.open_editor(0).unwrap();
+        let mut fresh = state.shown.first().unwrap().clone();
+        fresh.attendees = vec![person("Ann"), person("Bob")];
+        for attendee in &mut fresh.attendees {
+            attendee.response = ResponseStatus::NeedsAction;
+        }
+        state.on_editor_plan_loaded(&event_id, Ok(fresh_plan(&fresh)));
+
+        state.editor_add_row();
+        state.editor_reset();
+
+        let rows = state.editor.as_ref().unwrap().editor.rows();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows.first().unwrap().label, "Ann");
+        assert!(row(&state, 0).meta.ends_with("2 partecipanti"));
+        state.close_editor();
+        let _ = state.select_meeting(0);
+        assert_eq!(state.turn_names, vec!["Ann", "Bob"]);
+    }
+
+    #[test]
+    fn fresh_members_drive_daily_after_editor_closes() {
+        let mut state = state_with_one_meeting("Daily", &["Group"]);
+        let event_id = state.open_editor(0).unwrap();
+        let mut fresh = state.shown.first().unwrap().clone();
+        fresh.attendees = vec![person("Ann"), person("Bob")];
+        state.on_editor_plan_loaded(&event_id, Ok(fresh_plan(&fresh)));
+        state.close_editor();
+
+        let _ = state.select_meeting(0);
+
+        assert_eq!(state.turn_view, TurnView::Daily);
+        assert_eq!(state.turn_names.len(), 2);
+        assert!(state.turn_names.contains(&"Ann".to_string()));
+        assert!(state.turn_names.contains(&"Bob".to_string()));
+    }
+
+    #[test]
+    fn missing_group_grant_does_not_start_login_on_refresh() {
+        let mut state = state_with_one_meeting("Review", &["Group"]);
+        let mut meetings = state.meetings.clone();
+        for meeting in &mut meetings {
+            meeting.participant_resolution.incomplete = true;
+            meeting.participant_resolution.reauthorization_required = true;
+        }
+
+        state.on_meetings_loaded(meetings.clone());
+        state.on_meetings_loaded(meetings);
+
+        assert!(state.groups_reconnect_required());
+        assert!(!state.login_waiting);
+        assert_eq!(state.page, Page::MeetingsPage);
+        let _ = state.select_meeting(0);
+        assert_eq!(state.page, Page::TimerPage);
+    }
+
+    #[test]
+    fn reconnect_failure_preserves_calendar_meetings() {
+        let mut state = state_with_one_meeting("Review", &["Group"]);
+        let account = state.account.clone();
+        state.on_login_started();
+
+        state.on_login_failed("Accesso non riuscito");
+
+        assert_eq!(state.page, Page::MeetingsPage);
+        assert_eq!(state.account, account);
+        assert_eq!(state.shown.len(), 1);
+        assert!(!state.login_waiting);
+        assert_eq!(state.login_status, "Accesso non riuscito");
+    }
+
+    #[test]
+    fn reconnect_cancel_keeps_editor_and_fallback_start_usable() {
+        let mut state = editing_meeting();
+        state.on_login_started();
+
+        state.on_login_cancelled();
+
+        assert_eq!(state.page, Page::EditorPage);
+        assert!(state.is_signed_in());
+        assert!(!state.login_waiting);
+        let _ = state.start_from_editor();
+        assert_eq!(state.page, Page::TimerPage);
     }
 }

@@ -82,8 +82,21 @@ impl SlotEditor {
     }
 
     /// Replaces the rows with those of `plan` over the nominal duration and remembers its
-    /// template id (`None` for an equal plan).
+    /// template id (`None` for an equal plan). Fresh participants replace the meeting snapshot
+    /// used by equal reset. Legacy plans without participants preserve that snapshot and merge
+    /// warning flags conservatively.
     pub fn load_plan(&mut self, plan: &SlotPlan) {
+        if let Some(attendees) = &plan.attendees {
+            self.meeting.attendees = attendees.clone();
+            self.meeting.attendees_omitted = plan.attendees_omitted;
+            self.meeting.participant_resolution = plan.participant_resolution;
+        } else {
+            self.meeting.attendees_omitted |= plan.attendees_omitted;
+            self.meeting.participant_resolution.incomplete |=
+                plan.participant_resolution.incomplete;
+            self.meeting.participant_resolution.reauthorization_required |=
+                plan.participant_resolution.reauthorization_required;
+        }
         self.rows = plan_to_editor(&plan.entries, self.duration_secs);
         self.template_id = plan.template_id.clone();
     }
@@ -260,6 +273,7 @@ mod tests {
             end: at(10, 0),
             attendees: names.iter().map(|name| attendee(name)).collect(),
             attendees_omitted: false,
+            participant_resolution: Default::default(),
             recurring_event_id: None,
             has_template: false,
         }
@@ -341,6 +355,9 @@ mod tests {
     fn loading_a_plan_fills_rows_and_template_id() {
         let mut editor = SlotEditor::new(meeting(&["Ann", "Bob"]));
         let plan = SlotPlan {
+            attendees: None,
+            attendees_omitted: false,
+            participant_resolution: Default::default(),
             source: PlanSource::Template,
             template_id: Some("t1".to_string()),
             entries: vec![
@@ -636,5 +653,45 @@ mod tests {
             slots,
             vec![("Bob".to_string(), 1800), ("Carl".to_string(), 1800)]
         );
+    }
+
+    #[test]
+    fn fresh_empty_group_stays_empty_on_equal_reset() {
+        let mut editor = equal_editor();
+        let plan = SlotPlan {
+            source: PlanSource::Equal,
+            template_id: None,
+            entries: Vec::new(),
+            attendees: Some(Vec::new()),
+            attendees_omitted: false,
+            participant_resolution: Default::default(),
+        };
+
+        editor.load_plan(&plan);
+        editor.reset_to_equal();
+
+        assert!(editor.rows().is_empty());
+        assert!(editor.meeting().attendees.is_empty());
+    }
+
+    #[test]
+    fn legacy_plan_preserves_participants_and_prior_warning() {
+        let mut meeting = meeting(&["Ann"]);
+        meeting.attendees_omitted = true;
+        let mut editor = SlotEditor::new(meeting);
+        let plan = SlotPlan {
+            source: PlanSource::Equal,
+            template_id: None,
+            entries: Vec::new(),
+            attendees: None,
+            attendees_omitted: false,
+            participant_resolution: Default::default(),
+        };
+
+        editor.load_plan(&plan);
+        editor.reset_to_equal();
+
+        assert_eq!(labels(&editor), vec!["Ann"]);
+        assert!(editor.meeting().attendees_omitted);
     }
 }

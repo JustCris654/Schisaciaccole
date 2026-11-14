@@ -21,6 +21,8 @@ use schisaciaccole_server::store;
 use serde_json::json;
 use sqlx::PgPool;
 use url::Url;
+use wiremock::matchers::{body_string_contains, method, path};
+use wiremock::{Mock, ResponseTemplate};
 
 use common::*;
 
@@ -90,7 +92,10 @@ async fn login_redirects_to_google_with_expected_params(pool: PgPool) {
     );
     assert_eq!(
         query_param(url, "scope"),
-        Some(format!("openid email profile {CALENDAR_SCOPE}"))
+        Some(format!(
+            "openid email profile {CALENDAR_SCOPE} {}",
+            schisaciaccole_server::config::GOOGLE_GROUPS_SCOPE
+        ))
     );
     assert_eq!(query_param(url, "access_type").as_deref(), Some("offline"));
     assert_eq!(query_param(url, "prompt").as_deref(), Some("consent"));
@@ -489,4 +494,111 @@ async fn logout_with_unknown_token_is_no_content(pool: PgPool) {
     let response = h.logout("never-issued").await;
 
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
+}
+
+async fn reconnect_without_refresh_token(h: &Harness, scopes: Option<&str>) -> url::Url {
+    let login = h.start_login().await;
+    let mut body = json!({
+        "access_token":"reconnected-access-token", "token_type":"Bearer", "expires_in":3600,
+        "id_token":h.id_token(valid_claims(&login.nonce))
+    });
+    if let Some(scopes) = scopes {
+        body["scope"] = json!(scopes);
+    }
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .and(body_string_contains("grant_type=authorization_code"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(body))
+        .with_priority(1)
+        .expect(1)
+        .mount(&h.google)
+        .await;
+    let response = h.callback(&login.state).await;
+    assert_eq!(response.status(), StatusCode::FOUND);
+    url::Url::parse(&location(&response)).unwrap()
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn reconnect_without_new_refresh_or_scope_keeps_the_old_grant(pool: PgPool) {
+    let h = harness(pool).await;
+    let tokens = h.login_to_tokens().await;
+    let user = h.user_id(&tokens.access_token);
+    let before = store::google_credentials(&h.state.pool, user)
+        .await
+        .unwrap()
+        .unwrap();
+    h.state.google_tokens.insert(
+        user,
+        openidconnect::AccessToken::new("cached-old-token".into()),
+        Instant::now() + Duration::from_secs(3600),
+        Instant::now(),
+    );
+    let loopback = reconnect_without_refresh_token(&h, None).await;
+    assert!(query_param(&loopback, "code").is_some());
+    assert_eq!(
+        store::google_credentials(&h.state.pool, user)
+            .await
+            .unwrap()
+            .unwrap(),
+        before
+    );
+    assert!(h.state.google_tokens.get(user, Instant::now()).is_none());
+    assert!(
+        !before
+            .scopes
+            .contains(schisaciaccole_server::config::GOOGLE_GROUPS_SCOPE)
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn reconnect_without_new_refresh_persists_explicit_added_group_scope(pool: PgPool) {
+    let h = harness(pool).await;
+    let tokens = h.login_to_tokens().await;
+    let user = h.user_id(&tokens.access_token);
+    let before = store::google_credentials(&h.state.pool, user)
+        .await
+        .unwrap()
+        .unwrap();
+    let granted = format!(
+        "{CALENDAR_SCOPE} {}",
+        schisaciaccole_server::config::GOOGLE_GROUPS_SCOPE
+    );
+    let loopback = reconnect_without_refresh_token(&h, Some(&granted)).await;
+    assert!(query_param(&loopback, "code").is_some());
+    let after = store::google_credentials(&h.state.pool, user)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.refresh_token_enc, before.refresh_token_enc);
+    assert_eq!(after.scopes, granted);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn reconnect_without_new_refresh_persists_explicit_reduced_grant(pool: PgPool) {
+    let h = harness(pool).await;
+    let tokens = h.login_to_tokens().await;
+    let user = h.user_id(&tokens.access_token);
+    let before = store::google_credentials(&h.state.pool, user)
+        .await
+        .unwrap()
+        .unwrap();
+    store::save_google_credentials(
+        &h.state.pool,
+        user,
+        &before.refresh_token_enc,
+        &format!(
+            "{CALENDAR_SCOPE} {}",
+            schisaciaccole_server::config::GOOGLE_GROUPS_SCOPE
+        ),
+    )
+    .await
+    .unwrap();
+    let loopback = reconnect_without_refresh_token(&h, Some(CALENDAR_SCOPE)).await;
+    assert!(query_param(&loopback, "code").is_some());
+    let after = store::google_credentials(&h.state.pool, user)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.scopes, CALENDAR_SCOPE);
+    assert_eq!(after.refresh_token_enc, before.refresh_token_enc);
 }

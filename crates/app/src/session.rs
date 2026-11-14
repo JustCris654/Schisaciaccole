@@ -457,7 +457,13 @@ pub fn apply_event(state: &mut AppState, session: &Session, event: AppEvent) {
                 return;
             }
             match result {
-                Ok(me) => state.on_signed_in(&me),
+                Ok(me) => {
+                    let reconnecting = state.is_signed_in();
+                    state.on_signed_in(&me);
+                    if reconnecting {
+                        session.spawn_meetings_fetch();
+                    }
+                }
                 Err(e) => state.on_login_failed(login::login_error_message(&e)),
             }
         }
@@ -928,6 +934,7 @@ mod tests {
             end: now + chrono::Duration::hours(1),
             attendees: Vec::new(),
             attendees_omitted: false,
+            participant_resolution: Default::default(),
         }]);
         state.open_editor(0);
         apply_event(

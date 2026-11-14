@@ -77,6 +77,7 @@ pub async fn list_meetings(
     let range = validate_range(&query)?;
     let items = fetch_calendar_events(&state, user.user_id, range).await?;
     let mut meetings = map_events(&items);
+    crate::groups::resolve_meetings(&state, user.user_id, &mut meetings).await?;
     let keys = store::template_keys(&state.pool, user.user_id).await?;
     for meeting in &mut meetings {
         meeting.has_template = keys.contains(&normalize_title(&meeting.title));
@@ -196,7 +197,10 @@ where
 /// # Errors
 ///
 /// Returns `Err` in the cases listed on [`refresh_access_token`].
-async fn access_token(state: &AppState, user_id: Uuid) -> Result<AccessToken, ApiFailure> {
+pub(crate) async fn access_token(
+    state: &AppState,
+    user_id: Uuid,
+) -> Result<AccessToken, ApiFailure> {
     if let Some(token) = state.google_tokens.get(user_id, Instant::now()) {
         return Ok(token);
     }
@@ -219,7 +223,8 @@ async fn access_token(state: &AppState, user_id: Uuid) -> Result<AccessToken, Ap
 /// - `ApiFailure::Internal` when the decrypted token is not UTF-8.
 async fn refresh_access_token(state: &AppState, user_id: Uuid) -> Result<AccessToken, ApiFailure> {
     let config = &state.config;
-    let credentials = store::google_credentials(&state.pool, user_id)
+    let mut credential_lock = store::lock_google_credentials(&state.pool, user_id).await?;
+    let credentials = store::google_credentials(&mut *credential_lock, user_id)
         .await?
         .ok_or(ApiFailure::GoogleReauthRequired)?;
     if !has_scope(&credentials.scopes, &config.google_calendar_scope) {
@@ -231,8 +236,23 @@ async fn refresh_access_token(state: &AppState, user_id: Uuid) -> Result<AccessT
     })?;
 
     let started = Instant::now();
-    match state.google.refresh_access_token(&refresh_token).await {
+    let result = match state.google.refresh_access_token(&refresh_token).await {
         Ok(access) => {
+            if let Some(scopes) = &access.scopes {
+                let scopes = scopes.join(" ");
+                store::save_google_credentials(
+                    &mut *credential_lock,
+                    user_id,
+                    &credentials.refresh_token_enc,
+                    &scopes,
+                )
+                .await?;
+                if !has_scope(&scopes, &config.google_calendar_scope) {
+                    state.google_tokens.remove(user_id);
+                    credential_lock.commit().await?;
+                    return Err(ApiFailure::GoogleReauthRequired);
+                }
+            }
             let expires_at = access
                 .expires_in
                 .and_then(|lifetime| started.checked_add(lifetime));
@@ -247,12 +267,14 @@ async fn refresh_access_token(state: &AppState, user_id: Uuid) -> Result<AccessT
             Ok(access.token)
         }
         Err(GoogleError::InvalidGrant) => {
-            store::delete_google_credentials(&state.pool, user_id).await?;
+            store::delete_google_credentials(&mut *credential_lock, user_id).await?;
             state.google_tokens.remove(user_id);
             Err(ApiFailure::GoogleReauthRequired)
         }
         Err(err) => Err(ApiFailure::BadGateway(err.to_string())),
-    }
+    };
+    credential_lock.commit().await?;
+    result
 }
 
 /// True when the space-separated `scopes` contain exactly `wanted`.

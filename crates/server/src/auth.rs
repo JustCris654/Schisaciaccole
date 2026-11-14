@@ -28,7 +28,7 @@ use uuid::Uuid;
 
 use crate::app::AppState;
 use crate::client_ip::resolve_client_ip;
-use crate::config::Config;
+use crate::config::{Config, GOOGLE_GROUPS_SCOPE};
 use crate::crypto::{self, CryptoError};
 use crate::error::ApiFailure;
 use crate::google::GoogleError;
@@ -414,8 +414,8 @@ pub fn validate_login_params(query: &LoginQuery) -> Result<LoginParams, ApiFailu
 /// Failure of the Google callback, reported to the app as an error code.
 #[derive(Debug, Error)]
 enum CallbackError {
-    #[error("Google returned the error {0:?}")]
-    GoogleDenied(String),
+    #[error("Google denied authorization")]
+    GoogleDenied,
 
     #[error("callback without code")]
     MissingCode,
@@ -443,7 +443,7 @@ impl CallbackError {
     /// Error code sent to the app.
     fn code(&self) -> &'static str {
         match self {
-            Self::GoogleDenied(_)
+            Self::GoogleDenied
             | Self::MissingCode
             | Self::Google(
                 GoogleError::Rejected(_)
@@ -473,8 +473,8 @@ async fn finish_login(
     pkce_verifier: PkceCodeVerifier,
     nonce: &Nonce,
 ) -> Result<String, CallbackError> {
-    if let Some(error) = google_error {
-        return Err(CallbackError::GoogleDenied(error));
+    if google_error.is_some() {
+        return Err(CallbackError::GoogleDenied);
     }
     let code = code.ok_or(CallbackError::MissingCode)?;
     let identity = state
@@ -494,6 +494,7 @@ async fn finish_login(
     let user =
         store::upsert_user(&state.pool, &identity.sub, &email, identity.name.as_deref()).await?;
 
+    let mut credential_lock = store::lock_google_credentials(&state.pool, user.id).await?;
     match identity.refresh_token {
         Some(refresh_token) => {
             let encrypted =
@@ -502,17 +503,27 @@ async fn finish_login(
                 Some(scopes) => scopes.join(" "),
                 None => format!("openid {}", google_scopes(config).join(" ")),
             };
-            store::save_google_credentials(&state.pool, user.id, &encrypted, &scopes).await?;
+            store::save_google_credentials(&mut *credential_lock, user.id, &encrypted, &scopes)
+                .await?;
         }
         None => {
-            if store::google_credentials(&state.pool, user.id)
+            let credentials = store::google_credentials(&mut *credential_lock, user.id)
                 .await?
-                .is_none()
-            {
-                return Err(CallbackError::ReauthRequired);
+                .ok_or(CallbackError::ReauthRequired)?;
+            if let Some(scopes) = identity.scopes {
+                store::save_google_credentials(
+                    &mut *credential_lock,
+                    user.id,
+                    &credentials.refresh_token_enc,
+                    &scopes.join(" "),
+                )
+                .await?;
             }
         }
     }
+
+    state.google_tokens.remove(user.id);
+    credential_lock.commit().await?;
 
     let app_code = crypto::random_token()?;
     let value = AppCode {
@@ -526,8 +537,13 @@ async fn finish_login(
 }
 
 /// Scopes requested to Google besides `openid`.
-fn google_scopes(config: &Config) -> [&str; 3] {
-    ["email", "profile", config.google_calendar_scope.as_str()]
+fn google_scopes(config: &Config) -> [&str; 4] {
+    [
+        "email",
+        "profile",
+        config.google_calendar_scope.as_str(),
+        GOOGLE_GROUPS_SCOPE,
+    ]
 }
 
 /// Builds the token response: a new access token for the session plus the
@@ -843,10 +859,7 @@ mod tests {
 
     #[test]
     fn callback_error_codes() {
-        assert_eq!(
-            CallbackError::GoogleDenied("access_denied".to_string()).code(),
-            "invalid_code"
-        );
+        assert_eq!(CallbackError::GoogleDenied.code(), "invalid_code");
         assert_eq!(CallbackError::MissingCode.code(), "invalid_code");
         assert_eq!(
             CallbackError::Google(GoogleError::MissingIdToken).code(),

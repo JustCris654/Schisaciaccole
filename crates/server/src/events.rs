@@ -65,7 +65,7 @@ pub fn map_events(items: &[Value]) -> Vec<Meeting> {
 /// - its start or end has no `dateTime` (all-day events);
 /// - the attendee marked `self` has declined it;
 /// - it cannot be parsed (missing `id`, wrong types, a `dateTime` that is
-///   not RFC 3339); a warning with the event id only is logged.
+///   not RFC 3339); a warning without event data is logged.
 ///
 /// In the meeting the title falls back to [`UNTITLED`] and rooms
 /// (`resource` attendees) and attendees without email are left out. An
@@ -77,8 +77,7 @@ pub fn map_event(item: &Value) -> Option<Meeting> {
     match GoogleEvent::deserialize(item) {
         Ok(event) => to_meeting(event),
         Err(_) => {
-            let event_id = item.get("id").and_then(Value::as_str);
-            warn!(?event_id, "skipping unparsable Google Calendar event");
+            warn!("skipping unparsable Google Calendar event");
             None
         }
     }
@@ -106,6 +105,7 @@ fn to_meeting(event: GoogleEvent) -> Option<Meeting> {
         end,
         attendees,
         attendees_omitted: event.attendees_omitted,
+        participant_resolution: Default::default(),
         recurring_event_id: event.recurring_event_id,
         has_template: false,
     })
