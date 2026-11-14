@@ -268,10 +268,12 @@ read, its original invitation stays in the list and **Lista partecipanti
 incompleta** appears. Partial members of that group are discarded; independent
 successful groups remain expanded. Calendar's omitted-attendee flag produces the
 same warning. Only invitations that could be groups are looked up: the signed-in
-user and attendees who accepted, declined or answered maybe are people. A lookup
-404 for an invited address means it is not a group, so it stays a direct attendee
-without a warning; a group in another domain that Cloud Identity does not show
-is treated the same way. A 404 for a nested member of unknown type still warns.
+user and attendees who accepted, declined or answered maybe are people. Cloud
+Identity answers a lookup for a person, a missing group or a group the user
+cannot see with 404 or a bare 403 `PERMISSION_DENIED`, so for an invited address
+either means it stays a direct attendee without a warning; such hidden groups
+are therefore not flagged. A 403 carrying an error reason (disabled API, missing
+scope) and the same answers for a nested member of unknown type still warn.
 Known user members are leaves and need no additional group lookup. Complete empty
 groups contribute no participants. Warnings never prevent starting or editing.
 
