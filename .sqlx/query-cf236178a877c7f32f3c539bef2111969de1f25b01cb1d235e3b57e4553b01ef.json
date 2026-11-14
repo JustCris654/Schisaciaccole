@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO meeting_preferences (id, user_id, meeting_key, meeting_title)\n         VALUES ($1, $2, $3, $4)\n         ON CONFLICT (user_id, meeting_key)\n         DO UPDATE SET meeting_title = EXCLUDED.meeting_title, updated_at = now()\n         RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "cf236178a877c7f32f3c539bef2111969de1f25b01cb1d235e3b57e4553b01ef"
+}

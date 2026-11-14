@@ -1,5 +1,4 @@
-//! End-to-end tests of `GET /api/v1/meetings` and
-//! `GET /api/v1/meetings/{event_id}/plan` against a mocked Google token
+//! End-to-end tests of `GET /api/v1/meetings` against a mocked Google token
 //! endpoint and Calendar API (wiremock) and a throwaway PostgreSQL database
 //! (`#[sqlx::test]`).
 
@@ -10,8 +9,7 @@ use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
 use chrono::DateTime;
 use schisaciaccole_core::api::{
-    EntryKind, MEETINGS_PATH, Meeting, PlanEntry, PlanSource, ResponseStatus, SlotPlan,
-    TemplateEntry, meeting_plan_path,
+    MEETINGS_PATH, Meeting, MeetingPreference, PersonKind, PreferencePerson, ResponseStatus,
 };
 use schisaciaccole_server::store;
 use serde_json::{Value, json};
@@ -204,23 +202,29 @@ async fn full_flow_returns_mapped_meetings(pool: PgPool) {
     assert_eq!(meetings[1].title, "(senza titolo)");
 }
 
-// The template key ignores case and spacing; other titles stay unmarked.
+// The preference key ignores case and spacing; other titles stay without one.
 #[sqlx::test(migrations = "./migrations")]
-async fn meeting_with_matching_template_has_template_flag(pool: PgPool) {
+async fn meeting_with_matching_preference_carries_it(pool: PgPool) {
     let h = harness(pool.clone()).await;
     let access_token = login(&h).await;
-    let entries = [TemplateEntry {
-        kind: EntryKind::Manual,
-        email: None,
-        label: "Demo".to_string(),
-        weight_secs: 60,
-    }];
-    store::upsert_template(
+    let people = [
+        PreferencePerson {
+            kind: PersonKind::Attendee,
+            email: Some("ada@example.com".to_string()),
+            label: "Ada R.".to_string(),
+        },
+        PreferencePerson {
+            kind: PersonKind::Manual,
+            email: None,
+            label: "Demo".to_string(),
+        },
+    ];
+    let id = store::upsert_preference(
         &pool,
         h.user_id(&access_token),
         "daily sync",
         "Daily sync",
-        &entries,
+        &people,
     )
     .await
     .unwrap();
@@ -235,11 +239,15 @@ async fn meeting_with_matching_template_has_template_flag(pool: PgPool) {
 
     assert_eq!(response.status(), StatusCode::OK);
     let meetings: Vec<Meeting> = json_body(response).await;
-    let flags: Vec<bool> = meetings
-        .iter()
-        .map(|meeting| meeting.has_template)
-        .collect();
-    assert_eq!(flags, [true, false]);
+    assert_eq!(
+        meetings[0].preference,
+        Some(MeetingPreference {
+            id: id.to_string(),
+            meeting_title: "Daily sync".to_string(),
+            people: people.to_vec(),
+        })
+    );
+    assert_eq!(meetings[1].preference, None);
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -485,257 +493,6 @@ async fn meetings_without_bearer_is_unauthorized(pool: PgPool) {
     let response = h
         .send(get(&format!("{MEETINGS_PATH}?{}", range_query(FROM, TO))))
         .await;
-
-    assert_api_error(response, StatusCode::UNAUTHORIZED, "unauthorized").await;
-}
-
-async fn plan(h: &Harness, access_token: &str, event_id: &str) -> Response {
-    let request = Request::get(meeting_plan_path(event_id))
-        .header(header::AUTHORIZATION, format!("Bearer {access_token}"))
-        .body(Body::empty())
-        .unwrap();
-    h.send(request).await
-}
-
-/// Mounts the Calendar endpoint of the single event `event_id` for
-/// `access_token`, answering `response` and expecting `hits` requests.
-async fn mock_event(
-    h: &Harness,
-    access_token: &str,
-    event_id: &str,
-    response: ResponseTemplate,
-    hits: u64,
-) {
-    Mock::given(method("GET"))
-        .and(path(format!("{CALENDAR_EVENTS_PATH}/{event_id}")))
-        .and(bearer_token(access_token))
-        .respond_with(response)
-        .expect(hits)
-        .mount(&h.google)
-        .await;
-}
-
-fn attendee(email: &str, name: &str) -> Value {
-    json!({ "email": email, "displayName": name })
-}
-
-/// A "Daily" event with Carla, Ada (the user) and Bob, in this order.
-fn daily_event(id: &str) -> Value {
-    let mut event = timed_event(id, "Daily");
-    event["attendees"] = json!([
-        attendee("carla@example.com", "Carla"),
-        {
-            "email": "ada@example.com",
-            "displayName": "Ada",
-            "self": true,
-            "responseStatus": "accepted",
-        },
-        attendee("bob@example.com", "Bob"),
-    ]);
-    event
-}
-
-fn plan_entry(kind: EntryKind, email: Option<&str>, label: &str, weight: u64) -> PlanEntry {
-    PlanEntry {
-        kind,
-        email: email.map(str::to_string),
-        label: label.to_string(),
-        weight,
-    }
-}
-
-fn template_entry(
-    kind: EntryKind,
-    email: Option<&str>,
-    label: &str,
-    weight_secs: u32,
-) -> TemplateEntry {
-    TemplateEntry {
-        kind,
-        email: email.map(str::to_string),
-        label: label.to_string(),
-        weight_secs,
-    }
-}
-
-#[sqlx::test(migrations = "./migrations")]
-async fn plan_without_template_is_equal_and_sorted_by_name(pool: PgPool) {
-    let h = harness(pool).await;
-    let access_token = login(&h).await;
-    mock_refresh(&h, GOOGLE_ACCESS_TOKEN, 1).await;
-    let event = ResponseTemplate::new(200).set_body_json(daily_event("daily_1"));
-    mock_event(&h, GOOGLE_ACCESS_TOKEN, "daily_1", event, 1).await;
-
-    let response = plan(&h, &access_token, "daily_1").await;
-
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(
-        response.headers().get(header::CACHE_CONTROL).unwrap(),
-        "no-store"
-    );
-    let plan: SlotPlan = json_body(response).await;
-    assert_eq!(plan.source, PlanSource::Equal);
-    assert_eq!(plan.template_id, None);
-    assert_eq!(
-        plan.entries,
-        [
-            plan_entry(EntryKind::Attendee, Some("ada@example.com"), "Ada", 1),
-            plan_entry(EntryKind::Attendee, Some("bob@example.com"), "Bob", 1),
-            plan_entry(EntryKind::Attendee, Some("carla@example.com"), "Carla", 1),
-        ]
-    );
-}
-
-// Saved order and weights are kept (Bob excluded with weight 0), Dan left
-// the meeting, Carla is new and gets the mean weight of Dan and Ada (450),
-// placed before the free time.
-#[sqlx::test(migrations = "./migrations")]
-async fn plan_with_template_follows_the_template(pool: PgPool) {
-    let h = harness(pool.clone()).await;
-    let access_token = login(&h).await;
-    let entries = [
-        template_entry(EntryKind::Attendee, Some("dan@example.com"), "Dan", 600),
-        template_entry(EntryKind::Attendee, Some("bob@example.com"), "Bob R.", 0),
-        template_entry(EntryKind::Attendee, Some("ada@example.com"), "Ada", 300),
-        template_entry(EntryKind::FreeTime, None, "Tempo libero", 120),
-    ];
-    let template_id =
-        store::upsert_template(&pool, h.user_id(&access_token), "daily", "Daily", &entries)
-            .await
-            .unwrap();
-    mock_refresh(&h, GOOGLE_ACCESS_TOKEN, 1).await;
-    let event = ResponseTemplate::new(200).set_body_json(daily_event("daily_1"));
-    mock_event(&h, GOOGLE_ACCESS_TOKEN, "daily_1", event, 1).await;
-
-    let response = plan(&h, &access_token, "daily_1").await;
-
-    assert_eq!(response.status(), StatusCode::OK);
-    let plan: SlotPlan = json_body(response).await;
-    assert_eq!(plan.source, PlanSource::Template);
-    assert_eq!(plan.template_id, Some(template_id.to_string()));
-    assert_eq!(
-        plan.entries,
-        [
-            plan_entry(EntryKind::Attendee, Some("bob@example.com"), "Bob R.", 0),
-            plan_entry(EntryKind::Attendee, Some("ada@example.com"), "Ada", 300),
-            plan_entry(EntryKind::Attendee, Some("carla@example.com"), "Carla", 450),
-            plan_entry(EntryKind::FreeTime, None, "Tempo libero", 120),
-        ]
-    );
-}
-
-#[sqlx::test(migrations = "./migrations")]
-async fn plan_is_not_found_when_google_answers_404(pool: PgPool) {
-    let h = harness(pool).await;
-    let access_token = login(&h).await;
-    mock_refresh(&h, GOOGLE_ACCESS_TOKEN, 1).await;
-    mock_event(
-        &h,
-        GOOGLE_ACCESS_TOKEN,
-        "gone",
-        ResponseTemplate::new(404),
-        1,
-    )
-    .await;
-
-    let response = plan(&h, &access_token, "gone").await;
-
-    assert_api_error(response, StatusCode::NOT_FOUND, "not_found").await;
-}
-
-#[sqlx::test(migrations = "./migrations")]
-async fn plan_is_not_found_when_google_answers_410(pool: PgPool) {
-    let h = harness(pool).await;
-    let access_token = login(&h).await;
-    mock_refresh(&h, GOOGLE_ACCESS_TOKEN, 1).await;
-    mock_event(
-        &h,
-        GOOGLE_ACCESS_TOKEN,
-        "gone",
-        ResponseTemplate::new(410),
-        1,
-    )
-    .await;
-
-    let response = plan(&h, &access_token, "gone").await;
-
-    assert_api_error(response, StatusCode::NOT_FOUND, "not_found").await;
-}
-
-#[sqlx::test(migrations = "./migrations")]
-async fn plan_is_not_found_for_a_cancelled_event(pool: PgPool) {
-    let h = harness(pool).await;
-    let access_token = login(&h).await;
-    mock_refresh(&h, GOOGLE_ACCESS_TOKEN, 1).await;
-    let mut event = daily_event("daily_1");
-    event["status"] = json!("cancelled");
-    let event = ResponseTemplate::new(200).set_body_json(event);
-    mock_event(&h, GOOGLE_ACCESS_TOKEN, "daily_1", event, 1).await;
-
-    let response = plan(&h, &access_token, "daily_1").await;
-
-    assert_api_error(response, StatusCode::NOT_FOUND, "not_found").await;
-}
-
-#[sqlx::test(migrations = "./migrations")]
-async fn plan_with_invalid_event_id_is_rejected_without_calling_google(pool: PgPool) {
-    let h = harness(pool).await;
-    let access_token = login(&h).await;
-    mock_refresh(&h, GOOGLE_ACCESS_TOKEN, 0).await;
-
-    let response = plan(&h, &access_token, "daily.1").await;
-
-    assert_api_error(response, StatusCode::BAD_REQUEST, "invalid_request").await;
-}
-
-#[sqlx::test(migrations = "./migrations")]
-async fn plan_calendar_401_refreshes_token_and_retries(pool: PgPool) {
-    let h = harness(pool).await;
-    let access_token = login(&h).await;
-    Mock::given(method("POST"))
-        .and(path("/token"))
-        .and(body_string_contains("grant_type=refresh_token"))
-        .respond_with(refresh_response("stale-token"))
-        .up_to_n_times(1)
-        .expect(1)
-        .mount(&h.google)
-        .await;
-    mock_refresh(&h, "fresh-token", 1).await;
-    mock_event(&h, "stale-token", "daily_1", ResponseTemplate::new(401), 1).await;
-    let event = ResponseTemplate::new(200).set_body_json(daily_event("daily_1"));
-    mock_event(&h, "fresh-token", "daily_1", event, 1).await;
-
-    let response = plan(&h, &access_token, "daily_1").await;
-
-    assert_eq!(response.status(), StatusCode::OK);
-    let plan: SlotPlan = json_body(response).await;
-    assert_eq!(plan.entries.len(), 3);
-}
-
-#[sqlx::test(migrations = "./migrations")]
-async fn plan_calendar_500_is_bad_gateway(pool: PgPool) {
-    let h = harness(pool).await;
-    let access_token = login(&h).await;
-    mock_refresh(&h, GOOGLE_ACCESS_TOKEN, 1).await;
-    mock_event(
-        &h,
-        GOOGLE_ACCESS_TOKEN,
-        "daily_1",
-        ResponseTemplate::new(500),
-        1,
-    )
-    .await;
-
-    let response = plan(&h, &access_token, "daily_1").await;
-
-    assert_api_error(response, StatusCode::BAD_GATEWAY, "internal").await;
-}
-
-#[sqlx::test(migrations = "./migrations")]
-async fn plan_without_bearer_is_unauthorized(pool: PgPool) {
-    let h = harness(pool).await;
-
-    let response = h.send(get(&meeting_plan_path("daily_1"))).await;
 
     assert_api_error(response, StatusCode::UNAUTHORIZED, "unauthorized").await;
 }

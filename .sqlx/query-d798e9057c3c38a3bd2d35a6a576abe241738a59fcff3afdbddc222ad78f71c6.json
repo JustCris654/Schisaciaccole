@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "DELETE FROM slot_templates WHERE id = $1 AND user_id = $2",
+  "query": "DELETE FROM meeting_preferences WHERE id = $1 AND user_id = $2",
   "describe": {
     "columns": [],
     "parameters": {
@@ -11,5 +11,5 @@
     },
     "nullable": []
   },
-  "hash": "d0d742d36e6a264c8481a46eca08024fed2f917784ae5675a6b131f53640d266"
+  "hash": "d798e9057c3c38a3bd2d35a6a576abe241738a59fcff3afdbddc222ad78f71c6"
 }

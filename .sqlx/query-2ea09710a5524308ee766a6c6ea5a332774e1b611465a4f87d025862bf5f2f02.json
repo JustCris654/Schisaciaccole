@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO meeting_preference_people\n             (preference_id, position, kind, attendee_email, label)\n         SELECT $1, position, kind, attendee_email, label\n         FROM UNNEST($2::int[], $3::text[], $4::text[], $5::text[])\n             AS p(position, kind, attendee_email, label)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4Array",
+        "TextArray",
+        "TextArray",
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2ea09710a5524308ee766a6c6ea5a332774e1b611465a4f87d025862bf5f2f02"
+}

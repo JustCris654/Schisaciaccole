@@ -1,10 +1,10 @@
-//! Shared expansion behavior through both authenticated Calendar routes.
+//! Shared expansion behavior through the authenticated meetings list.
 mod common;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use common::*;
-use schisaciaccole_core::api::{Meeting, SlotPlan};
+use schisaciaccole_core::api::Meeting;
 use schisaciaccole_server::{config::GOOGLE_GROUPS_SCOPE, crypto, store};
 use serde_json::{Value, json};
 use sqlx::PgPool;
@@ -52,12 +52,7 @@ async fn setup_with_event(h: &Harness, scope: &str, event: Value) -> String {
     );
     Mock::given(method("GET"))
         .and(path(CALENDAR_EVENTS_PATH))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"items":[event.clone()]})))
-        .mount(&h.google)
-        .await;
-    Mock::given(method("GET"))
-        .and(path(format!("{CALENDAR_EVENTS_PATH}/daily")))
-        .respond_with(ResponseTemplate::new(200).set_body_json(event))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"items":[event]})))
         .mount(&h.google)
         .await;
     tokens.access_token
@@ -97,11 +92,11 @@ async fn root(h: &Harness, email: &str, id: &str, hits: u64) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
-async fn both_routes_expand_and_preserve_direct_metadata_and_atomic_failed_roots(pool: PgPool) {
+async fn list_expands_and_preserves_direct_metadata_and_atomic_failed_roots(pool: PgPool) {
     let h = harness(pool).await;
     let token = setup(&h, GOOGLE_GROUPS_SCOPE).await;
-    root(&h, "team@example.com", "team", 2).await;
-    root(&h, "broken@example.com", "broken", 2).await;
+    root(&h, "team@example.com", "team", 1).await;
+    root(&h, "broken@example.com", "broken", 1).await;
     Mock::given(method("GET"))
         .and(path("/identity/v1/groups/team/memberships"))
         .and(query_param("view", "FULL"))
@@ -112,13 +107,13 @@ async fn both_routes_expand_and_preserve_direct_metadata_and_atomic_failed_roots
                 {"preferredMemberKey":{"id":"BOB@example.com"},"type":"USER"}
             ]})),
         )
-        .expect(2)
+        .expect(1)
         .mount(&h.google)
         .await;
     Mock::given(method("GET"))
         .and(path("/identity/v1/groups/broken/memberships"))
         .respond_with(ResponseTemplate::new(403))
-        .expect(2)
+        .expect(1)
         .mount(&h.google)
         .await;
     let meetings = list(&h, &token).await;
@@ -135,13 +130,6 @@ async fn both_routes_expand_and_preserve_direct_metadata_and_atomic_failed_roots
     assert!(meeting.attendees[2].optional);
     assert!(meeting.participant_resolution.incomplete);
     assert!(!meeting.participant_resolution.reauthorization_required);
-    let response = request(&h, &token, "/api/v1/meetings/daily/plan").await;
-    assert_eq!(response.status(), StatusCode::OK);
-    let plan: SlotPlan = json_body(response).await;
-    assert_eq!(plan.attendees.as_ref(), Some(&meeting.attendees));
-    assert_eq!(plan.participant_resolution, meeting.participant_resolution);
-    assert!(!plan.attendees_omitted);
-    assert_eq!(plan.entries.len(), 2);
     let requests = h.google.received_requests().await.unwrap();
     assert!(
         requests
@@ -161,11 +149,6 @@ async fn old_scope_grant_keeps_calendar_working_and_requires_explicit_reconnect(
         assert!(meetings[0].participant_resolution.incomplete);
         assert!(meetings[0].participant_resolution.reauthorization_required);
     }
-    let response = request(&h, &token, "/api/v1/meetings/daily/plan").await;
-    assert_eq!(response.status(), StatusCode::OK);
-    let plan: SlotPlan = json_body(response).await;
-    assert!(plan.participant_resolution.reauthorization_required);
-    assert_eq!(plan.attendees.unwrap().len(), 3);
     let requests = h.google.received_requests().await.unwrap();
     assert!(
         !requests

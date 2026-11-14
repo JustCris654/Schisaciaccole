@@ -72,7 +72,8 @@ pub fn map_events(items: &[Value]) -> Vec<Meeting> {
 /// attendee's name is its `displayName`, or one derived from the email when
 /// the display name is missing or blank. A missing or unknown
 /// `responseStatus` becomes [`ResponseStatus::NeedsAction`]. `has_template`
-/// is always `false`: the caller sets it.
+/// is always `false` and `preference` is always `None`: the caller sets
+/// `preference`.
 pub fn map_event(item: &Value) -> Option<Meeting> {
     match GoogleEvent::deserialize(item) {
         Ok(event) => to_meeting(event),

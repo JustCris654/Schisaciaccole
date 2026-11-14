@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT p.preference_id, p.kind, p.attendee_email, p.label\n         FROM meeting_preference_people p\n         JOIN meeting_preferences m ON m.id = p.preference_id\n         WHERE m.user_id = $1 AND p.preference_id = ANY($2)\n         ORDER BY p.preference_id, p.position",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "preference_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "kind",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "attendee_email",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "label",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "ab66df504c35727d034064c28a2305d61e6b1e0d161867c9274386cef43e7d3f"
+}

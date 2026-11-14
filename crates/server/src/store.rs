@@ -1,14 +1,14 @@
-//! Database access for users, Google credentials, app sessions and slot templates.
+//! Database access for users, Google credentials, app sessions and meeting preferences.
 //!
 //! Most operations take a [`PgPool`]; credential operations also accept a
 //! transaction connection so refresh and login can share an advisory lock. The tests need
 //! a PostgreSQL reachable through `DATABASE_URL`: `#[sqlx::test]` creates a
 //! throwaway database per test and applies the migrations.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
-use schisaciaccole_core::api::{EntryKind, TemplateEntry};
+use schisaciaccole_core::api::{MeetingPreference, PersonKind, PreferencePerson};
 use sqlx::{Executor, PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
@@ -338,79 +338,61 @@ pub async fn revoke_session_by_hash(
     Ok(result.rows_affected() == 1)
 }
 
-/// A saved slot template with its entries, as read from the database.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StoredTemplate {
-    /// Template id.
-    pub id: Uuid,
-    /// Meeting title as last saved, not normalized.
-    pub meeting_title: String,
-    /// Entries in position order.
-    pub entries: Vec<TemplateEntry>,
-}
-
-/// Database value of an entry kind.
-fn kind_to_str(kind: EntryKind) -> &'static str {
+/// Database value of a person kind.
+fn kind_to_str(kind: PersonKind) -> &'static str {
     match kind {
-        EntryKind::Attendee => "attendee",
-        EntryKind::Manual => "manual",
-        EntryKind::FreeTime => "free_time",
+        PersonKind::Attendee => "attendee",
+        PersonKind::Manual => "manual",
     }
 }
 
-/// Entry kind of a database value, or `None` when it is unknown.
-fn kind_from_str(value: &str) -> Option<EntryKind> {
+/// Person kind of a database value, or `None` when it is unknown.
+fn kind_from_str(value: &str) -> Option<PersonKind> {
     match value {
-        "attendee" => Some(EntryKind::Attendee),
-        "manual" => Some(EntryKind::Manual),
-        "free_time" => Some(EntryKind::FreeTime),
+        "attendee" => Some(PersonKind::Attendee),
+        "manual" => Some(PersonKind::Manual),
         _ => None,
     }
 }
 
-/// Creates the template of `user_id` for `meeting_key`, or replaces the
+/// Creates the preference of `user_id` for `meeting_key`, or replaces the
 /// existing one, and returns its id.
 ///
-/// Everything happens in one transaction. When a template exists for the
+/// Everything happens in one transaction. When a preference exists for the
 /// key, its id is kept, its title and `updated_at` are updated and all its
-/// entries are replaced; otherwise a new id is assigned. Entries are stored
-/// at positions `0..n` in the given order.
+/// people are replaced; otherwise a new id is assigned. People are stored at
+/// positions `0..n` in the given order.
 ///
-/// The content of `entries` is not validated beyond what the database
+/// The content of `people` is not validated beyond what the database
 /// enforces.
 ///
 /// # Errors
 ///
 /// Returns `Err` when a query fails, including when `user_id` does not
-/// exist, an entry breaks a table constraint (attendee kind without email
-/// or the reverse, negative weight), or a weight does not fit in an `i32`.
-/// Nothing is stored in that case.
-pub async fn upsert_template(
+/// exist or a person breaks a table constraint (attendee kind without email
+/// or the reverse). Nothing is stored in that case.
+pub async fn upsert_preference(
     pool: &PgPool,
     user_id: Uuid,
     meeting_key: &str,
     meeting_title: &str,
-    entries: &[TemplateEntry],
+    people: &[PreferencePerson],
 ) -> Result<Uuid, sqlx::Error> {
-    let mut positions = Vec::with_capacity(entries.len());
-    let mut kinds = Vec::with_capacity(entries.len());
-    let mut emails = Vec::with_capacity(entries.len());
-    let mut labels = Vec::with_capacity(entries.len());
-    let mut weights = Vec::with_capacity(entries.len());
-    for (position, entry) in entries.iter().enumerate() {
+    let mut positions = Vec::with_capacity(people.len());
+    let mut kinds = Vec::with_capacity(people.len());
+    let mut emails = Vec::with_capacity(people.len());
+    let mut labels = Vec::with_capacity(people.len());
+    for (position, person) in people.iter().enumerate() {
         let position = i32::try_from(position).map_err(|e| sqlx::Error::Encode(Box::new(e)))?;
-        let weight =
-            i32::try_from(entry.weight_secs).map_err(|e| sqlx::Error::Encode(Box::new(e)))?;
         positions.push(position);
-        kinds.push(kind_to_str(entry.kind).to_string());
-        emails.push(entry.email.clone());
-        labels.push(entry.label.clone());
-        weights.push(weight);
+        kinds.push(kind_to_str(person.kind).to_string());
+        emails.push(person.email.clone());
+        labels.push(person.label.clone());
     }
 
     let mut tx = pool.begin().await?;
-    let template_id = sqlx::query_scalar!(
-        "INSERT INTO slot_templates (id, user_id, meeting_key, meeting_title)
+    let preference_id = sqlx::query_scalar!(
+        "INSERT INTO meeting_preferences (id, user_id, meeting_key, meeting_title)
          VALUES ($1, $2, $3, $4)
          ON CONFLICT (user_id, meeting_key)
          DO UPDATE SET meeting_title = EXCLUDED.meeting_title, updated_at = now()
@@ -423,112 +405,115 @@ pub async fn upsert_template(
     .fetch_one(&mut *tx)
     .await?;
     sqlx::query!(
-        "DELETE FROM slot_template_entries WHERE template_id = $1",
-        template_id,
+        "DELETE FROM meeting_preference_people WHERE preference_id = $1",
+        preference_id,
     )
     .execute(&mut *tx)
     .await?;
     sqlx::query!(
-        "INSERT INTO slot_template_entries
-             (template_id, position, kind, attendee_email, label, weight_secs)
-         SELECT $1, position, kind, attendee_email, label, weight_secs
-         FROM UNNEST($2::int[], $3::text[], $4::text[], $5::text[], $6::int[])
-             AS e(position, kind, attendee_email, label, weight_secs)",
-        template_id,
+        "INSERT INTO meeting_preference_people
+             (preference_id, position, kind, attendee_email, label)
+         SELECT $1, position, kind, attendee_email, label
+         FROM UNNEST($2::int[], $3::text[], $4::text[], $5::text[])
+             AS p(position, kind, attendee_email, label)",
+        preference_id,
         &positions,
         &kinds,
         &emails as &[Option<String>],
         &labels,
-        &weights,
     )
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
-    Ok(template_id)
+    Ok(preference_id)
 }
 
-/// Loads the template of `user_id` for `meeting_key`.
+/// Loads the preferences of `user_id` whose meeting key is in `keys`, by
+/// meeting key. People are ordered by position.
 ///
-/// Returns `Ok(None)` when the user has none. Entries are ordered by
-/// position.
+/// Keys without a preference are absent from the map. An empty `keys`
+/// returns an empty map without querying.
 ///
 /// # Errors
 ///
 /// Returns `Err` when a query fails, or with `sqlx::Error::Decode` when a
-/// stored entry has an unknown kind or a weight that does not fit in a
-/// `u32`: the whole template is then refused instead of silently losing
-/// entries.
-pub async fn template_by_key(
+/// stored person has an unknown kind: the whole load is then refused
+/// instead of silently losing people.
+pub async fn preferences_by_keys(
     pool: &PgPool,
     user_id: Uuid,
-    meeting_key: &str,
-) -> Result<Option<StoredTemplate>, sqlx::Error> {
-    let Some(template) = sqlx::query!(
-        "SELECT id, meeting_title FROM slot_templates
-         WHERE user_id = $1 AND meeting_key = $2",
+    keys: &[String],
+) -> Result<HashMap<String, MeetingPreference>, sqlx::Error> {
+    if keys.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let preferences = sqlx::query!(
+        "SELECT id, meeting_key, meeting_title FROM meeting_preferences
+         WHERE user_id = $1 AND meeting_key = ANY($2)",
         user_id,
-        meeting_key,
-    )
-    .fetch_optional(pool)
-    .await?
-    else {
-        return Ok(None);
-    };
-    let rows = sqlx::query!(
-        "SELECT kind, attendee_email, label, weight_secs FROM slot_template_entries
-         WHERE template_id = $1 ORDER BY position",
-        template.id,
+        keys,
     )
     .fetch_all(pool)
     .await?;
-    let mut entries = Vec::with_capacity(rows.len());
+    let ids: Vec<Uuid> = preferences.iter().map(|row| row.id).collect();
+    let rows = sqlx::query!(
+        "SELECT p.preference_id, p.kind, p.attendee_email, p.label
+         FROM meeting_preference_people p
+         JOIN meeting_preferences m ON m.id = p.preference_id
+         WHERE m.user_id = $1 AND p.preference_id = ANY($2)
+         ORDER BY p.preference_id, p.position",
+        user_id,
+        &ids,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let mut people_by_id: HashMap<Uuid, Vec<PreferencePerson>> = HashMap::new();
     for row in rows {
         let kind = kind_from_str(&row.kind).ok_or_else(|| {
-            sqlx::Error::Decode(format!("unknown template entry kind {:?}", row.kind).into())
+            sqlx::Error::Decode(format!("unknown preference person kind {:?}", row.kind).into())
         })?;
-        let weight_secs =
-            u32::try_from(row.weight_secs).map_err(|e| sqlx::Error::Decode(e.into()))?;
-        entries.push(TemplateEntry {
-            kind,
-            email: row.attendee_email,
-            label: row.label,
-            weight_secs,
-        });
+        people_by_id
+            .entry(row.preference_id)
+            .or_default()
+            .push(PreferencePerson {
+                kind,
+                email: row.attendee_email,
+                label: row.label,
+            });
     }
-    Ok(Some(StoredTemplate {
-        id: template.id,
-        meeting_title: template.meeting_title,
-        entries,
-    }))
+
+    let mut result = HashMap::with_capacity(preferences.len());
+    for row in preferences {
+        let people = people_by_id.remove(&row.id).unwrap_or_default();
+        result.insert(
+            row.meeting_key,
+            MeetingPreference {
+                id: row.id.to_string(),
+                meeting_title: row.meeting_title,
+                people,
+            },
+        );
+    }
+    Ok(result)
 }
 
-/// Lists the meeting keys of all the templates of `user_id`.
-///
-/// # Errors
-///
-/// Returns `Err` when the query fails.
-pub async fn template_keys(pool: &PgPool, user_id: Uuid) -> Result<HashSet<String>, sqlx::Error> {
-    let keys = sqlx::query_scalar!(
-        "SELECT meeting_key FROM slot_templates WHERE user_id = $1",
-        user_id,
-    )
-    .fetch_all(pool)
-    .await?;
-    Ok(keys.into_iter().collect())
-}
-
-/// Deletes the template `id` if it belongs to `user_id`; its entries go
+/// Deletes the preference `id` if it belongs to `user_id`; its people go
 /// with it.
 ///
-/// Returns `true` when a template was deleted, `false` when the id does not
-/// exist or belongs to another user.
+/// Returns `true` when a preference was deleted, `false` when the id does
+/// not exist or belongs to another user.
 ///
 /// # Errors
 ///
 /// Returns `Err` when the query fails.
-pub async fn delete_template(pool: &PgPool, user_id: Uuid, id: Uuid) -> Result<bool, sqlx::Error> {
+pub async fn delete_preference(
+    pool: &PgPool,
+    user_id: Uuid,
+    id: Uuid,
+) -> Result<bool, sqlx::Error> {
     let result = sqlx::query!(
-        "DELETE FROM slot_templates WHERE id = $1 AND user_id = $2",
+        "DELETE FROM meeting_preferences WHERE id = $1 AND user_id = $2",
         id,
         user_id,
     )

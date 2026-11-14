@@ -50,7 +50,7 @@ pub struct TimeRange {
 /// of the user's primary Google calendar overlapping the range, in start
 /// order (see [`map_events`] for the events left out). Answers 200 with a
 /// JSON array of meetings, marked as not cacheable. A meeting has
-/// `has_template` set when the user saved a template for its normalized
+/// `preference` set when the user saved a preference for its normalized
 /// title.
 ///
 /// The Google access token is cached per user. When Google Calendar
@@ -78,9 +78,13 @@ pub async fn list_meetings(
     let items = fetch_calendar_events(&state, user.user_id, range).await?;
     let mut meetings = map_events(&items);
     crate::groups::resolve_meetings(&state, user.user_id, &mut meetings).await?;
-    let keys = store::template_keys(&state.pool, user.user_id).await?;
-    for meeting in &mut meetings {
-        meeting.has_template = keys.contains(&normalize_title(&meeting.title));
+    let keys: Vec<String> = meetings
+        .iter()
+        .map(|meeting| normalize_title(&meeting.title))
+        .collect();
+    let preferences = store::preferences_by_keys(&state.pool, user.user_id, &keys).await?;
+    for (meeting, key) in meetings.iter_mut().zip(&keys) {
+        meeting.preference = preferences.get(key).cloned();
     }
     Ok(([(header::CACHE_CONTROL, "no-store")], Json(meetings)).into_response())
 }
