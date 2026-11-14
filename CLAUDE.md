@@ -2,15 +2,23 @@
 
 Guidance for Claude Code (claude.ai/code) in this repository.
 
-Schisaciaccole is a Slint desktop countdown for time-boxed Scrum ceremonies. Workspace crates: `crates/core` (`schisaciaccole-core`), `crates/app` (`schisaciaccole`), `crates/server` (`schisaciaccole-server`, axum). `deploy/` holds the server Dockerfile and Compose (PostgreSQL 17). Packaging and releases are in `README.org`.
+Schisaciaccole is a Slint desktop countdown for time-boxed Scrum ceremonies. Workspace crates: `crates/core` (`schisaciaccole-core`), `crates/app` (`schisaciaccole`), `crates/server` (`schisaciaccole-server`, axum). `deploy/` holds the server Dockerfile and Compose (PostgreSQL 17). `README.org` is the local source for behavior, setup, packaging and deployment.
+
+## Project agent context
+
+Read [.claude/rules/common.md](.claude/rules/common.md) before project work. Domain and generic profiles are in `.claude/agents/`; their permissions inherit the session. Claude Code also loads path-scoped rules from `.claude/rules/` when a matching file is in play.
 
 ## Read only when the work needs it
 
-Do not open these for unrelated work. Claude Code also loads them from `.claude/rules/` only when a matching file is in play.
+Do not open these for unrelated work. Read the matching domain rules before relevant work:
 
-- Shared agent instructions: [.claude/rules/common.md](.claude/rules/common.md). Domain profiles live in `.claude/agents/`.
-- Server/core/desktop/database/deployment/CI: read the matching `api.md`, `core.md`, `desktop.md`, `database.md`, `deploy.md` or `ci-versioning.md` in `.claude/rules/` when those paths are in play.
-- Rust (`*.rs`, `Cargo.toml`): [.claude/rules/rust.md](.claude/rules/rust.md)
+- Server: [.claude/rules/api.md](.claude/rules/api.md)
+- Core: [.claude/rules/core.md](.claude/rules/core.md)
+- Desktop: [.claude/rules/desktop.md](.claude/rules/desktop.md)
+- Database: [.claude/rules/database.md](.claude/rules/database.md)
+- Deployment: [.claude/rules/deploy.md](.claude/rules/deploy.md)
+- CI, packaging and versioning: [.claude/rules/ci-versioning.md](.claude/rules/ci-versioning.md)
+- Rust (`*.rs`, `Cargo.toml`): [.claude/rules/rust.md](.claude/rules/rust.md). Its complete Rust coding guidelines apply when writing or reviewing Rust.
 - A change that alters a documented behavior, route, env var, config key, Compose service or volume, workflow, deploy step, or operational procedure: [.claude/rules/docs.md](.claude/rules/docs.md)
 
 ## Launch
@@ -79,3 +87,7 @@ The planning model is the **orchestrator**: a self-contained brief per agent, th
 - Conventional Commits (`feat:`, `fix:`, `refactor:`, `ci:`, `docs:`, `chore:`, optional scope). Subject ≤ 72 characters. Body says what changes and why.
 - Commit messages, code, comments, and branch names never reference plan milestones or task ids (`M0`, `M1`, `T3`, …): describe the change itself.
 - Push only when the developer asks.
+
+## Exploring the code
+
+The graphify skill is available and is how to explore this codebase: architecture, how files relate, and where a behavior lives. Follow that skill before searching or reading source to answer those questions. When `graphify-out/graph.json` exists, query the graph first, then verify what it cites against the current files. The graph can be stale; rebuild it only when the task is about the graph.

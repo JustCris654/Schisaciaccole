@@ -2,6 +2,71 @@
 
 This file provides guidance to Codex when working with code in this repository.
 
+Schisaciaccole is a Slint desktop countdown for time-boxed Scrum ceremonies. Workspace crates: `crates/core` (`schisaciaccole-core`), `crates/app` (`schisaciaccole`), `crates/server` (`schisaciaccole-server`, axum). `deploy/` holds the server Dockerfile and Compose (PostgreSQL 17). `README.org` is the local source for behavior, setup, packaging and deployment.
+
+## Project agent context
+
+Read [.agents/project.md](.agents/project.md) and [.agents/rules/common.md](.agents/rules/common.md) before project work. Load matching domain rules using the routing in project.md; [.agents/rules/model-routing.md](.agents/rules/model-routing.md) follows the model choices below. Domain and generic profiles are in `.codex/agents/`; their permissions inherit the session.
+
+The `.agents/rules/` files use `paths` frontmatter to describe applicability; Codex does not load them automatically. `.agents/memory/MEMORY.md` is a local Markdown index, not automatic runtime memory. Read pertinent notes when present and verify historical facts against current files.
+
+## Read only when the work needs it
+
+Do not open these for unrelated work. Read the matching domain rules before relevant work:
+
+- Server: [.agents/rules/api.md](.agents/rules/api.md)
+- Core: [.agents/rules/core.md](.agents/rules/core.md)
+- Desktop: [.agents/rules/desktop.md](.agents/rules/desktop.md)
+- Database: [.agents/rules/database.md](.agents/rules/database.md)
+- Deployment: [.agents/rules/deploy.md](.agents/rules/deploy.md)
+- CI, packaging and versioning: [.agents/rules/ci-versioning.md](.agents/rules/ci-versioning.md)
+- Rust (`*.rs`, `Cargo.toml`): [.agents/rules/rust.md](.agents/rules/rust.md). Its complete Rust coding guidelines apply when writing or reviewing Rust.
+- A change that alters a documented behavior, route, env var, config key, Compose service or volume, workflow, deploy step, or operational procedure: [.agents/rules/docs.md](.agents/rules/docs.md)
+
+## Launch
+
+Desktop app, local timer (no backend):
+
+```sh
+cargo run -p schisaciaccole
+```
+
+Release build: `cargo run -p schisaciaccole --release`. Verbosity: `RUST_LOG=info` (default `warn`). `RUST_LOG=debug` also logs the option refresh.
+
+App built against a backend. The URL is fixed at compile time. Unset means the local-only timer:
+
+```sh
+SCHISACIACCOLE_BACKEND_URL=https://schisaciaccole.example.com cargo run --release -p schisaciaccole
+```
+
+Server. Copy `.env.example` to `.env` and fill it. `TOKEN_ENC_KEY` is base64 of exactly 32 bytes. `JWT_SIGNING_KEY` is at least 32 characters. Generate both with `openssl rand -base64 32`. Google OAuth setup is in `README.org` under "Backend (local development)". Then:
+
+```sh
+docker compose -f deploy/docker-compose.yml up -d db
+cargo run -p schisaciaccole-server
+```
+
+The server listens on `BIND_ADDR` (default `0.0.0.0:8080`), loads `.env` from the repo root, and runs migrations at startup.
+
+## Test
+
+Server tests need PostgreSQL and a role that can create databases (`#[sqlx::test]`). Start `db` as above, then:
+
+```sh
+DATABASE_URL=postgres://schisaciaccole:schisaciaccole@localhost:5432/schisaciaccole cargo test --workspace
+```
+
+Every commit, `cargo fmt --all --check`, `cargo build --workspace`, the test command above, and `cargo clippy --workspace --all-targets -- -D warnings` pass.
+
+CI also passes `--locked` and `SQLX_OFFLINE=true`. After a query or migration change, with `DATABASE_URL` set:
+
+```sh
+sqlx migrate run --source crates/server/migrations
+cargo sqlx prepare --workspace
+```
+
+Commit `.sqlx/`. Install sqlx-cli once with `cargo install sqlx-cli --version 0.8.6 --no-default-features --features rustls,postgres --locked`.
+
 ## IMPORTANT: workflow — plan, delegate, validate
 
 **Planning** is done by the currently selected main Codex model.
@@ -30,67 +95,13 @@ a task as done before its output has been validated. The orchestrator commits af
 
 ## Git: atomic commits
 
-- One commit = one change that introduces a single feature or fix and leaves the repo working: at every
-  commit `cargo fmt --all --check`, `cargo build --workspace`, `cargo test --workspace` and
-  `cargo clippy --workspace --all-targets -- -D warnings` pass.
-- Never mix unrelated changes in one commit (refactor, feature, CI/packaging, docs, license, assets).
-  A refactor that a feature needs goes in its own commit, before the feature.
-- Plan the commits together with the tasks: each validated task ends in its own commit, made by the
-  orchestrator after validation. If a task turns out to touch unrelated areas, split it with
-  `git add -p` / path-scoped `git add` before committing.
-- Conventional Commits messages (`feat:`, `fix:`, `refactor:`, `ci:`, `docs:`, `chore:`, optional scope),
-  subject ≤ 72 characters, body saying what changes and why.
-- Commit messages, code, comments and branch names never reference plan milestones or task ids
-  (`M0`, `M1`, `T3`, …): describe the change itself.
+- One commit = one feature or fix, and the repo stays working. Every commit, the commands in [Test](#test) pass.
+- Never mix unrelated changes (refactor, feature, CI/packaging, docs, license, assets). A refactor a feature needs is its own commit, before the feature.
+- Plan commits with the tasks. Each validated task is its own commit, made by the orchestrator after validation. If a task touches unrelated areas, split with `git add -p` or path-scoped `git add` before committing.
+- Conventional Commits (`feat:`, `fix:`, `refactor:`, `ci:`, `docs:`, `chore:`, optional scope). Subject ≤ 72 characters. Body says what changes and why.
+- Commit messages, code, comments, and branch names never reference plan milestones or task ids (`M0`, `M1`, `T3`, …): describe the change itself.
 - Push only when the developer asks.
-
-## Rust coding guidelines
-
-**Style**
-- Simple structure, idiomatic Rust, plain constructs. Readable code beats clever code: no long combinator chains, macro tricks or generics where a loop, a `match` or a concrete type says it more clearly.
-- Extract a function when the code is reused, when it isolates a complex or non-obvious part, or when it needs its own unit test. Do not wrap trivial one-liners used once.
-- Macros only when a function or a generic cannot do the job; macro input should look like Rust.
-- `rustfmt` always. `snake_case` for fn/var, `CamelCase` for types, `SCREAMING_SNAKE_CASE` for const/static, with no prefixes such as `G_`.
-
-**Comments and docs**
-- A comment exists only when it helps a future developer working on the code: it explains a complex function or a non-obvious section. No comments that justify design choices or narrate why something was done — with too many comments, none gets read.
-- `///` on public items, `//!` for module docs.
-- Every function doc states its edge cases and the errors or conditions it does not handle.
-- A function returning `Result` always has a `# Errors` section listing when it returns `Err`. A function that can panic has a `# Panics` section.
-
-**Errors and panics**
-- Propagate with `?` and add context (`anyhow::Context` in binaries, a dedicated error enum variant in libraries/services) instead of panicking.
-- No `unwrap`, `expect`, `panic!`, `assert!` or indexing in non-test code. When a panic is truly acceptable (startup config), use `expect` with a clear message and document it under `# Panics`.
-- Check invariants by returning an error, not with `assert!`.
-
-**Tests**
-- Unit tests go in a `#[cfg(test)] mod tests` at the bottom of the file; `unwrap` and `expect` are fine there.
-- One behavior per test, a name that says it (`rejects_tenant_with_leading_dash`), setup / call / check readable top to bottom. A one-line comment above the test when the case it covers is not obvious from its name.
-- Cover the edge cases listed in the function's doc.
-
-**Naming**
-- No `get_` prefix on accessors: `fn name()`, not `fn get_name()`. Functions that do I/O use a verb that says so (`fetch_`, `load_`, `write_`).
-- Conversions: `as_` (cheap, borrowed), `to_` (expensive), `into_` (takes ownership). Iterators: `iter()` / `iter_mut()` / `into_iter()`.
-- Named lifetimes when there is more than one (`'src`, `'ctx`); a single `'a` is fine.
-
-**Data and strings**
-- Newtypes for domain values when they prevent mix-ups (`struct Tenant(String)`).
-- Slice patterns (`if let [first, .., last] = slice`) and `.get()` instead of indexing.
-- `Vec::with_capacity` / `String::with_capacity` when the size is known; arrays for fixed sizes.
-- `format!` instead of `+` concatenation; `bytes()` over `chars()` for ASCII-only input; `Cow<str>` when a borrowed value is only sometimes modified.
-- Shadowing for transformations: `let port = port.parse()?;`.
-
-**Concurrency and async**
-- Async is for I/O; CPU-bound work stays sync (`tokio::task::spawn_blocking` when it is heavy).
-- In async code use `tokio::sync` (`Mutex`, `RwLock`, `mpsc`); `std::sync` locks only for short sections. Never hold a lock guard across `.await`.
-- Atomics for flags and counters (`AtomicBool`, `AtomicUsize`), not a `Mutex`; choose the memory ordering on purpose.
-- When more than one lock is taken, take them always in the same order.
-- `std::sync::LazyLock` / `OnceLock` instead of `lazy_static!` / `once_cell`; `thiserror` for library/service errors and `anyhow` for binaries.
 
 ## Exploring the code
 
 The graphify skill is available and is how to explore this codebase: architecture, how files relate, and where a behavior lives. Follow that skill before searching or reading source to answer those questions. When `graphify-out/graph.json` exists, query the graph first, then verify what it cites against the current files. The graph can be stale; rebuild it only when the task is about the graph.
-
-## Project agent context
-
-Read [.agents/project.md](.agents/project.md) and [.agents/rules/common.md](.agents/rules/common.md) before project work. Load matching domain rules using the routing in project.md; [.agents/rules/model-routing.md](.agents/rules/model-routing.md) follows the model choices above. Domain and generic profiles are in `.codex/agents/`; their permissions inherit the session.
