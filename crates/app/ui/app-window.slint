@@ -1859,7 +1859,7 @@ export component MainWindow inherits Window {
     callback next-daily-speaker();
     callback adjust-daily-time(int);
 
-    changed page => { page-fade.restart(); if (page != Page.EditorPage) { scope.focus(); } }
+    changed page => { page-fade.restart(); scope.focus(); }
 
     if is-macos: MenuBar {
 	Menu {
@@ -1882,7 +1882,6 @@ export component MainWindow inherits Window {
     scope := FocusScope {
         KeyBinding {
             keys: @keys(Q);
-            enabled: root.page != Page.EditorPage;
             activated => { quit(); }
         }
 
@@ -1908,8 +1907,173 @@ export component MainWindow inherits Window {
             enabled: root.page != Page.EditorPage;
             activated => { help(); }
         }
-    }
 
+        page-body := Rectangle {
+            width: root.width;
+            height: root.height;
+            opacity: page-fade.value;
+            if page == Page.ManualPage || page == Page.MeetingsPage : VerticalLayout {
+                Navigation {
+                    meetings-page: root.page == Page.MeetingsPage;
+                    signed-in: root.signed-in;
+                    manual => { root.set-manual-page(); }
+                    meetings => {
+                        if (root.page == Page.MeetingsPage) {
+                            root.refresh-meetings();
+                        } else {
+                            root.set-meetings-page();
+                        }
+                    }
+                    logout => { root.logout(); }
+                }
+                if page == Page.ManualPage : ManualPage {
+                    current-time: root.current-time;
+                    options: root.options;
+                    selected-slot: root.selected-slot;
+                    notice: root.notice;
+                    select-slot(index) => { root.select-slot(index); }
+                    start-timer => { root.start-selected(); }
+                }
+                if page == Page.MeetingsPage : MeetingsPage {
+                    account-name: root.account-name;
+                    meetings: root.meetings;
+                    loading: root.meetings-loading;
+                    error: root.meetings-error;
+                    groups-reconnect: root.groups-reconnect;
+                    login-waiting: root.login-waiting;
+                    login-status: root.login-status;
+                    reconnect => { root.login(); }
+                    cancel-login => { root.cancel-login(); }
+                    select(index) => { root.select-meeting(index); }
+                    open-editor(index) => { root.open-editor(index); }
+                    set-daily(index, on) => { root.set-daily(index, on); }
+                    refresh => { root.refresh-meetings(); }
+                }
+            }
+            if page == Page.EditorPage : EditorPage {
+                width: root.width;
+                height: root.height;
+                title: root.editor-title;
+                time-range: root.editor-time-range;
+                duration: root.editor-duration;
+                attendees-warning: root.editor-attendees-warning;
+                groups-reconnect: root.editor-groups-reconnect;
+                login-waiting: root.login-waiting;
+                login-status: root.login-status;
+                reconnect => { root.login(); }
+                cancel-login => { root.cancel-login(); }
+                loading: root.editor-loading;
+                busy: root.editor-busy;
+                notice: root.editor-notice;
+                has-template: root.editor-has-template;
+                rows: root.editor-rows;
+                set-label(index, text) => { root.editor-set-label(index, text); }
+                set-included(index, included) => { root.editor-set-included(index, included); }
+                remove-row(index) => { root.editor-remove-row(index); }
+                add-row => { root.editor-add-row(); }
+                reset-participants => { root.editor-reset-participants(); }
+                save => { root.editor-save(); }
+                delete-template => { root.editor-delete(); }
+                start-meeting => { root.editor-start(); }
+                back => { root.editor-back(); }
+            }
+            if page == Page.LoadingPage : VerticalLayout {
+                padding: 32px;
+                alignment: center;
+                spacing: 16px;
+                HorizontalLayout {
+                    alignment: center;
+                    BrandMark { width: 64px; height: 64px; }
+                }
+                PageTitle { text: "Connessione…"; horizontal-alignment: center; }
+                PageSub { text: "Prepariamo i tuoi meeting."; horizontal-alignment: center; }
+            }
+            if page == Page.LoginPage : VerticalLayout {
+                padding: 48px;
+                spacing: 20px;
+                alignment: center;
+                HorizontalLayout {
+                    alignment: center;
+                    BrandMark { width: 64px; height: 64px; }
+                }
+                PageTitle { text: "Accedi con Google"; horizontal-alignment: center; }
+                PageSub {
+                    text: "I tuoi meeting di oggi, con un tempo per ogni voce.";
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+                HorizontalLayout {
+                    padding-top: 8px;
+                    alignment: center;
+                    spacing: 16px;
+                    if !root.login-waiting : PillButton {
+                        text: "Accedi con Google";
+                        clicked => { root.login(); }
+                    }
+                    if !root.login-waiting : PillButton {
+                        text: "Usa senza accesso";
+                        kind: PillKind.ghost;
+                        clicked => { root.skip-login(); }
+                    }
+                    if root.login-waiting : PillButton {
+                        text: "Annulla";
+                        kind: PillKind.ghost;
+                        clicked => { root.cancel-login(); }
+                    }
+                }
+                AppText {
+                    text: root.login-status;
+                    color: AppTheme.notice;
+                    font-size: 15px;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+            }
+            if page == Page.TimerPage : TimerPage {
+                width: root.width;
+                height: root.height;
+                timer-time: root.timer-time;
+                running-state: root.running-state;
+                timer-end: root.timer-end;
+                turn-available: root.turn-available;
+                turn-view: root.turn-view;
+                turn-names: root.turn-names;
+                turn-selected: root.turn-selected;
+                turn-minutes: root.turn-minutes;
+                turn-max-minutes: root.turn-max-minutes;
+                turn-speaker: root.turn-speaker;
+                turn-left: root.turn-left;
+                turn-can-add: root.turn-can-add;
+                show-turns => { root.show-turns(); }
+                hide-turns => { root.hide-turns(); }
+                select-turner(index) => { root.select-turner(index); }
+                adjust-turn-minutes(delta) => { root.adjust-turn-minutes(delta); }
+                start-turn => { root.start-turn(); }
+                adjust-turn-time(delta) => { root.adjust-turn-time(delta); }
+                end-turn => { root.end-turn(); }
+                daily-name: root.daily-name;
+                daily-short-name: root.daily-short-name;
+                daily-left: root.daily-left;
+                daily-paused: root.daily-paused;
+                daily-finished: root.daily-finished;
+                daily-can-add: root.daily-can-add;
+                daily-can-remove: root.daily-can-remove;
+                daily-remaining: root.daily-remaining;
+                daily-chips: root.daily-chips;
+                toggle-daily-pause => { root.toggle-daily-pause(); }
+                next-daily-speaker => { root.next-daily-speaker(); }
+                adjust-daily-time(delta) => { root.adjust-daily-time(delta); }
+                stop(stop-type) => { root.stop(stop-type); }
+                tick => { root.tick(); }
+            }
+            if page == Page.TimerFinished : FinishedPage {
+                width: root.width;
+                height: root.height;
+                seed: root.finish-seed;
+                home => { root.close-finished(); }
+            }
+        }
+    }
 
     compute-options-timer := Timer {
 	interval  : 3s;
@@ -1921,172 +2085,6 @@ export component MainWindow inherits Window {
 	}
     }
 
-
-    page-body := Rectangle {
-        width: root.width;
-        height: root.height;
-        opacity: page-fade.value;
-        if page == Page.ManualPage || page == Page.MeetingsPage : VerticalLayout {
-            Navigation {
-                meetings-page: root.page == Page.MeetingsPage;
-                signed-in: root.signed-in;
-                manual => { root.set-manual-page(); }
-                meetings => {
-                    if (root.page == Page.MeetingsPage) {
-                        root.refresh-meetings();
-                    } else {
-                        root.set-meetings-page();
-                    }
-                }
-                logout => { root.logout(); }
-            }
-            if page == Page.ManualPage : ManualPage {
-                current-time: root.current-time;
-                options: root.options;
-                selected-slot: root.selected-slot;
-                notice: root.notice;
-                select-slot(index) => { root.select-slot(index); }
-                start-timer => { root.start-selected(); }
-            }
-            if page == Page.MeetingsPage : MeetingsPage {
-                account-name: root.account-name;
-                meetings: root.meetings;
-                loading: root.meetings-loading;
-                error: root.meetings-error;
-                groups-reconnect: root.groups-reconnect;
-                login-waiting: root.login-waiting;
-                login-status: root.login-status;
-                reconnect => { root.login(); }
-                cancel-login => { root.cancel-login(); }
-                select(index) => { root.select-meeting(index); }
-                open-editor(index) => { root.open-editor(index); }
-                set-daily(index, on) => { root.set-daily(index, on); }
-                refresh => { root.refresh-meetings(); }
-            }
-        }
-        if page == Page.EditorPage : EditorPage {
-            width: root.width;
-            height: root.height;
-            title: root.editor-title;
-            time-range: root.editor-time-range;
-            duration: root.editor-duration;
-            attendees-warning: root.editor-attendees-warning;
-            groups-reconnect: root.editor-groups-reconnect;
-            login-waiting: root.login-waiting;
-            login-status: root.login-status;
-            reconnect => { root.login(); }
-            cancel-login => { root.cancel-login(); }
-            loading: root.editor-loading;
-            busy: root.editor-busy;
-            notice: root.editor-notice;
-            has-template: root.editor-has-template;
-            rows: root.editor-rows;
-            set-label(index, text) => { root.editor-set-label(index, text); }
-            set-included(index, included) => { root.editor-set-included(index, included); }
-            remove-row(index) => { root.editor-remove-row(index); }
-            add-row => { root.editor-add-row(); }
-            reset-participants => { root.editor-reset-participants(); }
-            save => { root.editor-save(); }
-            delete-template => { root.editor-delete(); }
-            start-meeting => { root.editor-start(); }
-            back => { root.editor-back(); }
-        }
-        if page == Page.LoadingPage : VerticalLayout {
-            padding: 32px;
-            alignment: center;
-            spacing: 16px;
-            HorizontalLayout {
-                alignment: center;
-                BrandMark { width: 64px; height: 64px; }
-            }
-            PageTitle { text: "Connessione…"; horizontal-alignment: center; }
-            PageSub { text: "Prepariamo i tuoi meeting."; horizontal-alignment: center; }
-        }
-        if page == Page.LoginPage : VerticalLayout {
-            padding: 48px;
-            spacing: 20px;
-            alignment: center;
-            HorizontalLayout {
-                alignment: center;
-                BrandMark { width: 64px; height: 64px; }
-            }
-            PageTitle { text: "Accedi con Google"; horizontal-alignment: center; }
-            PageSub {
-                text: "I tuoi meeting di oggi, con un tempo per ogni voce.";
-                horizontal-alignment: center;
-                wrap: word-wrap;
-            }
-            HorizontalLayout {
-                padding-top: 8px;
-                alignment: center;
-                spacing: 16px;
-                if !root.login-waiting : PillButton {
-                    text: "Accedi con Google";
-                    clicked => { root.login(); }
-                }
-                if !root.login-waiting : PillButton {
-                    text: "Usa senza accesso";
-                    kind: PillKind.ghost;
-                    clicked => { root.skip-login(); }
-                }
-                if root.login-waiting : PillButton {
-                    text: "Annulla";
-                    kind: PillKind.ghost;
-                    clicked => { root.cancel-login(); }
-                }
-            }
-            AppText {
-                text: root.login-status;
-                color: AppTheme.notice;
-                font-size: 15px;
-                horizontal-alignment: center;
-                wrap: word-wrap;
-            }
-        }
-        if page == Page.TimerPage : TimerPage {
-            width: root.width;
-            height: root.height;
-            timer-time: root.timer-time;
-            running-state: root.running-state;
-            timer-end: root.timer-end;
-            turn-available: root.turn-available;
-            turn-view: root.turn-view;
-            turn-names: root.turn-names;
-            turn-selected: root.turn-selected;
-            turn-minutes: root.turn-minutes;
-            turn-max-minutes: root.turn-max-minutes;
-            turn-speaker: root.turn-speaker;
-            turn-left: root.turn-left;
-            turn-can-add: root.turn-can-add;
-            show-turns => { root.show-turns(); }
-            hide-turns => { root.hide-turns(); }
-            select-turner(index) => { root.select-turner(index); }
-            adjust-turn-minutes(delta) => { root.adjust-turn-minutes(delta); }
-            start-turn => { root.start-turn(); }
-            adjust-turn-time(delta) => { root.adjust-turn-time(delta); }
-            end-turn => { root.end-turn(); }
-            daily-name: root.daily-name;
-            daily-short-name: root.daily-short-name;
-            daily-left: root.daily-left;
-            daily-paused: root.daily-paused;
-            daily-finished: root.daily-finished;
-            daily-can-add: root.daily-can-add;
-            daily-can-remove: root.daily-can-remove;
-            daily-remaining: root.daily-remaining;
-            daily-chips: root.daily-chips;
-            toggle-daily-pause => { root.toggle-daily-pause(); }
-            next-daily-speaker => { root.next-daily-speaker(); }
-            adjust-daily-time(delta) => { root.adjust-daily-time(delta); }
-            stop(stop-type) => { root.stop(stop-type); }
-            tick => { root.tick(); }
-        }
-        if page == Page.TimerFinished : FinishedPage {
-            width: root.width;
-            height: root.height;
-            seed: root.finish-seed;
-            home => { root.close-finished(); }
-        }
-    }
     if on-top : Rectangle {
         width: 8px;
         height: 8px;
