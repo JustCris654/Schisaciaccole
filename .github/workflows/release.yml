@@ -380,6 +380,7 @@ jobs:
           if-no-files-found: error
 
   server-image:
+    if: vars.BUILD_SERVER_IMAGE == 'true'
     needs: version
     runs-on: ubuntu-latest
     permissions:
