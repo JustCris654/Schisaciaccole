@@ -1,6 +1,6 @@
 # Schisaciaccole: schermate del frontend e interazioni con il backend
 
-Questo documento descrive tutte le schermate dell'app desktop (Slint, crate `schisaciaccole`) e come ognuna dialoga con il server (axum, crate `schisaciaccole-server`) per il login, la lettura dei meeting, il piano degli slot e il salvataggio dei template.
+Questo documento descrive tutte le schermate dell'app desktop (Slint, crate `schisaciaccole`) e come ognuna dialoga con il server (axum, crate `schisaciaccole-server`) per il login, la lettura dei meeting e il salvataggio delle preferenze dei meeting.
 
 Indice:
 
@@ -56,7 +56,7 @@ flowchart TD
     EDITOR -- "Avvia" --> TIMER
 
     MEETINGS -- "GET /api/v1/meetings<br/>→ sessione persa" --> LOGIN
-    EDITOR -- "PUT/DELETE template<br/>→ sessione persa" --> LOGIN
+    EDITOR -- "PUT/DELETE preferenza<br/>→ sessione persa" --> LOGIN
 
     TIMER -- "Stop (o timer scaduto<br/>durante una sospensione)" --> BACK{"Da dove era<br/>partito il timer?"}
     TIMER -- "fine naturale + suono" --> FINISHED
@@ -90,7 +90,7 @@ flowchart LR
         direction TB
         UI["UI thread<br/>MainWindow Slint + AppState"]
         SES["Session<br/>(lancia i worker)"]
-        WK["Thread worker<br/>session-check, login, meetings,<br/>plan, template-save,<br/>template-delete, logout"]
+        WK["Thread worker<br/>session-check, login, meetings,<br/>preference-save, preference-delete,<br/>logout"]
         BC["BackendClient<br/>reqwest bloccante<br/>access token in memoria"]
         KC[("Keychain del sistema<br/>refresh token")]
         LB["Listener loopback<br/>127.0.0.1:porta/callback"]
@@ -108,7 +108,7 @@ flowchart LR
         direction TB
         RL["Rate limit per IP<br/>solo /auth/*"]
         AUTH["/auth/login, /auth/google/callback,<br/>/auth/token, /auth/refresh, /auth/logout"]
-        API["/api/v1/me, /api/v1/meetings,<br/>/api/v1/meetings/{event_id}/plan,<br/>/api/v1/templates"]
+        API["/api/v1/me, /api/v1/meetings,<br/>/api/v1/preferences,<br/>/api/v1/preferences/{id}"]
         AU["Estrattore AuthUser<br/>JWT + sessione attiva in DB"]
         LS["LoginStore in memoria<br/>login pendenti + codici monouso"]
         GTC["Cache access token Google<br/>per utente"]
@@ -118,7 +118,7 @@ flowchart LR
         API --- GTC
     end
 
-    PG[("PostgreSQL<br/>users, google_credentials,<br/>app_sessions, slot_templates,<br/>slot_template_entries")]
+    PG[("PostgreSQL<br/>users, google_credentials,<br/>app_sessions, meeting_preferences,<br/>meeting_preference_people")]
 
     subgraph GOOGLE["Google"]
         GO["OAuth / OpenID Connect"]
@@ -264,7 +264,7 @@ Browser
 
 - Selezionare un orario, poi **Avvia timer**: va al **Countdown** (origine manuale, senza turni di parola). Se l'orario scelto è già passato, le opzioni si aggiornano e il timer non parte.
 - Tab **I miei meeting** (solo con account): va su **I meeting di oggi**.
-- Menu **⋯ → Logout** (solo con account): vedi [4.7](#47-logout).
+- Menu **⋯ → Logout** (solo con account): vedi [4.6](#46-logout).
 
 **Backend:** nessuna chiamata.
 
@@ -284,15 +284,15 @@ Browser
 
 **Quando appare:** dopo il login o il controllo della sessione, dalla tab **I miei meeting**, o al ritorno da Editor, Countdown e Meeting terminato con un account.
 
-**Backend:** `GET /api/v1/meetings?from=<adesso>&to=<23:59:59.999 di oggi>` ([4.3](#43-lettura-dei-meeting)). Parte quando la pagina viene mostrata, ogni 60 secondi mentre resta aperta, cliccando di nuovo sulla tab già attiva, e dopo ogni salvataggio o eliminazione di un template.
+**Backend:** `GET /api/v1/meetings?from=<adesso>&to=<23:59:59.999 di oggi>` ([4.3](#43-lettura-dei-meeting)). Parte quando la pagina viene mostrata, ogni 60 secondi mentre resta aperta, e cliccando di nuovo sulla tab già attiva. Salvare o eliminare una preferenza dall'Editor non la rilancia: la lista aggiorna la preferenza in locale.
 
-**Cosa si vede:** sottotitolo "Google Calendar · " seguito dal nome dell'account, poi una riga per meeting non ancora finito (prima quello in corso): orario, titolo, "In corso" o "Tra N min", numero di partecipanti (chi ha rifiutato non è contato). Se la lista partecipanti è incompleta (Calendar ha omesso invitati o un gruppo Google non è stato espanso) la riga lo segnala. Se serve un nuovo consenso Google per leggere i gruppi compare il box "Autorizza Google Groups per leggere i membri. Calendar resta disponibile." con **Ricollega Google** (durante l'attesa del browser diventa **Annulla accesso**). Senza meeting: "Nessun altro meeting oggi.".
+**Cosa si vede:** sottotitolo "Google Calendar · " seguito dal nome dell'account, poi una riga per meeting non ancora finito (prima quello in corso): orario, titolo, "In corso" o "Tra N min", numero di partecipanti: le persone che **Avvia** userebbe (chi ha rifiutato o è disattivato nell'Editor non è contato; le persone aggiunte a mano attive sì). Se la lista partecipanti è incompleta (Calendar ha omesso invitati o un gruppo Google non è stato espanso) la riga lo segnala. Se serve un nuovo consenso Google per leggere i gruppi compare il box "Autorizza Google Groups per leggere i membri. Calendar resta disponibile." con **Ricollega Google** (durante l'attesa del browser diventa **Annulla accesso**). Senza meeting: "Nessun altro meeting oggi.".
 
 **Azioni:**
 
 - **Interruttore Daily**: acceso in automatico (badge AUTO) se il titolo contiene `daily`, `standup`, `stand-up` o `scrum`. La scelta resta in memoria finché l'app è aperta e non va al backend.
-- **Avvia**: va al **Countdown** fino alla fine del meeting. Con Daily acceso e almeno un partecipante parte la modalità Daily (ordine casuale); altrimenti countdown semplice con turni di parola offerti ai partecipanti del calendario. Il template salvato non viene usato da questo pulsante, solo dall'Editor.
-- **Editor**: va all'**Editor** del meeting.
+- **Avvia**: va al **Countdown** fino alla fine del meeting. Con Daily acceso e almeno una persona parte la modalità Daily (ordine casuale); altrimenti countdown semplice con turni di parola offerti alle stesse persone. Le persone sono quelle della bozza dell'Editor, se il meeting ne ha una, altrimenti gli invitati del calendario più le persone e le rinomine della preferenza salvata.
+- **Editor**: apre subito l'**Editor** del meeting, senza chiamate di rete.
 - **Ricollega Google**: rifà il login OAuth restando sulla pagina; al termine ricarica i meeting.
 - Tab **Manuale**, menu **⋯ → Logout**.
 
@@ -318,13 +318,14 @@ Browser
 │ │     anna@azienda.it            │ │
 │ │ [ ] Bruno Verdi                │ │
 │ │     bruno@azienda.it           │ │
+│ │ [x] Marco                      │ │
 │ │     Ospite esterno          x  │ │
 │ └────────────────────────────────┘ │
 │            + Aggiungi partecipante │
 │ Preferenza salvata                 │
 │ <-  Ripristina    Elimina  [Salva] │
 │     partecipanti  preferenza       │
-│                            [Avvia] │
+│                      [Avvia Daily] │
 └────────────────────────────────────┘
 </pre>
 </td>
@@ -332,25 +333,33 @@ Browser
 
 **Quando appare:** pulsante **Editor** su una riga di I meeting di oggi.
 
-**Backend all'apertura:** `GET /api/v1/meetings/{event_id}/plan` ([4.4](#44-piano-degli-slot-allapertura-delleditor)). Fino alla risposta si vede "Caricamento…" e le modifiche sono ignorate.
+**All'apertura:** nessuna chiamata e nessun "Caricamento…". Tutti i dati sono già nella lista ([4.3](#43-lettura-dei-meeting)): ogni meeting porta la sua `preference`. Le righe sono:
 
-- Risposta con `source: template`: le righe vengono dal template salvato per quel titolo (incluse se peso > 0) e compare **Elimina preferenza**.
-- Risposta con `source: equal`: righe uguali per tutti i partecipanti.
-- Qualsiasi errore: righe dai partecipanti del calendario e avviso "Preferenza non caricata: partecipanti del calendario". Un errore qui non chiude mai la sessione.
-- Il piano porta anche i partecipanti appena riletti da Calendar, che aggiornano la riga in I meeting di oggi.
+- la bozza dell'evento, se esiste già in memoria;
+- altrimenti gli invitati non rifiutati di Calendar (tutti attivi, con il nome rinominato se la preferenza ne ha uno per quell'email), poi le persone aggiunte della preferenza (tutte attive), nell'ordine salvato.
 
-**Azioni locali (nessuna chiamata):** includere o escludere un invitato (casella), rinominare una riga, **+ Aggiungi partecipante** (riga manuale, massimo 99 righe), **×** per rimuovere una riga manuale, **Ripristina partecipanti** (torna agli invitati del calendario).
+**Bozza:** ogni modifica aggiorna subito la bozza di quell'evento, che resta in memoria finché l'app è aperta: vale sia per **Avvia** dall'editor sia per **Avvia** dalla lista, e sopravvive a **←**. Viene tolta quando l'evento non compare più nella lista, al logout e alla perdita della sessione. Segue Calendar: a ogni ricarica della lista viene unita agli invitati appena letti (i nuovi entrano attivi, chi non è più invitato esce, le scelte dell'utente restano). Se la bozza era completa e la lista appena letta è incompleta (gruppo non espanso, invitati omessi, consenso mancante) non viene unita, così una espansione fallita per un momento non cancella le disattivazioni dei membri.
+
+**Azioni locali (nessuna chiamata):**
+
+- casella su qualsiasi riga, invitata o aggiunta: esclusione temporanea, mai salvata;
+- rinominare una riga;
+- **+ Aggiungi partecipante**: riga aggiunta a mano, massimo 99 righe;
+- **×** per rimuovere una riga aggiunta a mano (gli invitati non si tolgono, si disattivano);
+- **Ripristina partecipanti**: butta la bozza e rifà le righe da Calendar più preferenza salvata.
 
 **Azioni con il backend:**
 
-- **Salva preferenza**: `PUT /api/v1/templates` ([4.5](#45-salvataggio-di-un-template)). Durante l'invio: "Salvataggio…", pulsanti disattivati. Poi "Preferenza salvata" e ricarica dei meeting, oppure "Preferenza non valida" (400) o "Salvataggio non riuscito".
-- **Elimina preferenza**: `DELETE /api/v1/templates/{id}` ([4.6](#46-eliminazione-di-un-template)). "Eliminazione…", poi "Preferenza eliminata" (anche se il template era già sparito, 404) con le righe riportate ai partecipanti del calendario, oppure "Eliminazione non riuscita".
+- **Salva preferenza**: `PUT /api/v1/preferences` ([4.4](#44-salvataggio-di-una-preferenza)). Salva solo le persone aggiunte (attive o no, con un nome) e le rinomine degli invitati; le caselle non vengono salvate. Durante l'invio: "Salvataggio…", pulsanti disattivati. Poi "Preferenza salvata", oppure "Preferenza non valida" (400) o "Salvataggio non riuscito". La bozza resta com'è. Senza niente da salvare e con una preferenza esistente la elimina come **Elimina preferenza**; senza preferenza mostra "Niente da salvare" e non chiama il server.
+- **Elimina preferenza** (visibile solo se la preferenza esiste): `DELETE /api/v1/preferences/{id}` ([4.5](#45-eliminazione-di-una-preferenza)). "Eliminazione…", poi "Preferenza eliminata" (anche se era già sparita, 404) con le righe riportate ai soli invitati di Calendar, tutti attivi, oppure "Eliminazione non riuscita".
 - **Ricollega Google**: come in I meeting di oggi.
+
+Dopo un salvataggio o un'eliminazione riuscita la lista non viene riletta: l'app aggiorna la preferenza di tutti i meeting della lista con lo stesso titolo normalizzato.
 
 **Navigazione:**
 
-- **Avvia**: va al **Countdown** fino alla fine del meeting, con i turni di parola offerti alle righe incluse con un nome. Mai in modalità Daily. Se il meeting è già finito resta sull'editor con "Il meeting è già terminato".
-- **←**: torna a **I meeting di oggi**; le risposte ancora in viaggio per l'editor vengono ignorate.
+- **Avvia**: va al **Countdown** fino alla fine del meeting. Il pulsante si chiama **Avvia Daily** quando l'interruttore Daily della riga è acceso (l'interruttore compare solo nella lista). Con Daily acceso e almeno una persona attiva con un nome parte la Daily in ordine casuale; altrimenti countdown con turni di parola offerti alle stesse persone. Se il meeting è già finito resta sull'editor con "Il meeting è già terminato".
+- **←**: torna a **I meeting di oggi**; la bozza resta, le risposte ancora in viaggio per l'editor vengono ignorate.
 - Sessione persa durante salvataggio o eliminazione: **Login**.
 
 </td>
@@ -580,7 +589,7 @@ sequenceDiagram
     participant GC as Google Calendar
     participant GI as Cloud Identity Groups
 
-    UI->>W: refresh (apertura, ogni 60 s, tab, dopo salvataggio template)
+    UI->>W: refresh (apertura, ogni 60 s, tab, Ricollega Google)
     W->>W: access token valido? altrimenti POST /auth/refresh
     W->>S: GET /api/v1/meetings?from=adesso&to=fine giornata (Bearer)
     S->>S: AuthUser: verifica JWT + sessione attiva
@@ -595,64 +604,49 @@ sequenceDiagram
         S->>GC: nuovo token, un solo nuovo tentativo
     end
     S->>S: scarta eventi annullati, giornata intera, rifiutati
-    S->>GI: espande gli invitati che potrebbero essere gruppi (budget 5 s)
-    S->>DB: chiavi dei template dell'utente (titolo normalizzato)
-    S-->>W: 200 [ Meeting { event_id, title, start, end, attendees, participant_resolution, has_template, … } ]
+    S->>S: verifica consenso gruppi e risultati recenti dell'utente (TTL 60 s)
+    opt invitati senza risultato valido in cache
+        S->>GI: espande gli invitati che potrebbero essere gruppi (budget 5 s)
+    end
+    S->>DB: preferenze dell'utente per i titoli normalizzati dei meeting letti
+    S-->>W: 200 [ Meeting { event_id, title, start, end, attendees, participant_resolution, preference, … } ]
     W-->>UI: MeetingsLoaded → righe della lista
 ```
 
 Note:
 
 - Se l'utente non ha dato il consenso per i gruppi, i meeting arrivano lo stesso, con `participant_resolution.reauthorization_required = true`: l'app mostra l'avviso di lista incompleta e **Ricollega Google**.
-- Il campo `has_template` arriva all'app, ma oggi la riga della lista non lo mostra. L'informazione sul template si vede solo aprendo l'Editor.
+- Il campo `preference` (`MeetingPreference { id, meeting_title, people }`, `null` se non c'è) porta le rinomine degli invitati e le persone aggiunte a mano, senza pesi. Il server legge solo le preferenze dei titoli presenti nella risposta, sempre filtrate per utente. L'app usa `preference` per le righe dell'Editor, per **Avvia** e per il conteggio dei partecipanti della riga.
+- La lista è l'unica fonte dei partecipanti: l'Editor non rilegge l'evento e non risolve di nuovo i gruppi, quindi aprirlo non costa chiamate a Calendar né a Cloud Identity Groups.
 
-### 4.4 Piano degli slot all'apertura dell'editor
+La lista usa sul server una cache dei soli risultati completi dell'espansione dei gruppi,
+compresi gli indirizzi confermati come invitati diretti: TTL 60 secondi, massimo
+128 indirizzi per utente, 1.024 totali e 4 MiB di memoria conteggiata. Gli errori e
+le espansioni parziali vengono ritentati alla richiesta successiva. Ogni richiesta
+verifica i permessi correnti; credenziali diverse o un ricollegamento impediscono
+il riuso dei vecchi risultati. L'evento Calendar e le preferenze vengono comunque
+riletti: gli inviti e i metadati diretti aggiornati si applicano subito, mentre una
+modifica ai membri di un gruppo può comparire entro 60 secondi.
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant UI as UI (EditorPage)
-    participant W as Worker plan
-    participant S as Server
-    participant GC as Google Calendar
-    participant DB as PostgreSQL
-
-    UI->>W: open_editor(riga) → event_id
-    W->>S: GET /api/v1/meetings/{event_id}/plan
-    S->>S: valida event_id (lettere, cifre, _ e -, max 1024)
-    S->>GC: legge l'evento (stesso giro di token del punto 4.3)
-    S->>S: espande i gruppi del solo evento
-    S->>DB: template per il titolo normalizzato?
-    alt template trovato
-        S-->>W: 200 SlotPlan { source: template, template_id, entries, attendees }
-    else nessun template
-        S-->>W: 200 SlotPlan { source: equal, entries con peso 1 }
-    else evento sparito, annullato, rifiutato
-        S-->>W: 404 not_found
-    end
-    W-->>UI: PlanLoaded → righe dell'editor (con un errore: partecipanti del calendario + avviso)
-```
-
-### 4.5 Salvataggio di un template
+### 4.4 Salvataggio di una preferenza
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant UI as UI (EditorPage)
-    participant W as Worker template-save
+    participant W as Worker preference-save
     participant S as Server
     participant DB as PostgreSQL
 
     UI->>UI: Salva preferenza → "Salvataggio…", pulsanti disattivati
-    UI->>W: PutTemplateRequest dalle righe
-    Note over UI,W: righe incluse con peso uguale, escluse con peso 0,<br/>righe manuali senza nome scartate
-    W->>S: PUT /api/v1/templates { meeting_title, entries[ kind, email, label, weight_secs ] }
-    S->>S: valida (titolo, 1-100 voci, etichette, email solo per gli invitati,<br/>free_time al massimo una e in fondo, somma pesi > 0)
+    UI->>W: PutPreferenceRequest dalla bozza
+    Note over UI,W: solo le persone aggiunte (attive o no, con un nome)<br/>e le rinomine degli invitati; le caselle non si salvano
+    W->>S: PUT /api/v1/preferences { meeting_title, people[ kind, email, label ] }
+    S->>S: valida (titolo, 1-100 persone, etichette 1-200 caratteri,<br/>email solo per gli invitati, stessa email una sola volta)
     alt valido
         S->>DB: upsert per (utente, titolo normalizzato), stesso id se esisteva
-        S-->>W: 200 Template { id, meeting_title, entries }
-        W-->>UI: "Preferenza salvata", ricorda template_id
-        UI->>W: ricarica i meeting (4.3)
+        S-->>W: 200 MeetingPreference { id, meeting_title, people }
+        W-->>UI: "Preferenza salvata", aggiorna in locale i meeting con lo stesso titolo
     else non valido
         S-->>W: 400 invalid_request
         W-->>UI: "Preferenza non valida"
@@ -662,32 +656,32 @@ sequenceDiagram
     end
 ```
 
-Il template è legato al titolo normalizzato del meeting (stesse lettere senza distinguere maiuscole e spazi), non al singolo evento: vale per tutte le occorrenze di un meeting ricorrente e per meeting diversi con lo stesso titolo.
+La preferenza è legata al titolo normalizzato del meeting (stesse lettere senza distinguere maiuscole e spazi), non al singolo evento: vale per tutte le occorrenze di un meeting ricorrente e per meeting diversi con lo stesso titolo. Non c'è nessuna ricarica della lista: la risposta del server basta. Se l'utente salva senza persone aggiunte né rinomine e una preferenza esiste, l'app esegue invece l'eliminazione ([4.5](#45-eliminazione-di-una-preferenza)).
 
-### 4.6 Eliminazione di un template
+### 4.5 Eliminazione di una preferenza
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant UI as UI (EditorPage)
-    participant W as Worker template-delete
+    participant W as Worker preference-delete
     participant S as Server
     participant DB as PostgreSQL
 
     UI->>UI: Elimina preferenza → "Eliminazione…"
-    UI->>W: template_id
-    W->>S: DELETE /api/v1/templates/{id}
-    S->>DB: cancella solo se il template è dell'utente
-    alt cancellato
+    UI->>W: id della preferenza
+    W->>S: DELETE /api/v1/preferences/{id}
+    S->>DB: cancella solo se la preferenza è dell'utente
+    alt cancellata
         S-->>W: 204
-    else non trovato, non UUID o di un altro utente
+    else non trovata, non UUID o di un altro utente
         S-->>W: 404 not_found
     end
-    W-->>UI: in entrambi i casi "Preferenza eliminata", righe = partecipanti del calendario
-    UI->>W: ricarica i meeting (4.3)
+    W-->>UI: in entrambi i casi "Preferenza eliminata", righe = invitati di Calendar (tutti attivi)
+    UI->>UI: toglie la preferenza dai meeting con lo stesso titolo (nessuna ricarica)
 ```
 
-### 4.7 Logout
+### 4.6 Logout
 
 ```mermaid
 sequenceDiagram
@@ -709,7 +703,7 @@ sequenceDiagram
 
 La revoca ha effetto subito: ogni chiamata `/api/v1/*` verifica nel database che la sessione del JWT sia ancora attiva.
 
-### 4.8 Rinnovo dell'access token (per ogni chiamata `/api/v1/*`)
+### 4.7 Rinnovo dell'access token (per ogni chiamata `/api/v1/*`)
 
 ```mermaid
 flowchart TD
@@ -740,10 +734,9 @@ flowchart TD
 | `POST /auth/refresh` | refresh token nel corpo, rate limit per IP | qualsiasi worker, prima di una chiamata API | `{ refresh_token }` | `200 TokenResponse` (token ruotato) |
 | `POST /auth/logout` | refresh token nel corpo, rate limit per IP | worker logout | `{ refresh_token }` | `204` |
 | `GET /api/v1/me` | Bearer | LoadingPage, fine login | | `200 { email, display_name }` |
-| `GET /api/v1/meetings` | Bearer | MeetingsPage | `from`, `to` RFC 3339, max 48 h | `200 [Meeting]` |
-| `GET /api/v1/meetings/{event_id}/plan` | Bearer | apertura EditorPage | `event_id` nel percorso | `200 SlotPlan` |
-| `PUT /api/v1/templates` | Bearer | EditorPage, Salva preferenza | `{ meeting_title, entries }` | `200 Template` |
-| `DELETE /api/v1/templates/{id}` | Bearer | EditorPage, Elimina preferenza | `id` nel percorso | `204` |
+| `GET /api/v1/meetings` | Bearer | MeetingsPage | `from`, `to` RFC 3339, max 48 h | `200 [Meeting]` (ognuno con `preference`) |
+| `PUT /api/v1/preferences` | Bearer | EditorPage, Salva preferenza | `{ meeting_title, people }` | `200 MeetingPreference` |
+| `DELETE /api/v1/preferences/{id}` | Bearer | EditorPage, Elimina preferenza | `id` nel percorso | `204`, o `404 not_found` |
 
 Rate limit di `/auth/*`: raffica di 10 richieste, poi una ogni 2 secondi per IP; oltre risponde `429` con `Retry-After`. Ogni richiesta ha un timeout di 30 secondi (`408`). Le risposte con token o dati utente hanno `Cache-Control: no-store`. Gli errori hanno il corpo `{ code, message }`, con `code` tra `unauthorized`, `google_reauth_required`, `invalid_request`, `invalid_code`, `forbidden_domain`, `not_found`, `too_many_requests`, `internal`.
 
@@ -751,14 +744,14 @@ Rate limit di `/auth/*`: raffica di 10 richieste, poi una ogni 2 secondi per IP;
 
 ## 6. Dagli errori del backend a quello che vede l'utente
 
-| Errore | Avvio (LoadingPage) | I meeting di oggi | Editor: piano | Editor: salva / elimina |
-| --- | --- | --- | --- | --- |
-| Nessun refresh token, o refresh `401 unauthorized` | Login | Login | avviso, partecipanti del calendario | Login |
-| `401 google_reauth_required` | Login con "Concedi l'accesso al calendario e riprova." | Login con lo stesso messaggio | avviso, partecipanti del calendario | Login con lo stesso messaggio |
-| `400 invalid_request` | Manuale, modalità locale | "Impossibile caricare i meeting." | avviso, partecipanti del calendario | "Preferenza non valida" (salva) / "Eliminazione non riuscita" (elimina) |
-| `404 not_found` | | | avviso, partecipanti del calendario | elimina: trattato come successo |
-| `429` | Manuale, modalità locale | "Troppi tentativi, riprova tra poco." | avviso, partecipanti del calendario | "Salvataggio non riuscito" / "Eliminazione non riuscita" |
-| Server irraggiungibile | Manuale, modalità locale | "Server non raggiungibile." | avviso, partecipanti del calendario | "Salvataggio non riuscito" / "Eliminazione non riuscita" |
-| `5xx` o risposta illeggibile | Manuale, modalità locale | "Impossibile caricare i meeting." | avviso, partecipanti del calendario | "Salvataggio non riuscito" / "Eliminazione non riuscita" |
+| Errore | Avvio (LoadingPage) | I meeting di oggi | Editor: salva / elimina |
+| --- | --- | --- | --- |
+| Nessun refresh token, o refresh `401 unauthorized` | Login | Login | Login |
+| `401 google_reauth_required` | Login con "Concedi l'accesso al calendario e riprova." | Login con lo stesso messaggio | Login con lo stesso messaggio |
+| `400 invalid_request` | Manuale, modalità locale | "Impossibile caricare i meeting." | "Preferenza non valida" (salva) / "Eliminazione non riuscita" (elimina) |
+| `404 not_found` | | | elimina: trattato come successo |
+| `429` | Manuale, modalità locale | "Troppi tentativi, riprova tra poco." | "Salvataggio non riuscito" / "Eliminazione non riuscita" |
+| Server irraggiungibile | Manuale, modalità locale | "Server non raggiungibile." | "Salvataggio non riuscito" / "Eliminazione non riuscita" |
+| `5xx` o risposta illeggibile | Manuale, modalità locale | "Impossibile caricare i meeting." | "Salvataggio non riuscito" / "Eliminazione non riuscita" |
 
 "Login" vuol dire che la sessione viene chiusa: l'eventuale countdown si ferma, account e meeting vengono dimenticati e si va alla LoginPage. Sulla lista dei meeting, se una lista era già caricata, il messaggio d'errore compare sopra senza cancellarla.

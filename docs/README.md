@@ -12,7 +12,7 @@ Quando codice e documentazione divergono, vale il codice.
 ## Guida
 
 - [Panoramica](./guide/panoramica.md): cosa è Schisaciaccole, le due modalità di funzionamento, struttura del repo
-- [Schermate e flusso frontend-backend](./guide/flusso-frontend-backend.md): tutte le schermate dell'app desktop e le chiamate al server per login, meeting, piano degli slot e template ([versione HTML](./flusso-frontend-backend.html))
+- [Schermate e flusso frontend-backend](./guide/flusso-frontend-backend.md): tutte le schermate dell'app desktop e le chiamate al server per login, meeting e preferenze dei meeting ([versione HTML](./flusso-frontend-backend.html))
 
 ## Design
 

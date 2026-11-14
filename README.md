@@ -10,9 +10,11 @@ that moment.
 
 In today's meeting list, **Avvia** starts the meeting timer directly. The
 **Editor** button to its left opens **Partecipanti di questo meeting**, where
-you can exclude invited attendees, add people by hand and save the list as a
-preference before starting the meeting. A meeting started from there is never
-Daily: its speaking turns list the chosen participants.
+you can temporarily exclude attendees, rename them, add people by hand and save
+the renames and added people as a per-title preference. The editor opens locally
+and keeps a draft per meeting while the app is open. **Avvia** (from the list or
+the editor) starts the Daily when the row's Daily switch is on, otherwise a
+countdown whose speaking turns list the chosen participants.
 
 ## Screenshots
 
@@ -40,8 +42,8 @@ The repo is a Cargo workspace:
 - `crates/app` — the `schisaciaccole` binary: Slint desktop app (`ui/`), `build.rs`,
   assets (`assets/`: icons, sound, font) and the bundle metadata.
 - `crates/server` — the `schisaciaccole-server` binary: axum backend with Google
-  login, app sessions, meetings from Google Calendar and slot templates and plans
-  (not used by the desktop app).
+  login, app sessions, meetings from Google Calendar and per-title meeting
+  preferences (attendee renames and people added by hand).
 - `deploy/` — `Dockerfile` for the server and `docker-compose.yml` (server and
   PostgreSQL 17).
 - `assets/` — screenshots used by this README.
