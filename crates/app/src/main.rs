@@ -719,6 +719,23 @@ fn configure_visual_preferences(
     Ok(help_windows)
 }
 
+/// Builds the settings list: the distribution entry first, then the catalog in order.
+/// `resolved` is the theme the distribution entry currently selects.
+fn theme_options(resolved: theme_catalog::ThemeId) -> slint::ModelRc<ui::ThemeOption> {
+    let mut options = Vec::with_capacity(theme_catalog::THEME_CATALOG.len() + 1);
+    options.push(ui::ThemeOption {
+        name: "Predefinito della distribuzione".into(),
+        detail: format!("Ora: {}", resolved.name()).into(),
+    });
+    for entry in &theme_catalog::THEME_CATALOG {
+        options.push(ui::ThemeOption {
+            name: entry.name.into(),
+            detail: entry.detail.into(),
+        });
+    }
+    slint::ModelRc::new(slint::VecModel::from(options))
+}
+
 /// Updates all open app windows; expired help windows are removed from observation.
 fn render_visual_preferences(
     window: &MainWindow,
@@ -732,6 +749,7 @@ fn render_visual_preferences(
     window.set_light_palette(light.clone());
     window.set_dark_palette(dark.clone());
     window.set_appearance_mode(preferences.mode.index());
+    window.set_theme_options(theme_options(distribution));
     window.set_theme_choice(preferences.theme.index());
     window.set_theme_notice(preferences.notice.as_str().into());
     help_windows.retain(|help| {

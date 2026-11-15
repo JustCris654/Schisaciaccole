@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::theme_catalog::ThemeId;
+use crate::theme_catalog::{THEME_CATALOG, ThemeId};
 
 const INVALID_NOTICE: &str =
     "Tema salvato non disponibile. Uso il predefinito della distribuzione.";
@@ -30,22 +30,26 @@ impl ThemeChoice {
         }
     }
 
-    /// Returns the settings selection, with distribution first.
+    /// Returns the settings selection: distribution is 0, then catalog order from 1.
     pub fn index(self) -> i32 {
         match self {
             Self::Distribution => 0,
-            Self::Explicit(ThemeId::Schisaciaccole) => 1,
-            Self::Explicit(ThemeId::OpenMove) => 2,
+            Self::Explicit(theme) => THEME_CATALOG
+                .iter()
+                .position(|entry| entry.theme == theme)
+                .and_then(|position| i32::try_from(position + 1).ok())
+                .unwrap_or(0),
         }
     }
 
-    /// Maps settings selections, rejecting indices outside the curated catalog.
+    /// Maps settings selections, rejecting indices outside the catalog.
     pub fn from_index(index: i32) -> Option<Self> {
-        match index {
-            0 => Some(Self::Distribution),
-            1 => Some(Self::Explicit(ThemeId::Schisaciaccole)),
-            2 => Some(Self::Explicit(ThemeId::OpenMove)),
-            _ => None,
+        let position = usize::try_from(index).ok()?;
+        match position.checked_sub(1) {
+            None => Some(Self::Distribution),
+            Some(position) => THEME_CATALOG
+                .get(position)
+                .map(|entry| Self::Explicit(entry.theme)),
         }
     }
 }
@@ -353,12 +357,17 @@ mod tests {
 
     #[test]
     fn settings_indices_round_trip_and_reject_unknown_values() {
-        for index in 0..3 {
+        let last = i32::try_from(THEME_CATALOG.len()).unwrap();
+        for index in 0..=last {
             assert_eq!(ThemeChoice::from_index(index).unwrap().index(), index);
+        }
+        for index in [-1, last + 1] {
+            assert!(ThemeChoice::from_index(index).is_none());
+        }
+        for index in 0..3 {
             assert_eq!(AppearanceMode::from_index(index).unwrap().index(), index);
         }
         for index in [-1, 3] {
-            assert!(ThemeChoice::from_index(index).is_none());
             assert!(AppearanceMode::from_index(index).is_none());
         }
     }

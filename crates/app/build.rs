@@ -1,4 +1,5 @@
 #[path = "src/theme_catalog.rs"]
+#[allow(dead_code)]
 mod theme_catalog;
 
 /// Validates startup configuration and compiles the Slint interface.

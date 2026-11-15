@@ -16,6 +16,7 @@ export struct EditorRow {
     email: string,
 }
 
+export struct ThemeOption { name: string, detail: string }
 export struct TimeOption { time: string, minutes: string }
 export struct MeetingRow {
     time-range: string,
@@ -1763,6 +1764,7 @@ export component MainWindow inherits Window {
     default-font-family: "Momo Trust Display";
     forward-focus: scope;
 
+    in property <[ThemeOption]> theme-options;
     in property <int> theme-choice;
     in property <string> theme-notice;
     private property <bool> settings-open;
@@ -1937,30 +1939,19 @@ export component MainWindow inherits Window {
                     PageTitle { text: "Impostazioni"; }
                     PageSub { text: "Tema"; color: AppTheme.timer-title; }
                     AppText { text: "Colori"; font-size: 15px; }
-                    HorizontalLayout {
-                        spacing: 12px;
-                        ThemedButton {
-                            text: (root.theme-choice == 0 ? "✓ " : "") + "Predefinito della distribuzione";
-                            primary: root.theme-choice == 0;
-                            checkable: true;
-                            checked: root.theme-choice == 0;
-                            clicked => { root.select-theme(0); }
+                    VerticalLayout {
+                        spacing: 8px;
+                        for option[index] in root.theme-options : HorizontalLayout {
+                            ThemedButton {
+                                text: (root.theme-choice == index ? "✓ " : "") + option.name;
+                                detail: option.detail;
+                                primary: root.theme-choice == index;
+                                checkable: true;
+                                checked: root.theme-choice == index;
+                                clicked => { root.select-theme(index); }
+                            }
+                            Rectangle { horizontal-stretch: 1; }
                         }
-                        ThemedButton {
-                            text: (root.theme-choice == 1 ? "✓ " : "") + "Schisaciaccole";
-                            primary: root.theme-choice == 1;
-                            checkable: true;
-                            checked: root.theme-choice == 1;
-                            clicked => { root.select-theme(1); }
-                        }
-                        ThemedButton {
-                            text: (root.theme-choice == 2 ? "✓ " : "") + "OpenMove";
-                            primary: root.theme-choice == 2;
-                            checkable: true;
-                            checked: root.theme-choice == 2;
-                            clicked => { root.select-theme(2); }
-                        }
-                        Rectangle { horizontal-stretch: 1; }
                     }
                     AppText { text: "Modalità"; font-size: 15px; }
                     HorizontalLayout {
