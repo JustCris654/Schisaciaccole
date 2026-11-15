@@ -82,6 +82,9 @@ are this repository's workflow mapping, not universal model equivalences:
 - `gpt-6.1-sol` for complex or risky work: multi-file changes, Rust code, router/CI/
   Docker Compose logic, anything needing judgment. Use medium or high reasoning effort; use high for
   complex or risky work.
+- `gpt-6.1-terra` for intermediate implementation work: bounded multi-file changes or
+  implementation tasks that need moderate technical judgment but are not especially complex or
+  risky. Use medium or high reasoning effort.
 - `gpt-6-luna` for simple, mechanical, low-risk work: single-file edits, renames,
   typo fixes, boilerplate, text changes with a precise spec. Use low reasoning effort.
 - when unsure, use `gpt-6.1-sol` with medium reasoning effort
