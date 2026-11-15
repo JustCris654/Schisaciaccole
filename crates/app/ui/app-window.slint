@@ -1948,22 +1948,30 @@ export component MainWindow inherits Window {
                             AppText { text: "Colori"; font-size: 15px; }
                             GridLayout {
                                 spacing: 8px;
-                                for option[index] in root.theme-options : ThemedButton {
+                                // Equal columns: the cell, not the label, decides the width.
+                                for option[index] in root.theme-options : Rectangle {
                                     row: floor(index / 2);
                                     col: mod(index, 2);
                                     horizontal-stretch: 1;
-                                    text: (root.theme-choice == index ? "✓ " : "") + option;
-                                    primary: root.theme-choice == index;
-                                    checkable: true;
-                                    checked: root.theme-choice == index;
-                                    clicked => { root.select-theme(index); }
+                                    preferred-width: 0px;
+                                    min-width: 0px;
+                                    height: 44px;
+                                    ThemedButton {
+                                        width: parent.width;
+                                        height: parent.height;
+                                        text: option;
+                                        primary: root.theme-choice == index;
+                                        checkable: true;
+                                        checked: root.theme-choice == index;
+                                        clicked => { root.select-theme(index); }
+                                    }
                                 }
                             }
                             AppText { text: "Modalità"; font-size: 15px; }
                             HorizontalLayout {
                                 spacing: 12px;
                                 for label[index] in ["Sistema", "Chiaro", "Scuro"] : ThemedButton {
-                                    text: (root.appearance-mode == index ? "✓ " : "") + label;
+                                    text: label;
                                     primary: root.appearance-mode == index;
                                     checkable: true;
                                     checked: root.appearance-mode == index;
