@@ -10,7 +10,7 @@ pub enum ThemeId {
     OpenMove3,
 }
 
-/// One selectable theme: stable ID, settings label and optional short detail.
+/// One selectable theme: stable ID, and settings label.
 #[derive(Clone, Copy, Debug)]
 pub struct ThemeEntry {
     pub theme: ThemeId,
@@ -18,8 +18,6 @@ pub struct ThemeEntry {
     pub id: &'static str,
     /// Name shown in settings.
     pub name: &'static str,
-    /// Optional short detail shown under the name; empty for none.
-    pub detail: &'static str,
 }
 
 /// Ordered catalog of every theme; settings order follows this list.
@@ -29,25 +27,21 @@ pub const THEME_CATALOG: [ThemeEntry; 4] = [
         theme: ThemeId::Schisaciaccole,
         id: "schisaciaccole",
         name: "Schisaciaccole",
-        detail: "",
     },
     ThemeEntry {
         theme: ThemeId::OpenMove1,
         id: "openmove-1",
         name: "Bubblegum",
-        detail: "Chiaro: Bubblegum · Scuro: Grafite e blu",
     },
     ThemeEntry {
         theme: ThemeId::OpenMove2,
         id: "openmove-2",
         name: "Lavanda elettrica",
-        detail: "Chiaro: Bianco e blu · Scuro: Nero e lime",
     },
     ThemeEntry {
         theme: ThemeId::OpenMove3,
         id: "openmove-3",
         name: "Campo Blu",
-        detail: "Chiaro: Lavanda elettrica · Scuro: Campo blu",
     },
 ];
 
@@ -77,11 +71,6 @@ impl ThemeId {
     /// Returns the stable ID, independent of the visible label or build default.
     pub fn id(self) -> &'static str {
         self.entry().id
-    }
-
-    /// Returns the name shown in settings.
-    pub fn name(self) -> &'static str {
-        self.entry().name
     }
 }
 

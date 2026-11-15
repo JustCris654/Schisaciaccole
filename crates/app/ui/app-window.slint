@@ -16,7 +16,6 @@ export struct EditorRow {
     email: string,
 }
 
-export struct ThemeOption { name: string, detail: string }
 export struct TimeOption { time: string, minutes: string }
 export struct MeetingRow {
     time-range: string,
@@ -1764,7 +1763,7 @@ export component MainWindow inherits Window {
     default-font-family: "Momo Trust Display";
     forward-focus: scope;
 
-    in property <[ThemeOption]> theme-options;
+    in property <[string]> theme-options;
     in property <int> theme-choice;
     in property <string> theme-notice;
     private property <bool> settings-open;
@@ -1949,8 +1948,7 @@ export component MainWindow inherits Window {
                                     row: floor(index / 2);
                                     col: mod(index, 2);
                                     horizontal-stretch: 1;
-                                    text: (root.theme-choice == index ? "✓ " : "") + option.name;
-                                    detail: option.detail;
+                                    text: (root.theme-choice == index ? "✓ " : "") + option;
                                     primary: root.theme-choice == index;
                                     checkable: true;
                                     checked: root.theme-choice == index;

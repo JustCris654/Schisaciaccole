@@ -7,50 +7,43 @@ use std::{
 
 use crate::theme_catalog::{THEME_CATALOG, ThemeId};
 
-const INVALID_NOTICE: &str =
-    "Tema salvato non disponibile. Uso il predefinito della distribuzione.";
-const READ_NOTICE: &str =
-    "Impossibile leggere le preferenze. Uso il predefinito della distribuzione.";
+const INVALID_NOTICE: &str = "Tema salvato non disponibile. Uso il tema predefinito.";
+const READ_NOTICE: &str = "Impossibile leggere le preferenze. Uso il tema predefinito.";
 const WRITE_NOTICE: &str = "Scelta applicata per questa sessione, ma non salvata.";
 
-/// Explicit distribution tracking differs from an explicit stable theme choice.
+/// No saved theme follows the build default; an explicit choice is saved by stable ID.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ThemeChoice {
     #[default]
-    Distribution,
+    BuildDefault,
     Explicit(ThemeId),
 }
 
 impl ThemeChoice {
     /// Resolves against the current build; explicit choices survive default changes.
-    pub fn resolve(self, distribution: ThemeId) -> ThemeId {
+    pub fn resolve(self, build_default: ThemeId) -> ThemeId {
         match self {
-            Self::Distribution => distribution,
+            Self::BuildDefault => build_default,
             Self::Explicit(theme) => theme,
         }
     }
 
-    /// Returns the settings selection: distribution is 0, then catalog order from 1.
-    pub fn index(self) -> i32 {
-        match self {
-            Self::Distribution => 0,
-            Self::Explicit(theme) => THEME_CATALOG
-                .iter()
-                .position(|entry| entry.theme == theme)
-                .and_then(|position| i32::try_from(position + 1).ok())
-                .unwrap_or(0),
-        }
+    /// Returns the catalog index of the resolved active theme.
+    pub fn catalog_index(self, build_default: ThemeId) -> i32 {
+        let theme = self.resolve(build_default);
+        THEME_CATALOG
+            .iter()
+            .position(|entry| entry.theme == theme)
+            .and_then(|position| i32::try_from(position).ok())
+            .unwrap_or(0)
     }
 
-    /// Maps settings selections, rejecting indices outside the catalog.
-    pub fn from_index(index: i32) -> Option<Self> {
+    /// Maps a catalog index to an explicit choice, rejecting indices outside the catalog.
+    pub fn from_catalog_index(index: i32) -> Option<Self> {
         let position = usize::try_from(index).ok()?;
-        match position.checked_sub(1) {
-            None => Some(Self::Distribution),
-            Some(position) => THEME_CATALOG
-                .get(position)
-                .map(|entry| Self::Explicit(entry.theme)),
-        }
+        THEME_CATALOG
+            .get(position)
+            .map(|entry| Self::Explicit(entry.theme))
     }
 }
 
@@ -110,7 +103,7 @@ impl VisualPreferences {
         }
     }
 
-    /// Parses local preferences; invalid values use distribution/system defaults.
+    /// Parses local preferences; invalid values use build-default/system defaults.
     /// A valid mode is retained when only the theme is unavailable, and vice versa.
     fn parse(text: &str) -> Self {
         let document = match text.parse::<toml::Table>() {
@@ -128,17 +121,18 @@ impl VisualPreferences {
         };
         if let Some(value) = preferences.document.get("theme") {
             preferences.theme = match value.as_str() {
-                Some("distribution") => ThemeChoice::Distribution,
+                // Written by early test builds; equivalent to an absent key.
+                Some("distribution") => ThemeChoice::BuildDefault,
                 Some(id) => match ThemeId::parse(id) {
                     Some(theme) => ThemeChoice::Explicit(theme),
                     None => {
                         preferences.notice = INVALID_NOTICE.into();
-                        ThemeChoice::Distribution
+                        ThemeChoice::BuildDefault
                     }
                 },
                 None => {
                     preferences.notice = INVALID_NOTICE.into();
-                    ThemeChoice::Distribution
+                    ThemeChoice::BuildDefault
                 }
             };
         }
@@ -160,16 +154,19 @@ impl VisualPreferences {
     /// Saves an already-applied session choice atomically, preserving unrelated TOML keys.
     /// On error the choice stays active and the inline notice reports lost persistence.
     pub fn save(&mut self, path: &Path) {
-        let theme = match self.theme {
-            ThemeChoice::Distribution => "distribution",
-            ThemeChoice::Explicit(theme) => theme.id(),
-        };
+        match self.theme {
+            ThemeChoice::BuildDefault => {
+                self.document.remove("theme");
+            }
+            ThemeChoice::Explicit(theme) => {
+                self.document.insert("theme".into(), theme.id().into());
+            }
+        }
         let mode = match self.mode {
             AppearanceMode::System => "system",
             AppearanceMode::Light => "light",
             AppearanceMode::Dark => "dark",
         };
-        self.document.insert("theme".into(), theme.into());
         self.document.insert("mode".into(), mode.into());
         match write_preferences(path, &self.document.to_string()) {
             Ok(()) => self.notice.clear(),
@@ -264,8 +261,8 @@ mod tests {
     }
 
     #[test]
-    fn distribution_follows_updates_and_explicit_choices_do_not() {
-        let distribution = VisualPreferences::parse("theme = 'distribution'");
+    fn absent_theme_follows_build_default_and_explicit_choices_do_not() {
+        let distribution = VisualPreferences::parse("mode = 'dark'");
         let explicit = VisualPreferences::parse("theme = 'schisaciaccole'");
         assert_eq!(
             distribution.theme.resolve(ThemeId::OpenMove1),
@@ -278,10 +275,10 @@ mod tests {
     }
 
     #[test]
-    fn missing_preferences_are_distribution_and_system_without_notice() {
+    fn missing_preferences_are_build_default_and_system_without_notice() {
         let directory = test_directory();
         let preferences = VisualPreferences::load(&directory.join("absent.toml"));
-        assert_eq!(preferences.theme, ThemeChoice::Distribution);
+        assert_eq!(preferences.theme, ThemeChoice::BuildDefault);
         assert_eq!(preferences.mode, AppearanceMode::System);
         assert!(preferences.notice.is_empty());
         fs::remove_dir_all(directory).unwrap();
@@ -290,7 +287,7 @@ mod tests {
     #[test]
     fn removed_theme_keeps_valid_mode_and_reports_fallback() {
         let preferences = VisualPreferences::parse("theme = 'removed'\nmode = 'dark'");
-        assert_eq!(preferences.theme, ThemeChoice::Distribution);
+        assert_eq!(preferences.theme, ThemeChoice::BuildDefault);
         assert_eq!(preferences.mode, AppearanceMode::Dark);
         assert_eq!(preferences.notice, INVALID_NOTICE);
     }
@@ -308,7 +305,7 @@ mod tests {
     fn read_error_is_distinct_from_absence_and_invalid_data() {
         let directory = test_directory();
         let preferences = VisualPreferences::load(&directory);
-        assert_eq!(preferences.theme, ThemeChoice::Distribution);
+        assert_eq!(preferences.theme, ThemeChoice::BuildDefault);
         assert_eq!(preferences.notice, READ_NOTICE);
         fs::remove_dir_all(directory).unwrap();
     }
@@ -329,10 +326,11 @@ mod tests {
             loaded.document.get("other").and_then(toml::Value::as_str),
             Some("retained")
         );
-        preferences.theme = ThemeChoice::Distribution;
+        preferences.theme = ThemeChoice::BuildDefault;
         preferences.save(&path);
         let loaded = VisualPreferences::load(&path);
-        assert_eq!(loaded.theme, ThemeChoice::Distribution);
+        assert_eq!(loaded.theme, ThemeChoice::BuildDefault);
+        assert!(loaded.document.get("theme").is_none());
         assert_eq!(loaded.mode, AppearanceMode::Light);
         fs::remove_dir_all(directory).unwrap();
     }
@@ -356,13 +354,57 @@ mod tests {
     }
 
     #[test]
-    fn settings_indices_round_trip_and_reject_unknown_values() {
-        let last = i32::try_from(THEME_CATALOG.len()).unwrap();
-        for index in 0..=last {
-            assert_eq!(ThemeChoice::from_index(index).unwrap().index(), index);
+    fn legacy_distribution_value_is_absent_without_notice() {
+        let preferences = VisualPreferences::parse("theme = 'distribution'\nmode = 'light'");
+        assert_eq!(preferences.theme, ThemeChoice::BuildDefault);
+        assert_eq!(preferences.mode, AppearanceMode::Light);
+        assert!(preferences.notice.is_empty());
+    }
+
+    #[test]
+    fn removed_openmove_id_falls_back_with_notice() {
+        let preferences = VisualPreferences::parse("theme = 'openmove'");
+        assert_eq!(preferences.theme, ThemeChoice::BuildDefault);
+        assert_eq!(preferences.notice, INVALID_NOTICE);
+    }
+
+    #[test]
+    fn mode_only_save_writes_no_theme_key_and_drops_legacy_value() {
+        let directory = test_directory();
+        let path = directory.join("config.toml");
+        let mut preferences = VisualPreferences::parse("theme = 'distribution'");
+        preferences.mode = AppearanceMode::Dark;
+        preferences.save(&path);
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("theme"), "{text}");
+        assert!(text.contains("dark"));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn no_preference_selects_the_build_default_in_the_catalog() {
+        for entry in &THEME_CATALOG {
+            let index = ThemeChoice::BuildDefault.catalog_index(entry.theme);
+            assert_eq!(
+                THEME_CATALOG[usize::try_from(index).unwrap()].theme,
+                entry.theme
+            );
         }
-        for index in [-1, last + 1] {
-            assert!(ThemeChoice::from_index(index).is_none());
+        assert_eq!(
+            ThemeChoice::Explicit(ThemeId::OpenMove1).catalog_index(ThemeId::OpenMove3),
+            1
+        );
+    }
+
+    #[test]
+    fn settings_indices_round_trip_and_reject_unknown_values() {
+        let len = i32::try_from(THEME_CATALOG.len()).unwrap();
+        for index in 0..len {
+            let choice = ThemeChoice::from_catalog_index(index).unwrap();
+            assert_eq!(choice.catalog_index(ThemeId::default()), index);
+        }
+        for index in [-1, len] {
+            assert!(ThemeChoice::from_catalog_index(index).is_none());
         }
         for index in 0..3 {
             assert_eq!(AppearanceMode::from_index(index).unwrap().index(), index);

@@ -672,9 +672,10 @@ fn configure_visual_preferences(
         let path = path.clone();
         let help_windows = help_windows.clone();
         move |index| {
-            let (Some(window), Some(choice)) =
-                (window.upgrade(), theme::ThemeChoice::from_index(index))
-            else {
+            let (Some(window), Some(choice)) = (
+                window.upgrade(),
+                theme::ThemeChoice::from_catalog_index(index),
+            ) else {
                 return;
             };
             let mut preferences = preferences.borrow_mut();
@@ -719,21 +720,13 @@ fn configure_visual_preferences(
     Ok(help_windows)
 }
 
-/// Builds the settings list: the distribution entry first, then the catalog in order.
-/// `resolved` is the theme the distribution entry currently selects.
-fn theme_options(resolved: theme_catalog::ThemeId) -> slint::ModelRc<ui::ThemeOption> {
-    let mut options = Vec::with_capacity(theme_catalog::THEME_CATALOG.len() + 1);
-    options.push(ui::ThemeOption {
-        name: "Predefinito della distribuzione".into(),
-        detail: format!("Ora: {}", resolved.name()).into(),
-    });
-    for entry in &theme_catalog::THEME_CATALOG {
-        options.push(ui::ThemeOption {
-            name: entry.name.into(),
-            detail: entry.detail.into(),
-        });
-    }
-    slint::ModelRc::new(slint::VecModel::from(options))
+/// Builds the settings list: exactly the catalog names, in order.
+fn theme_options() -> slint::ModelRc<slint::SharedString> {
+    let names: Vec<slint::SharedString> = theme_catalog::THEME_CATALOG
+        .iter()
+        .map(|entry| entry.name.into())
+        .collect();
+    slint::ModelRc::new(slint::VecModel::from(names))
 }
 
 /// Updates all open app windows; expired help windows are removed from observation.
@@ -749,8 +742,8 @@ fn render_visual_preferences(
     window.set_light_palette(light.clone());
     window.set_dark_palette(dark.clone());
     window.set_appearance_mode(preferences.mode.index());
-    window.set_theme_options(theme_options(distribution));
-    window.set_theme_choice(preferences.theme.index());
+    window.set_theme_options(theme_options());
+    window.set_theme_choice(preferences.theme.catalog_index(distribution));
     window.set_theme_notice(preferences.notice.as_str().into());
     help_windows.retain(|help| {
         let Some(help) = help.upgrade() else {
@@ -876,7 +869,7 @@ mod visual_tests {
         assert_eq!(rendered_page(), slint::Rgb8Pixel::new(34, 34, 40));
         native_scheme(i_slint_core::items::ColorScheme::Light);
         assert_eq!(rendered_page(), slint::Rgb8Pixel::new(255, 255, 255));
-        assert_eq!(window.get_theme_choice(), 2);
+        assert_eq!(window.get_theme_choice(), 1);
         assert_eq!(window.get_page(), crate::ui::Page::ManualPage);
         window.hide().unwrap();
     }
