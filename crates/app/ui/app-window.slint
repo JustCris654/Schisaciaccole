@@ -1921,8 +1921,12 @@ export component MainWindow inherits Window {
                 Navigation {
                     meetings-page: root.page == Page.MeetingsPage;
                     signed-in: root.signed-in;
-                    manual => { root.set-manual-page(); }
+                    manual => {
+                        root.settings-open = false;
+                        root.set-manual-page();
+                    }
                     meetings => {
+                        root.settings-open = false;
                         if (root.page == Page.MeetingsPage) {
                             root.refresh-meetings();
                         } else {
