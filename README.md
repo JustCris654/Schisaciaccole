@@ -34,6 +34,10 @@ countdown whose speaking turns list the chosen participants.
 | --- | --- |
 | ![Participant editor](assets/screenshot_editor.png) | ![Editor with the Daily switch on](assets/screenshot_editor_daily.png) |
 
+| Impostazioni |
+| --- |
+| ![Impostazioni: theme and appearance](assets/screenshot_settings.png) |
+
 ## Requirements
 
 - [Rust](https://www.rust-lang.org/tools/install) (stable toolchain, `cargo`)
@@ -137,6 +141,13 @@ Each OpenMove theme pairs a light and a dark palette: Bubblegum
 elettrica (`openmove-2`) is "Bianco e blu" light with "Nero e lime" dark; Campo
 Blu (`openmove-3`) is "Lavanda elettrica" light with "Campo blu" dark. Design
 notes are in `docs/design/temi/`.
+
+| Theme | Chiaro | Scuro |
+| --- | --- | --- |
+| Schisaciaccole | ![Schisaciaccole, light](assets/themes/schisaciaccole-light.png) | ![Schisaciaccole, dark](assets/themes/schisaciaccole-dark.png) |
+| Bubblegum | ![Bubblegum, light](assets/themes/openmove-1-light.png) | ![Bubblegum, dark](assets/themes/openmove-1-dark.png) |
+| Lavanda elettrica | ![Lavanda elettrica, light](assets/themes/openmove-2-light.png) | ![Lavanda elettrica, dark](assets/themes/openmove-2-dark.png) |
+| Campo Blu | ![Campo Blu, light](assets/themes/openmove-3-light.png) | ![Campo Blu, dark](assets/themes/openmove-3-dark.png) |
 
 Adding a theme takes three changes in `crates/app/src`: a `ThemeId` variant, one
 entry in the ordered `THEME_CATALOG` in `theme_catalog.rs` (stable ID and name;
