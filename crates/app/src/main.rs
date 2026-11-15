@@ -827,7 +827,7 @@ mod visual_tests {
         let help_windows = Rc::new(RefCell::new(Vec::new()));
         let _observer = configure_system_appearance(&window, help_windows.clone()).unwrap();
         let mut preferences = theme::VisualPreferences::default();
-        preferences.theme = theme::ThemeChoice::Explicit(theme_catalog::ThemeId::OpenMove);
+        preferences.theme = theme::ThemeChoice::Explicit(theme_catalog::ThemeId::OpenMove1);
         render_visual_preferences(
             &window,
             &preferences,
@@ -860,10 +860,10 @@ mod visual_tests {
             &mut help_windows.borrow_mut(),
         );
         slint::platform::update_timers_and_animations();
-        assert_eq!(rendered_page(), slint::Rgb8Pixel::new(250, 250, 252));
+        assert_eq!(rendered_page(), slint::Rgb8Pixel::new(255, 255, 255));
         native_scheme(i_slint_core::items::ColorScheme::Light);
         native_scheme(i_slint_core::items::ColorScheme::Dark);
-        assert_eq!(rendered_page(), slint::Rgb8Pixel::new(250, 250, 252));
+        assert_eq!(rendered_page(), slint::Rgb8Pixel::new(255, 255, 255));
 
         preferences.mode = theme::AppearanceMode::System;
         render_visual_preferences(
@@ -875,7 +875,7 @@ mod visual_tests {
         slint::platform::update_timers_and_animations();
         assert_eq!(rendered_page(), slint::Rgb8Pixel::new(34, 34, 40));
         native_scheme(i_slint_core::items::ColorScheme::Light);
-        assert_eq!(rendered_page(), slint::Rgb8Pixel::new(250, 250, 252));
+        assert_eq!(rendered_page(), slint::Rgb8Pixel::new(255, 255, 255));
         assert_eq!(window.get_theme_choice(), 2);
         assert_eq!(window.get_page(), crate::ui::Page::ManualPage);
         window.hide().unwrap();

@@ -5,7 +5,9 @@
 pub enum ThemeId {
     #[default]
     Schisaciaccole,
-    OpenMove,
+    OpenMove1,
+    OpenMove2,
+    OpenMove3,
 }
 
 /// One selectable theme: stable ID, settings label and optional short detail.
@@ -22,7 +24,7 @@ pub struct ThemeEntry {
 
 /// Ordered catalog of every theme; settings order follows this list.
 /// Adding a theme means one entry here plus its palettes in `palettes.rs`.
-pub const THEME_CATALOG: [ThemeEntry; 2] = [
+pub const THEME_CATALOG: [ThemeEntry; 4] = [
     ThemeEntry {
         theme: ThemeId::Schisaciaccole,
         id: "schisaciaccole",
@@ -30,10 +32,22 @@ pub const THEME_CATALOG: [ThemeEntry; 2] = [
         detail: "",
     },
     ThemeEntry {
-        theme: ThemeId::OpenMove,
-        id: "openmove",
-        name: "OpenMove",
-        detail: "",
+        theme: ThemeId::OpenMove1,
+        id: "openmove-1",
+        name: "Bubblegum",
+        detail: "Chiaro: Bubblegum · Scuro: Grafite e blu",
+    },
+    ThemeEntry {
+        theme: ThemeId::OpenMove2,
+        id: "openmove-2",
+        name: "Lavanda elettrica",
+        detail: "Chiaro: Bianco e blu · Scuro: Nero e lime",
+    },
+    ThemeEntry {
+        theme: ThemeId::OpenMove3,
+        id: "openmove-3",
+        name: "Campo Blu",
+        detail: "Chiaro: Lavanda elettrica · Scuro: Campo blu",
     },
 ];
 
@@ -117,7 +131,7 @@ mod tests {
 
     #[test]
     fn invalid_build_defaults_list_allowed_ids() {
-        for invalid in ["", " ", "unknown", "OpenMove", "openmove "] {
+        for invalid in ["", " ", "unknown", "OpenMove", "openmove", "openmove "] {
             let error = validate_default(Some(invalid)).unwrap_err();
             assert!(error.contains("SCHISACIACCOLE_DEFAULT_THEME"));
             for id in theme_ids() {

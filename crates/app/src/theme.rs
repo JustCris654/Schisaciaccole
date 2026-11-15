@@ -268,11 +268,11 @@ mod tests {
         let distribution = VisualPreferences::parse("theme = 'distribution'");
         let explicit = VisualPreferences::parse("theme = 'schisaciaccole'");
         assert_eq!(
-            distribution.theme.resolve(ThemeId::OpenMove),
-            ThemeId::OpenMove
+            distribution.theme.resolve(ThemeId::OpenMove1),
+            ThemeId::OpenMove1
         );
         assert_eq!(
-            explicit.theme.resolve(ThemeId::OpenMove),
+            explicit.theme.resolve(ThemeId::OpenMove1),
             ThemeId::Schisaciaccole
         );
     }
@@ -318,7 +318,7 @@ mod tests {
         let directory = test_directory();
         let path = directory.join("nested/config.toml");
         let mut preferences = VisualPreferences::parse("other = 'retained'");
-        preferences.theme = ThemeChoice::Explicit(ThemeId::OpenMove);
+        preferences.theme = ThemeChoice::Explicit(ThemeId::OpenMove1);
         preferences.mode = AppearanceMode::Light;
         preferences.save(&path);
         assert!(preferences.notice.is_empty());
@@ -343,13 +343,13 @@ mod tests {
         let path = directory.join("not-a-directory");
         fs::write(&path, "untouched").unwrap();
         let mut preferences = VisualPreferences {
-            theme: ThemeChoice::Explicit(ThemeId::OpenMove),
+            theme: ThemeChoice::Explicit(ThemeId::OpenMove1),
             mode: AppearanceMode::Dark,
             ..VisualPreferences::default()
         };
         preferences.save(&path.join("config.toml"));
         assert_eq!(preferences.notice, WRITE_NOTICE);
-        assert_eq!(preferences.theme, ThemeChoice::Explicit(ThemeId::OpenMove));
+        assert_eq!(preferences.theme, ThemeChoice::Explicit(ThemeId::OpenMove1));
         assert_eq!(preferences.mode, AppearanceMode::Dark);
         assert_eq!(fs::read_to_string(path).unwrap(), "untouched");
         fs::remove_dir_all(directory).unwrap();

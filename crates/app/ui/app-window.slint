@@ -772,7 +772,7 @@ component MeetingsPage inherits Rectangle {
                             if row.attendees-warning : Text {
                                 text: "Lista partecipanti incompleta";
                                 font-size: 12px;
-                                color: AppTheme.timer-title;
+                                color: AppTheme.surface-accent;
                                 wrap: word-wrap;
                             }
                             HorizontalLayout {
@@ -1937,41 +1937,46 @@ export component MainWindow inherits Window {
                     padding: 32px;
                     spacing: 20px;
                     PageTitle { text: "Impostazioni"; }
-                    PageSub { text: "Tema"; color: AppTheme.timer-title; }
-                    AppText { text: "Colori"; font-size: 15px; }
-                    VerticalLayout {
-                        spacing: 8px;
-                        for option[index] in root.theme-options : HorizontalLayout {
-                            ThemedButton {
-                                text: (root.theme-choice == index ? "✓ " : "") + option.name;
-                                detail: option.detail;
-                                primary: root.theme-choice == index;
-                                checkable: true;
-                                checked: root.theme-choice == index;
-                                clicked => { root.select-theme(index); }
+                    ScrollList {
+                        vertical-stretch: 1;
+                        VerticalLayout {
+                            spacing: 14px;
+                            PageSub { text: "Tema"; color: AppTheme.timer-title; }
+                            AppText { text: "Colori"; font-size: 15px; }
+                            GridLayout {
+                                spacing: 8px;
+                                for option[index] in root.theme-options : ThemedButton {
+                                    row: floor(index / 2);
+                                    col: mod(index, 2);
+                                    horizontal-stretch: 1;
+                                    text: (root.theme-choice == index ? "✓ " : "") + option.name;
+                                    detail: option.detail;
+                                    primary: root.theme-choice == index;
+                                    checkable: true;
+                                    checked: root.theme-choice == index;
+                                    clicked => { root.select-theme(index); }
+                                }
                             }
-                            Rectangle { horizontal-stretch: 1; }
+                            AppText { text: "Modalità"; font-size: 15px; }
+                            HorizontalLayout {
+                                spacing: 12px;
+                                for label[index] in ["Sistema", "Chiaro", "Scuro"] : ThemedButton {
+                                    text: (root.appearance-mode == index ? "✓ " : "") + label;
+                                    primary: root.appearance-mode == index;
+                                    checkable: true;
+                                    checked: root.appearance-mode == index;
+                                    clicked => { root.select-appearance(index); }
+                                }
+                                Rectangle { horizontal-stretch: 1; }
+                            }
+                            if root.theme-notice != "" : AppText {
+                                text: root.theme-notice;
+                                color: AppTheme.error;
+                                font-size: 12px;
+                                wrap: word-wrap;
+                            }
                         }
                     }
-                    AppText { text: "Modalità"; font-size: 15px; }
-                    HorizontalLayout {
-                        spacing: 12px;
-                        for label[index] in ["Sistema", "Chiaro", "Scuro"] : ThemedButton {
-                            text: (root.appearance-mode == index ? "✓ " : "") + label;
-                            primary: root.appearance-mode == index;
-                            checkable: true;
-                            checked: root.appearance-mode == index;
-                            clicked => { root.select-appearance(index); }
-                        }
-                        Rectangle { horizontal-stretch: 1; }
-                    }
-                    if root.theme-notice != "" : AppText {
-                        text: root.theme-notice;
-                        color: AppTheme.error;
-                        font-size: 12px;
-                        wrap: word-wrap;
-                    }
-                    Rectangle { vertical-stretch: 1; }
                     HorizontalLayout {
                         PillButton {
                             text: "Indietro";
@@ -2158,7 +2163,7 @@ component KeyChip inherits Rectangle {
     background: AppTheme.surface;
     Text {
         text: root.key;
-        color: AppTheme.text-brand;
+        color: AppTheme.surface-accent;
         font-size: 16px;
         font-weight: 400;
         horizontal-alignment: center;

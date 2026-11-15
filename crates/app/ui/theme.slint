@@ -9,6 +9,8 @@ export struct ThemePalette {
     text-secondary: color,
     text-brand: color,
     timer-title: color,
+    // Accent text drawn on `surface`.
+    surface-accent: color,
     border-subtle: color,
     turn: color,
     turn-text: color,
@@ -51,6 +53,8 @@ export global AppTheme {
     out property <color> text-secondary: active.text-secondary;
     out property <color> text-brand: active.text-brand;
     out property <color> timer-title: active.timer-title;
+    // Accent text drawn on `surface`.
+    out property <color> surface-accent: active.surface-accent;
     out property <color> border-subtle: active.border-subtle;
     out property <color> turn: active.turn;
     out property <color> turn-text: active.turn-text;
