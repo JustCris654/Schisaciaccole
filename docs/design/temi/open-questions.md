@@ -20,10 +20,16 @@ updated: 2026-11-15
 - [x] Quale perimetro iniziale? Catalogo incluso nell'app, nessun file esterno, nessun selettore libero. (2026-11-15)
 - [x] Chi propone OpenMove chiaro? Proposta creativa delegata, da provare e validare nell'app; base concreta nel design, ancora preliminare. (2026-11-15)
 
+- [x] Quali temi OpenMove? Tre, con ID stabili `openmove-1` **Bubblegum**, `openmove-2` **Lavanda elettrica**, `openmove-3` **Campo Blu**, ciascuno con una variante chiara e una scura scelte tra le sei palette della [pagina di prova](./mockup-openmove.html). (2026-11-15)
+- [x] Il catalogo deve essere estendibile? Sì, guidato dai dati: variante di `ThemeId`, voce in `THEME_CATALOG` e palette in `palettes.rs`. (2026-11-15)
+- [x] **Predefinito della distribuzione** e descrizioni delle varianti restano nelle impostazioni? No, rimossi: la lista mostra solo i nomi dei temi e il predefinito della build è un tema ordinario, selezionato quando non c'è scelta salvata. Il valore legacy `distribution` è letto come assente. (2026-11-15)
+- [x] L'ID `openmove` resta valido? No, è rimosso: ripiego con avviso se salvato, errore di build se usato come predefinito. (2026-11-15)
+- [x] Ruoli di **Nero e lime** e **Campo blu** scuri? **Nero e lime**: azioni primarie lime con testo scuro, schede blu. **Campo blu**: pagina blu di marca, azioni bianche con testo blu, titoli gialli. Nuovo token `surface-accent` per il testo accento sulle schede. (2026-11-15)
+
 ## Da validare
 
 - [x] Palette preliminari confermate come base: OpenMove scuro con fondo `#222228`; chiaro quasi bianco, blu primario e titoli prugna. Palette semantiche complete implementate con test dei contrasti principali. (2026-11-15)
-- [ ] Completare la prova visiva interattiva dei quattro abbinamenti, delle variazioni native di Sistema e di tutti gli stati sui desktop supportati.
+- [ ] Completare la prova visiva interattiva dei quattro temi in entrambe le modalità, delle variazioni native di Sistema e di tutti gli stati sui desktop supportati. Gli screenshot con rendering software di tutti e quattro i temi in entrambe le modalità sono stati rivisti (2026-11-15); resta il test interattivo su desktop.
 - [x] Confermiamo **Sistema** come modalità iniziale quando non esiste una preferenza? Sì. (2026-11-15)
 - [x] Preferenze locali: quale formato e percorso usare, e con quale separazione tra installazioni o fork? TOML nel percorso fisso `~/.config/schisaciaccole/config.toml`, dove `~` indica la home dell’utente, anche per i fork. La coesistenza con l’app originale non è considerata realistica: nessun namespace per fork o identificativo di distribuzione richiesto. Il `config.rs` attuale non persiste preferenze visive. (2026-11-15)
 - [x] Confermati messaggi vicino ai controlli nella sezione **Tema**, testi proposti e **Predefinito della distribuzione** nel ripiego; errori di lettura distinti, con messaggio esplicativo e ripiego sul predefinito. (2026-11-15)
