@@ -34,6 +34,10 @@ countdown whose speaking turns list the chosen participants.
 | --- | --- |
 | ![Participant editor](assets/screenshot_editor.png) | ![Editor with the Daily switch on](assets/screenshot_editor_daily.png) |
 
+| Impostazioni |
+| --- |
+| ![Impostazioni: theme and appearance](assets/screenshot_settings.png) |
+
 ## Requirements
 
 - [Rust](https://www.rust-lang.org/tools/install) (stable toolchain, `cargo`)
@@ -72,6 +76,86 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all --check
 ```
+
+## Themes and appearance
+
+Open the three-dot menu in **Manuale** or **I miei meeting**, then choose
+**Impostazioni**. The **Tema** section has independent controls: a grid of theme
+names (**Schisaciaccole**, **Bubblegum**, **Lavanda elettrica**, **Campo Blu**)
+and the appearance (**Sistema**, **Chiaro**, **Scuro**). The appearance chooses
+the light or dark variant of the selected theme. Changes apply immediately,
+including open shortcut windows. **Sistema** follows native light/dark changes
+while the app is open. These preferences work locally without signing in or
+configuring a backend, and login/logout does not change them.
+
+Preferences are TOML in `~/.config/schisaciaccole/config.toml` on Linux and macOS,
+using the user's home directory even when `XDG_CONFIG_HOME` is set. The original
+app and forks share this path. A typical file is:
+
+```toml
+theme = "openmove-1"
+mode = "system"
+```
+
+Accepted theme values are `schisaciaccole`, `openmove-1`, `openmove-2` and
+`openmove-3`; appearance values are `system`, `light` and `dark`. With no saved
+theme, the build default is active and shown selected in the list. It keeps
+following the build default after an update until the user picks a theme.
+Saves write only explicit IDs: no `theme` key is written until a theme is
+chosen. A legacy `theme = "distribution"` is read as absent, without a notice.
+The removed `openmove` ID is no longer valid. An explicit theme ID is preserved
+across updates. Changing the theme does not reset the appearance mode.
+
+Missing files are normal. Invalid TOML, removed/invalid theme IDs and read
+errors fall back to the build default without blocking startup; a short red
+message near the settings explains the fallback ("Tema salvato non disponibile.
+Uso il tema predefinito." or "Impossibile leggere le preferenze. Uso il tema
+predefinito."). A valid appearance mode is retained when only the saved theme is
+invalid. Invalid modes fall back to **Sistema**. Saves use a sibling temporary
+file and atomic replacement. On a write error the current choice remains active
+for the session, with an inline message that it was not saved; the previous
+configuration is retained. Unrelated TOML keys are preserved when a valid
+configuration is updated.
+
+The default theme is embedded when compiling the desktop:
+
+```sh
+SCHISACIACCOLE_DEFAULT_THEME=openmove-1 cargo run --release -p schisaciaccole
+```
+
+Unset means `schisaciaccole`. Empty, non-Unicode or unknown IDs (including the
+removed `openmove`) fail the build with a descriptive error; valid stable IDs
+are `schisaciaccole`, `openmove-1`, `openmove-2` and `openmove-3`.
+Cargo rechecks the choice when the variable changes, without `cargo clean`.
+The variable does not configure the server and is not read at app startup.
+It can be combined with the optional build-time backend URL:
+
+```sh
+SCHISACIACCOLE_BACKEND_URL=https://schisaciaccole.example.com \
+SCHISACIACCOLE_DEFAULT_THEME=openmove-1 \
+cargo run --release -p schisaciaccole
+```
+
+Each OpenMove theme pairs a light and a dark palette: Bubblegum
+(`openmove-1`) is "Bubblegum" light with "Grafite e blu" dark; Lavanda
+elettrica (`openmove-2`) is "Bianco e blu" light with "Nero e lime" dark; Campo
+Blu (`openmove-3`) is "Lavanda elettrica" light with "Campo blu" dark. Design
+notes are in `docs/design/temi/`.
+
+| Theme | Chiaro | Scuro |
+| --- | --- | --- |
+| Schisaciaccole | ![Schisaciaccole, light](assets/themes/schisaciaccole-light.png) | ![Schisaciaccole, dark](assets/themes/schisaciaccole-dark.png) |
+| Bubblegum | ![Bubblegum, light](assets/themes/openmove-1-light.png) | ![Bubblegum, dark](assets/themes/openmove-1-dark.png) |
+| Lavanda elettrica | ![Lavanda elettrica, light](assets/themes/openmove-2-light.png) | ![Lavanda elettrica, dark](assets/themes/openmove-2-dark.png) |
+| Campo Blu | ![Campo Blu, light](assets/themes/openmove-3-light.png) | ![Campo Blu, dark](assets/themes/openmove-3-dark.png) |
+
+Adding a theme takes three changes in `crates/app/src`: a `ThemeId` variant, one
+entry in the ordered `THEME_CATALOG` in `theme_catalog.rs` (stable ID and name;
+the settings list follows this order), and its light and dark palette functions
+in `palettes.rs` (wired through the exhaustive match). Local persistence is in
+`theme.rs`. Slint components read the palette through `AppTheme`. Focus,
+warning/error states, speaking turns, accent text on cards (`surface-accent`)
+and decorations have independent tokens.
 
 ## Packaging
 

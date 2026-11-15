@@ -1,0 +1,414 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tema OpenMove, opzioni</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #E6E6EC;
+  --ink: #1D1D1B;
+  --ink-2: #57566A;
+  --card: #F6F6F9;
+  --rule: #CFCFD9;
+  --chip: #FFFFFF;
+  --om-blue: #4A47F7;
+  --om-orange: #D86F4E;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #18181D; --ink: #EEEEF4; --ink-2: #A9A8BC; --card: #222229; --rule: #34343F; --chip: #2B2B33; --om-blue: #6B68FF;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #18181D; --ink: #EEEEF4; --ink-2: #A9A8BC; --card: #222229; --rule: #34343F; --chip: #2B2B33; --om-blue: #6B68FF;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font-family: Manrope, system-ui, sans-serif; font-size: 16px; line-height: 1.5;
+}
+code { font-family: inherit; font-weight: 600; }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 3px solid var(--om-orange); outline-offset: 2px; }
+
+.app { display: grid; grid-template-columns: 260px minmax(0, 1fr); min-height: 100vh; }
+
+/* ---------- Sidebar ---------- */
+aside {
+  position: sticky; top: 0; height: 100vh; overflow-y: auto;
+  border-right: 1px solid var(--rule); padding: 32px 20px 24px; display: flex; flex-direction: column; gap: 28px;
+}
+aside h1 { font-size: 22px; line-height: 1.15; letter-spacing: -0.02em; margin: 0; font-weight: 700; }
+aside .hint { margin: 8px 0 0; font-size: 13px; color: var(--ink-2); }
+.group h2 { font-size: 13px; font-weight: 600; color: var(--ink-2); margin: 0 0 8px 10px; }
+.group ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.opt-btn {
+  width: 100%; display: flex; align-items: center; gap: 12px; text-align: left;
+  background: transparent; border: 0; border-radius: 12px; padding: 8px 10px; cursor: pointer;
+}
+.opt-btn:hover { background: var(--card); }
+.opt-btn[aria-current="true"] { background: var(--chip); box-shadow: inset 0 0 0 1px var(--rule); }
+.mini { flex: none; width: 34px; height: 26px; border-radius: 7px; position: relative; overflow: hidden; box-shadow: inset 0 0 0 1px rgba(127,127,140,.35); }
+.mini i { position: absolute; left: 5px; right: 5px; height: 6px; border-radius: 3px; }
+.mini i:nth-child(1) { top: 5px; right: 14px; }
+.mini i:nth-child(2) { top: 14px; }
+.mini b { position: absolute; right: 7px; top: 15px; width: 9px; height: 4px; border-radius: 2px; }
+.opt-btn .nm { font-size: 15px; font-weight: 600; line-height: 1.2; display: block; }
+.opt-btn .tg { font-size: 12px; color: var(--ink-2); display: block; }
+.keys { margin-top: auto; font-size: 12px; color: var(--ink-2); }
+.keys kbd { font-family: inherit; font-size: 11px; font-weight: 700; border: 1px solid var(--rule); border-bottom-width: 2px; border-radius: 5px; padding: 0 5px; background: var(--chip); }
+
+/* ---------- Main ---------- */
+main { padding: 32px clamp(16px, 3vw, 44px) 64px; min-width: 0; }
+.head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 32px; align-items: start; }
+.head .mode { font-size: 14px; color: var(--ink-2); margin: 0 0 4px; }
+.head h2 { font-size: clamp(30px, 3.6vw, 44px); line-height: 1.05; letter-spacing: -0.03em; margin: 0; font-weight: 700; }
+.pager { display: flex; gap: 8px; }
+.pager button { width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--rule); background: var(--chip); cursor: pointer; font-size: 18px; }
+.pager button:hover { border-color: var(--ink-2); }
+.desc { margin: 14px 0 0; color: var(--ink-2); max-width: 72ch; }
+.desc b { color: var(--ink); font-weight: 600; }
+.flag { margin: 12px 0 0; max-width: 72ch; font-size: 15px; border-left: 3px solid var(--om-orange); padding: 2px 0 2px 12px; }
+.swatches { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+.swatch { display: flex; align-items: center; gap: 8px; background: var(--chip); border: 1px solid var(--rule); border-radius: 999px; padding: 4px 12px 4px 4px; font-size: 13px; }
+.swatch i { width: 22px; height: 22px; border-radius: 50%; display: block; box-shadow: inset 0 0 0 1px rgba(127,127,140,.35); }
+.swatch code { font-weight: 500; color: var(--ink-2); font-size: 12px; }
+.checks { margin: 12px 0 0; font-size: 13px; color: var(--ink-2); }
+
+.screens { margin-top: 28px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+.screens figure { margin: 0; display: grid; gap: 10px; }
+.screens figure:first-child { grid-column: 1 / -1; }
+.screens figcaption { font-size: 14px; color: var(--ink-2); display: flex; justify-content: space-between; gap: 12px; }
+.screens figcaption b { color: var(--ink); font-weight: 600; }
+
+details.tokens { margin-top: 32px; background: var(--card); border-radius: 16px; padding: 4px 18px; }
+details.tokens summary { cursor: pointer; padding: 12px 0; font-weight: 600; font-size: 15px; }
+.tok { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 6px 18px; padding: 4px 0 18px; }
+.tok div { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.tok i { width: 18px; height: 18px; border-radius: 5px; flex: none; box-shadow: inset 0 0 0 1px rgba(127,127,140,.35); }
+.tok span { color: var(--ink-2); margin-left: auto; font-size: 12px; }
+
+/* ---------- Mock window ---------- */
+.stage { position: relative; width: 100%; aspect-ratio: 760 / 476; border-radius: 14px; overflow: hidden; box-shadow: 0 1px 0 rgba(0,0,0,.06), 0 12px 32px -14px rgba(20,20,40,.4); }
+.win {
+  position: absolute; top: 0; left: 0; width: 760px; height: 476px; transform-origin: 0 0;
+  background: var(--page); color: var(--text); font-family: Manrope, system-ui, sans-serif; overflow: hidden; line-height: 1.4;
+  transition: background-color .2s;
+}
+:where(.win) button { background: none; border: 0; padding: 0; cursor: pointer; font: inherit; color: inherit; }
+.win :focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.nav { height: 70px; position: relative; }
+.nav .app-name { position: absolute; left: 0; right: 0; top: 22px; text-align: center; font-size: 20px; letter-spacing: -0.03em; color: var(--text); pointer-events: none; }
+.tabs { position: absolute; left: 24px; top: 18px; display: flex; gap: 18px; z-index: 1; }
+.tab { height: 36px; display: flex; align-items: center; padding: 0 2px; font-size: 15px; color: var(--text-secondary); position: relative; }
+.tab.sel { color: var(--text); }
+.tab.sel::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; border-radius: 2px; background: var(--text-brand); }
+.dots { position: absolute; right: 24px; top: 24px; display: flex; gap: 4px; }
+.dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--text); }
+.pg { padding: 18px 30px 0; }
+.ttl { font-size: 32px; letter-spacing: -0.02em; color: var(--timer-title); line-height: 1.15; }
+.sub { font-size: 17px; color: var(--text-secondary); margin-top: 8px; }
+.sub b { color: var(--text); font-weight: 400; }
+.rows { margin-top: 22px; display: grid; gap: 10px; }
+.row { background: var(--surface); border-radius: 18px; height: 78px; display: flex; align-items: center; padding: 0 20px; gap: 18px; }
+.row .time { width: 128px; font-size: 18px; flex: none; }
+.row .mid { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.row .name { font-size: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .meta { font-size: 13px; color: var(--text-secondary); display: flex; align-items: center; gap: 6px; }
+.row .warn { font-size: 11px; color: var(--timer-title); }
+.live { width: 7px; height: 7px; border-radius: 50%; background: var(--turn); }
+.daily { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); }
+.auto { font-size: 9px; font-weight: 700; letter-spacing: .04em; color: var(--text-brand); border: 1px solid var(--border); background: var(--page); border-radius: 999px; padding: 1px 6px; }
+.auto[hidden] { display: none; }
+.trk { width: 36px; height: 20px; border-radius: 10px; background: var(--border); position: relative; transition: background-color .15s; }
+.trk[aria-checked="true"] { background: var(--brand); }
+.trk::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--knob); box-shadow: 0 1px 3px rgba(0,0,0,.3); transition: left .15s; }
+.trk[aria-checked="true"]::after { left: 18px; }
+.pills { display: flex; gap: 6px; }
+.pill { height: 36px; border-radius: 18px; display: inline-flex; align-items: center; gap: 7px; font-size: 14px; padding: 0 16px; white-space: nowrap; }
+.win .pill.pri { background: var(--brand); color: var(--on-brand); padding: 0 20px; }
+.win .pill.pri:hover { filter: brightness(1.08); }
+.win .pill.pri:disabled { opacity: .4; cursor: default; filter: none; }
+.win .pill.out { background: var(--page); color: var(--text-brand); box-shadow: inset 0 0 0 2px var(--border); }
+.win .pill.out:hover { background: var(--surface); }
+.pill svg { width: 14px; height: 14px; fill: currentColor; }
+
+.slots { margin-top: 24px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+.win .slot { position: relative; background: var(--surface); border-radius: 18px; height: 96px; display: grid; place-content: center; text-align: center; box-shadow: inset 0 0 0 1px var(--border-soft); }
+.win .slot:hover { box-shadow: inset 0 0 0 1px var(--text-brand); }
+.slot b { font-weight: 400; font-size: 26px; letter-spacing: -0.02em; }
+.slot span { font-size: 13px; color: var(--text-secondary); }
+.win .slot[aria-checked="true"] { background: var(--brand); color: var(--on-brand); box-shadow: none; }
+.slot[aria-checked="true"] span { color: var(--on-brand); opacity: .85; }
+.slot svg { display: none; position: absolute; right: 12px; top: 10px; width: 14px; height: 14px; stroke: var(--on-brand); fill: none; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+.slot[aria-checked="true"] svg { display: block; }
+.foot { position: absolute; right: 30px; bottom: 26px; }
+
+.timer { display: grid; justify-items: center; align-content: center; height: 100%; }
+.clock { font-size: 124px; font-weight: 700; letter-spacing: -0.02em; line-height: 1; color: var(--timer-normal); font-variant-numeric: tabular-nums; }
+.end { font-size: 16px; color: var(--text-secondary); margin-top: 6px; }
+.person { margin-top: 22px; position: relative; background: var(--turn-soft); border-radius: 18px; display: flex; align-items: center; gap: 16px; padding: 12px 14px 12px 22px; }
+.person .who { font-size: 19px; color: var(--text); min-width: 96px; }
+.person .left { font-size: 30px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; }
+.person.paused .who, .person.paused .left { color: var(--text-secondary); }
+.win .rnd { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; background: var(--turn-tint); color: var(--turn-text); font-size: 22px; font-weight: 600; }
+.win .rnd.go { background: var(--turn); color: var(--on-turn); }
+.rnd svg { width: 16px; height: 16px; fill: currentColor; }
+.chips { display: flex; gap: 6px; margin-top: 14px; }
+.chip { font-size: 12px; color: var(--text-secondary); border: 1px solid var(--border); background: var(--page); border-radius: 999px; padding: 2px 10px; }
+.chip.now { color: var(--turn-text); border-color: var(--turn); }
+.tbar { display: flex; gap: 10px; margin-top: 18px; }
+.badge { position: absolute; top: -10px; left: 22px; background: var(--danger); color: var(--on-danger); font-size: 10px; font-weight: 700; letter-spacing: .04em; padding: 2px 9px; border-radius: 999px; }
+.badge[hidden] { display: none; }
+
+@media (max-width: 900px) {
+  .app { grid-template-columns: 1fr; }
+  aside { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--rule); padding: 20px 16px; gap: 16px; }
+  .groups { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .keys { display: none; }
+  .screens { grid-template-columns: 1fr; }
+  main { padding: 24px 16px 48px; }
+}
+@media (max-width: 520px) {
+  .groups { grid-template-columns: 1fr; }
+  .head { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .win, .trk, .trk::after { transition: none; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside>
+    <div>
+      <h1>Tema OpenMove</h1>
+      <p class="hint">Sei direzioni di colore, più la palette attuale come riferimento. Cambiano solo i colori dei token di <code>AppTheme</code>.</p>
+    </div>
+    <nav class="groups" aria-label="Opzioni del tema">
+      <div class="group"><h2>Chiaro</h2><ul id="nav-light"></ul></div>
+      <div class="group"><h2>Scuro</h2><ul id="nav-dark"></ul></div>
+    </nav>
+    <p class="keys"><kbd>←</kbd> <kbd>→</kbd> cambiano opzione. Nei mockup puoi scegliere un orario, attivare Daily e mettere in pausa il turno.</p>
+  </aside>
+
+  <main id="main" aria-live="polite">
+    <div class="head">
+      <div>
+        <p class="mode" id="o-mode"></p>
+        <h2 id="o-name"></h2>
+      </div>
+      <div class="pager">
+        <button type="button" id="prev" aria-label="Opzione precedente">←</button>
+        <button type="button" id="next" aria-label="Opzione successiva">→</button>
+      </div>
+    </div>
+    <p class="desc" id="o-text"></p>
+    <p class="flag" id="o-flag" hidden></p>
+    <div class="swatches" id="o-swatches"></div>
+    <p class="checks" id="o-checks"></p>
+
+    <div class="screens" id="screens">
+      <figure><figcaption><b>I meeting di oggi</b><span>Titoli, schede, Daily, Editor e Avvia</span></figcaption><div class="stage"><div class="win" data-screen="meetings"></div></div></figure>
+      <figure><figcaption><b>Manuale</b><span>Orario selezionato e focus</span></figcaption><div class="stage"><div class="win" data-screen="manual"></div></div></figure>
+      <figure><figcaption><b>Timer e turno</b><span>Turno attivo, pausa</span></figcaption><div class="stage"><div class="win" data-screen="timer"></div></div></figure>
+    </div>
+
+    <details class="tokens">
+      <summary>Tutti i colori di questa opzione</summary>
+      <div class="tok" id="o-tokens"></div>
+    </details>
+  </main>
+</div>
+
+<script>
+const OPTIONS = [
+  { id: 'attuale-chiaro', mode: 'light', name: 'Attuale', tag: 'riferimento',
+    text: 'Quasi bianco e prugna: il blu compare solo nei bottoni, quindi la finestra si legge come un tema generico.',
+    p: { page:'#FAFAFC', surface:'#FFFFFF', 'border-soft':'#E4DFEA', brand:'#4A47F7', 'on-brand':'#FFFFFF', text:'#25232C', 'text-secondary':'#5D5865', 'text-brand':'#5C2D68', 'timer-title':'#5C2D68', border:'#A39AAE', turn:'#D86F4E', 'turn-text':'#A44428', 'turn-soft':'#FFF0EA', 'turn-tint':'#F4C6B7', 'on-turn':'#25232C', focus:'#4A47F7', danger:'#45274E', 'on-danger':'#FFFFFF', 'timer-normal':'#5C2D68', knob:'#FFFFFF' } },
+  { id: 'bianco-blu', mode: 'light', name: 'Bianco e blu', tag: 'sobrio',
+    text: '<b>Il blu diventa la voce dei titoli</b>: titoli, timer, schede e bordi prendono il blu di marca e le sue tinte (#EEEEFF, #7774EE). Il testo usa il nero di marca #1D1D1B, il focus è arancione.',
+    swatches: [['Pagina','page'],['Schede','surface'],['Titoli e azioni','brand'],['Bordi','border'],['Turni','turn'],['Focus','focus']],
+    checks: 'Testi ≥ 5,2:1, bordi e focus ≥ 3,3:1 su pagina e schede.',
+    p: { page:'#FFFFFF', surface:'#EEEEFF', 'border-soft':'#DCDBFF', brand:'#4A47F7', 'on-brand':'#FFFFFF', text:'#1D1D1B', 'text-secondary':'#55546A', 'text-brand':'#4A47F7', 'timer-title':'#4A47F7', border:'#7774EE', turn:'#D86F4E', 'turn-text':'#A44428', 'turn-soft':'#FDEEE8', 'turn-tint':'#F4C6B7', 'on-turn':'#1D1D1B', focus:'#C2502E', danger:'#1D1D1B', 'on-danger':'#FFFFFF', 'timer-normal':'#4A47F7', knob:'#FFFFFF' } },
+  { id: 'bubblegum', mode: 'light', name: 'Bubblegum', tag: 'rosa di marca',
+    text: '<b>Schede rosa tenue con titoli magenta</b>, il blu resta su azioni, timer, focus e badge di pausa. Riprende il rosa che apprezzavi nei riferimenti iniziali, con una variante scura (#9035AC) leggibile sul bianco.',
+    swatches: [['Pagina','page'],['Schede','surface'],['Azioni e timer','brand'],['Titoli','timer-title'],['Bordi','border'],['Turni','turn']],
+    checks: 'Titoli 6,4:1, testi ≥ 5,2:1, bordi 3,5:1 sulle schede.',
+    p: { page:'#FFFFFF', surface:'#F8ECFB', 'border-soft':'#EED5F5', brand:'#4A47F7', 'on-brand':'#FFFFFF', text:'#1D1D1B', 'text-secondary':'#5E5468', 'text-brand':'#4A47F7', 'timer-title':'#9035AC', border:'#A666BB', turn:'#D86F4E', 'turn-text':'#A44428', 'turn-soft':'#FDEEE8', 'turn-tint':'#F4C6B7', 'on-turn':'#1D1D1B', focus:'#4A47F7', danger:'#4A47F7', 'on-danger':'#FFFFFF', 'timer-normal':'#4A47F7', knob:'#FFFFFF' } },
+  { id: 'lavanda-elettrica', mode: 'light', name: 'Lavanda elettrica', tag: 'immersivo',
+    text: '<b>Tutta la finestra è tinta di blu</b>: pagina lavanda #ECEBFF, schede bianche che emergono, testo in inchiostro blu #15144A al posto del nero. Anche senza logo si riconosce OpenMove al primo sguardo.',
+    swatches: [['Pagina','page'],['Schede','surface'],['Testo','text'],['Titoli e azioni','brand'],['Bordi','border'],['Turni','turn']],
+    checks: 'Testi ≥ 6,3:1 ovunque, bordi 3,3:1 sulle schede, focus 4:1.',
+    p: { page:'#ECEBFF', surface:'#FFFFFF', 'border-soft':'#D9D8FB', brand:'#4A47F7', 'on-brand':'#FFFFFF', text:'#15144A', 'text-secondary':'#47458C', 'text-brand':'#3B38E0', 'timer-title':'#3B38E0', border:'#6F6CE6', turn:'#D86F4E', 'turn-text':'#9C3F24', 'turn-soft':'#FBE6DD', 'turn-tint':'#F2BFAE', 'on-turn':'#15144A', focus:'#C2502E', danger:'#15144A', 'on-danger':'#FFFFFF', 'timer-normal':'#4A47F7', knob:'#FFFFFF' } },
+
+  { id: 'attuale-scuro', mode: 'dark', name: 'Attuale', tag: 'riferimento',
+    text: 'Grafite neutro con titoli rosa: il blu si vede solo nei bottoni e, sul fondo scuro, ha poco stacco.',
+    p: { page:'#222228', surface:'#35323E', 'border-soft':'#46434F', brand:'#4A47F7', 'on-brand':'#FFFFFF', text:'#F5F2F8', 'text-secondary':'#C7BFCE', 'text-brand':'#D38BE7', 'timer-title':'#D38BE7', border:'#807787', turn:'#D86F4E', 'turn-text':'#F5A38A', 'turn-soft':'#382921', 'turn-tint':'#704034', 'on-turn':'#25232C', focus:'#C8C7FF', danger:'#452F4E', 'on-danger':'#FFFFFF', 'timer-normal':'#D38BE7', knob:'#FFFFFF' } },
+  { id: 'grafite-blu', mode: 'dark', name: 'Grafite e blu', tag: 'sobrio',
+    text: '<b>Stesso fondo #222228, ma schede blu notte</b> (#2D2C4F) e bordi violetti: il blu entra nelle superfici invece di restare nei bottoni. Titoli e timer rosa come deciso, focus lime, badge di pausa blu.',
+    swatches: [['Pagina','page'],['Schede','surface'],['Azioni','brand'],['Titoli e timer','timer-title'],['Turni','turn'],['Focus','focus']],
+    checks: 'Testi ≥ 6,2:1, bordi ≥ 3,4:1. I bottoni blu hanno poco stacco dalle schede (2,2:1): li regge il testo bianco, come oggi.',
+    p: { page:'#222228', surface:'#2D2C4F', 'border-soft':'#3B3A66', brand:'#4A47F7', 'on-brand':'#FFFFFF', text:'#F5F5FF', 'text-secondary':'#C4C3E6', 'text-brand':'#AAA8FF', 'timer-title':'#D38BE7', border:'#7A78D0', turn:'#D86F4E', 'turn-text':'#F5A38A', 'turn-soft':'#3A2A24', 'turn-tint':'#704034', 'on-turn':'#1D1D1B', focus:'#CBF02C', danger:'#4A47F7', 'on-danger':'#FFFFFF', 'timer-normal':'#D38BE7', knob:'#FFFFFF' } },
+  { id: 'campo-blu', mode: 'dark', name: 'Campo blu', tag: 'come il sito',
+    text: '<b>La pagina è il blu di marca</b>, come le sezioni di openmove.com: testo bianco, schede blu profondo, titoli e selezione gialli, bottoni bianchi con testo blu. È la versione più riconoscibile; più che “scura” è una modalità a testo chiaro.',
+    flag: 'Cambia due ruoli confermati: Avvia diventa bianco (il blu sul blu sparirebbe) e i titoli diventano gialli invece che rosa, che sul blu arriva solo a 3,1:1.',
+    swatches: [['Pagina','page'],['Schede','surface'],['Azioni','brand'],['Titoli','timer-title'],['Turni','turn'],['Focus','focus']],
+    checks: 'Testo 5,9:1 sulla pagina, secondario 4,7:1, titoli gialli 4,5:1, bottoni 8:1.',
+    p: { page:'#4A47F7', surface:'#3633D6', 'border-soft':'#5653F0', brand:'#FFFFFF', 'on-brand':'#3633D6', text:'#FFFFFF', 'text-secondary':'#E2E1FF', 'text-brand':'#F1E600', 'timer-title':'#F1E600', border:'#C4C3FF', turn:'#D86F4E', 'turn-text':'#FFC9B6', 'turn-soft':'#2A27B4', 'turn-tint':'#5B58EC', 'on-turn':'#1D1D1B', focus:'#CBF02C', danger:'#1D1D1B', 'on-danger':'#FFFFFF', 'timer-normal':'#FFFFFF', knob:'#4A47F7' } },
+  { id: 'nero-lime', mode: 'dark', name: 'Nero e lime', tag: 'B2C',
+    text: '<b>Nero di marca #1D1D1B con schede piene di blu</b>: ogni meeting e ogni orario è un blocco #4A47F7 con testo bianco. Le azioni passano al lime, come nei materiali B2C; titoli rosa, turni arancioni, focus giallo.',
+    flag: 'Cambia un ruolo confermato: Avvia diventa lime con testo nero, perché il blu è già il colore delle schede. Il lime smette di essere solo decorativo. Anche «Lista partecipanti incompleta» oggi usa il colore dei titoli: sulle schede blu servirebbe un token separato.',
+    swatches: [['Pagina','page'],['Schede','surface'],['Azioni','brand'],['Titoli','timer-title'],['Turni','turn'],['Focus','focus']],
+    checks: 'Testo bianco 5,9:1 sulle schede, azioni 12,9:1, bordi 3,7:1 sulle schede.',
+    p: { page:'#1D1D1B', surface:'#4A47F7', 'border-soft':'#4A47F7', brand:'#CBF02C', 'on-brand':'#1D1D1B', text:'#FFFFFF', 'text-secondary':'#E2E1FF', 'text-brand':'#D38BE7', 'timer-title':'#D38BE7', border:'#C9C8FF', turn:'#D86F4E', 'turn-text':'#F5A38A', 'turn-soft':'#3A2A24', 'turn-tint':'#704034', 'on-turn':'#1D1D1B', focus:'#F1E600', danger:'#4A47F7', 'on-danger':'#FFFFFF', 'timer-normal':'#FFFFFF', knob:'#1D1D1B' } },
+];
+
+const TOKEN_LABELS = {
+  page: 'Pagina', surface: 'Schede', 'border-soft': 'Bordo schede', border: 'Bordi funzionali', brand: 'Azioni primarie',
+  'on-brand': 'Testo sulle azioni', text: 'Testo', 'text-secondary': 'Testo secondario', 'text-brand': 'Testo di marca',
+  'timer-title': 'Titoli', 'timer-normal': 'Timer', turn: 'Turno', 'turn-text': 'Testo del turno', 'turn-soft': 'Fondo del turno',
+  'turn-tint': 'Pulsanti del turno', 'on-turn': 'Icona sul turno', focus: 'Focus', danger: 'Badge e tooltip', 'on-danger': 'Testo del badge',
+  knob: 'Pomello Daily',
+};
+
+const PLAY = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.5v15a1 1 0 0 0 1.52 .86l12-7.5a1 1 0 0 0 0-1.72l-12-7.5A1 1 0 0 0 7 4.5z"/></svg>';
+const PAUSE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4h3.5v16H7zM13.5 4H17v16h-3.5z"/></svg>';
+const CHECK = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8l3 3 7-7"/></svg>';
+
+const state = { slot: 1, daily: [true, false, false], paused: false };
+
+const nav = sel => `
+  <div class="nav">
+    <div class="tabs"><span class="tab ${sel === 'manual' ? 'sel' : ''}">Manuale</span><span class="tab ${sel === 'meetings' ? 'sel' : ''}">I miei meeting</span></div>
+    <div class="app-name">Schisaciaccole</div>
+    <div class="dots" aria-hidden="true"><i></i><i></i><i></i></div>
+  </div>`;
+
+const MEETINGS = [
+  ['09:30 – 09:45', 'Daily del team Hora', '<span class="live"></span>In corso · 6 partecipanti', false],
+  ['11:00 – 12:00', 'Revisione sprint 42', '9 partecipanti', true],
+  ['15:00 – 15:45', 'Retrospettiva', '7 partecipanti', false],
+];
+const SLOTS = [['10:15','3'],['10:30','18'],['10:45','33'],['11:00','48'],['11:15','63'],['11:30','78'],['11:45','93'],['12:00','108']];
+
+const SCREENS = {
+  meetings: () => nav('meetings') + `
+    <div class="pg">
+      <div class="ttl">I meeting di oggi</div>
+      <div class="sub">Google Calendar · Team Mobilità</div>
+      <div class="rows">
+        ${MEETINGS.map(([time, name, meta, warn], i) => `
+        <div class="row"><div class="time">${time}</div>
+          <div class="mid"><div class="name">${name}</div>${warn ? '<div class="warn">Lista partecipanti incompleta</div>' : ''}<div class="meta">${meta}</div></div>
+          <div class="daily"><span class="auto" ${i === 0 ? '' : 'hidden'}>AUTO</span><button type="button" class="trk" role="switch" aria-checked="${state.daily[i]}" aria-label="Daily, ${name}" data-daily="${i}"></button>Daily</div>
+          <div class="pills"><button type="button" class="pill out">Editor</button><button type="button" class="pill pri">${PLAY}Avvia</button></div></div>`).join('')}
+      </div>
+    </div>`,
+  manual: () => nav('manual') + `
+    <div class="pg">
+      <div class="ttl">Quando finisce il meeting?</div>
+      <div class="sub">Sono le <b>10:12</b>. Scegli l’orario di fine.</div>
+      <div class="slots" role="radiogroup" aria-label="Orario di fine">
+        ${SLOTS.map(([t, m], i) => `<button type="button" class="slot" role="radio" aria-checked="${state.slot === i}" data-slot="${i}">${CHECK}<b>${t}</b><span>tra ${m} min</span></button>`).join('')}
+      </div>
+    </div>
+    <div class="foot"><button type="button" class="pill pri" ${state.slot < 0 ? 'disabled' : ''}>${PLAY}Avvia timer</button></div>`,
+  timer: () => `
+    <div class="pg timer">
+      <div class="clock">12:47</div>
+      <div class="end">Fine alle 10:45</div>
+      <div class="person ${state.paused ? 'paused' : ''}"><span class="badge" ${state.paused ? '' : 'hidden'}>IN PAUSA</span>
+        <div class="who">Giulia</div>
+        <button type="button" class="rnd" aria-label="Meno un minuto">−</button><div class="left">01:24</div><button type="button" class="rnd" aria-label="Più un minuto">+</button>
+        <button type="button" class="rnd go" data-pause aria-label="${state.paused ? 'Riprendi il turno' : 'Metti in pausa il turno'}">${state.paused ? PLAY : PAUSE}</button>
+      </div>
+      <div class="chips"><span class="chip">Marco</span><span class="chip now">Giulia</span><span class="chip">Sara</span><span class="chip">Luca</span><span class="chip">+2</span></div>
+      <div class="tbar"><button type="button" class="pill out">Turni di parola</button><button type="button" class="pill out">Stop</button></div>
+    </div>`,
+};
+
+const $ = id => document.getElementById(id);
+const wins = [...document.querySelectorAll('.win')];
+let current = 0;
+
+// Sidebar
+for (const [i, o] of OPTIONS.entries()) {
+  const li = document.createElement('li');
+  li.innerHTML = `<button type="button" class="opt-btn" data-i="${i}">
+      <span class="mini" style="background:${o.p.page}" aria-hidden="true"><i style="background:${o.p['timer-title']}"></i><i style="background:${o.p.surface}"></i><b style="background:${o.p.brand}"></b></span>
+      <span><span class="nm">${o.name}</span><span class="tg">${o.tag}</span></span></button>`;
+  $(o.mode === 'light' ? 'nav-light' : 'nav-dark').appendChild(li);
+}
+document.querySelectorAll('.opt-btn').forEach(b => b.addEventListener('click', () => show(+b.dataset.i)));
+
+function paintScreens() {
+  for (const w of wins) w.innerHTML = SCREENS[w.dataset.screen]();
+}
+
+function show(i, push = true) {
+  current = (i + OPTIONS.length) % OPTIONS.length;
+  const o = OPTIONS[current];
+  const vars = Object.entries(o.p).map(([k, v]) => `--${k}:${v}`).join(';');
+  for (const w of wins) {
+    w.parentElement.setAttribute('style', vars); // on the stage, so the window keeps its scale
+    w.setAttribute('aria-label', `${o.name}, modalità ${o.mode === 'light' ? 'chiara' : 'scura'}`);
+  }
+  $('o-mode').textContent = o.mode === 'light' ? 'Modalità chiara' : 'Modalità scura';
+  $('o-name').textContent = o.name;
+  $('o-text').innerHTML = o.text;
+  $('o-flag').hidden = !o.flag;
+  $('o-flag').textContent = o.flag || '';
+  $('o-swatches').innerHTML = (o.swatches || []).map(([label, key]) =>
+    `<span class="swatch"><i style="background:${o.p[key]}"></i>${label} <code>${o.p[key]}</code></span>`).join('');
+  $('o-checks').textContent = o.checks || '';
+  $('o-tokens').innerHTML = Object.entries(o.p).map(([k, v]) =>
+    `<div><i style="background:${v}"></i>${TOKEN_LABELS[k] || k}<span>${v}</span></div>`).join('');
+  document.querySelectorAll('.opt-btn').forEach(b => b.setAttribute('aria-current', String(+b.dataset.i === current)));
+  document.title = `${o.name} (${o.mode === 'light' ? 'chiaro' : 'scuro'}) · Tema OpenMove`;
+  if (push) history.replaceState(null, '', '#' + o.id);
+}
+
+// Interactions inside the mockups: the same state is shared by every option.
+document.getElementById('screens').addEventListener('click', e => {
+  const daily = e.target.closest('[data-daily]');
+  const slot = e.target.closest('[data-slot]');
+  const pause = e.target.closest('[data-pause]');
+  if (!daily && !slot && !pause) return;
+  let focusSel = null;
+  if (daily) { const i = +daily.dataset.daily; state.daily[i] = !state.daily[i]; focusSel = `[data-daily="${i}"]`; }
+  if (slot) { state.slot = +slot.dataset.slot; focusSel = `[data-slot="${state.slot}"]`; }
+  if (pause) { state.paused = !state.paused; focusSel = '[data-pause]'; }
+  const win = e.target.closest('.win');
+  paintScreens();
+  win.querySelector(focusSel)?.focus();
+});
+
+$('prev').addEventListener('click', () => show(current - 1));
+$('next').addEventListener('click', () => show(current + 1));
+document.addEventListener('keydown', e => {
+  if (e.altKey || e.ctrlKey || e.metaKey) return;
+  if (e.target.closest('.win')) return;
+  if (e.key === 'ArrowRight') { show(current + 1); e.preventDefault(); }
+  if (e.key === 'ArrowLeft') { show(current - 1); e.preventDefault(); }
+});
+window.addEventListener('hashchange', () => {
+  const i = OPTIONS.findIndex(o => '#' + o.id === location.hash);
+  if (i >= 0 && i !== current) show(i, false);
+});
+
+const ro = new ResizeObserver(entries => {
+  for (const e of entries) e.target.querySelector('.win').style.transform = `scale(${e.contentRect.width / 760})`;
+});
+document.querySelectorAll('.stage').forEach(s => ro.observe(s));
+
+paintScreens();
+const start = OPTIONS.findIndex(o => '#' + o.id === location.hash);
+show(start >= 0 ? start : 1, start < 0);
+</script>
+</body>
+</html>

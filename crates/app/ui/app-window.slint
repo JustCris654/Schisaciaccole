@@ -1,6 +1,6 @@
 import { ThemedButton, CompactButton, ThemedField, ScrollList } from "editor-controls.slint";
-import { ListView, AboutSlint } from "std-widgets.slint";
-import { AppTheme, AppText, PageTitle, PageSub, PillButton, PillKind, PlayIcon, StopIcon, PauseIcon, SkipIcon, HomeIcon, PeopleIcon, EyeOffIcon, ChevronIcon, StepIcon, DotsIcon, LogoutIcon, LogoMark, FadeFill, FocusRing, AppMotion, MotionProgress } from "theme.slint";
+import { ListView, AboutSlint, Palette } from "std-widgets.slint";
+import { AppTheme, AppText, PageTitle, PageSub, PillButton, PillKind, PlayIcon, StopIcon, PauseIcon, SkipIcon, HomeIcon, PeopleIcon, EyeOffIcon, ChevronIcon, StepIcon, DotsIcon, LogoutIcon, LogoMark, FadeFill, FocusRing, AppMotion, MotionProgress, ThemePalette } from "theme.slint";
 
 import "../assets/fonts/MomoTrustDisplay/MomoTrustDisplay-Regular.ttf";
 import "../assets/fonts/Manrope/static/Manrope-Bold.ttf";
@@ -29,7 +29,7 @@ export struct MeetingRow {
 
 component BrandMark inherits LogoMark {
     bubble: AppTheme.dark ? AppTheme.text-brand : AppTheme.brand;
-    hands: AppTheme.dark ? AppTheme.page : #FFFFFF;
+    hands: AppTheme.dark ? AppTheme.page : AppTheme.on-brand;
 }
 
 component NavTab inherits Rectangle {
@@ -132,6 +132,7 @@ component Navigation inherits Rectangle {
     callback manual();
     callback meetings();
     callback logout();
+    callback settings();
     private property <bool> narrow: root.width < 820px;
     private property <length> side: root.narrow ? 20px : 24px;
     background: AppTheme.page;
@@ -167,19 +168,19 @@ component Navigation inherits Rectangle {
             clicked => { root.meetings(); }
         }
     }
-    if root.signed-in : NavIconButton {
+    NavIconButton {
         x: root.width - root.side - self.width;
         y: root.narrow ? 59px : 18px;
-        accessible-name: "Menu account";
+        accessible-name: "Menu";
         clicked => { menu.show(); }
         DotsIcon { width: parent.width; height: parent.height; tint: AppTheme.text; }
     }
 
     menu := PopupWindow {
-        x: root.width - root.side - 200px;
+        x: root.width - root.side - 220px;
         y: root.narrow ? 107px : 66px;
-        width: 200px;
-        height: 65px;
+        width: 220px;
+        height: root.signed-in ? 120px : 68px;
         Rectangle {
             background: AppTheme.page;
             border-radius: AppTheme.radius-card;
@@ -187,37 +188,21 @@ component Navigation inherits Rectangle {
             border-color: AppTheme.border-subtle;
             drop-shadow-blur: 24px;
             drop-shadow-offset-y: 8px;
-            drop-shadow-color: #1E1A2629;
+            drop-shadow-color: AppTheme.shadow;
             VerticalLayout {
                 padding: 8px;
-                Rectangle {
-                    border-radius: AppTheme.radius-item;
-                    accessible-role: button;
-                    accessible-label: "Logout";
-                    accessible-action-default => { root.logout(); }
-                    FadeFill {
-                        width: parent.width;
-                        height: parent.height;
-                        border-radius: AppTheme.radius-item;
-                        target: item-touch.has-hover ? AppTheme.surface : AppTheme.surface.transparentize(1);
-                    }
-                    HorizontalLayout {
-                        padding: 12px;
-                        spacing: 12px;
-                        VerticalLayout {
-                            alignment: center;
-                            LogoutIcon { width: 20px; height: 20px; }
-                        }
-                        Text {
-                            text: "Logout";
-                            color: AppTheme.text;
-                            font-size: 15px;
-                            font-weight: 400;
-                            vertical-alignment: center;
-                            accessible-role: none;
-                        }
-                    }
-                    item-touch := TouchArea { clicked => { root.logout(); } }
+                spacing: 4px;
+                ThemedButton {
+                    text: "Impostazioni";
+                    bare: true;
+                    horizontal-stretch: 1;
+                    clicked => { menu.close(); root.settings(); }
+                }
+                if root.signed-in : ThemedButton {
+                    text: "Logout";
+                    bare: true;
+                    horizontal-stretch: 1;
+                    clicked => { menu.close(); root.logout(); }
                 }
             }
         }
@@ -245,14 +230,14 @@ component SlotCard inherits Rectangle {
         width: parent.width;
         height: parent.height;
         border-radius: AppTheme.radius-card;
-        target: root.selected ? AppTheme.brand : AppTheme.surface;
+        target: root.selected ? AppTheme.selection : AppTheme.surface;
     }
     Rectangle {
         width: parent.width;
         height: parent.height;
         border-radius: AppTheme.radius-card;
         border-width: 1px;
-        border-color: root.selected ? AppTheme.brand
+        border-color: root.selected ? AppTheme.selection
             : (touch.has-hover ? AppTheme.text-brand : AppTheme.border-subtle);
     }
     VerticalLayout {
@@ -264,7 +249,7 @@ component SlotCard inherits Rectangle {
             font-weight: 400;
             letter-spacing: -0.6px;
             horizontal-alignment: center;
-            color: root.selected ? AppTheme.on-brand : AppTheme.text;
+            color: root.selected ? AppTheme.selection-text : AppTheme.text;
             accessible-role: none;
         }
         Text {
@@ -272,7 +257,7 @@ component SlotCard inherits Rectangle {
             font-size: 15px;
             font-weight: 400;
             horizontal-alignment: center;
-            color: root.selected ? #F1E8FF : AppTheme.text-secondary;
+            color: root.selected ? AppTheme.selection-text : AppTheme.text-secondary;
             accessible-role: none;
         }
     }
@@ -283,7 +268,7 @@ component SlotCard inherits Rectangle {
         height: 15px;
         viewbox-width: 16;
         viewbox-height: 16;
-        stroke: AppTheme.on-brand;
+        stroke: AppTheme.selection-text;
         stroke-width: 2px;
         stroke-line-cap: round;
         stroke-line-join: round;
@@ -440,10 +425,10 @@ component DailySwitch inherits Rectangle {
                     width: 20px;
                     height: 20px;
                     border-radius: 10px;
-                    background: #FFFFFF;
+                    background: AppTheme.on-brand;
                     drop-shadow-blur: 3px;
                     drop-shadow-offset-y: 1px;
-                    drop-shadow-color: #1E1A2640;
+                    drop-shadow-color: AppTheme.shadow;
                     animate x { duration: AppMotion.reduced ? 0ms : 150ms; }
                 }
                 if focus.has-focus : FocusRing { host-width: track.width; host-height: track.height; corner-radius: 13px; }
@@ -484,7 +469,7 @@ component DailyTooltip inherits Rectangle {
         background: AppTheme.danger;
         drop-shadow-blur: 24px;
         drop-shadow-offset-y: 8px;
-        drop-shadow-color: #1E1A2633;
+        drop-shadow-color: AppTheme.shadow;
         Text {
             x: 12px;
             y: 10px;
@@ -595,7 +580,9 @@ component EditorPage inherits Rectangle {
                 Rectangle {
                     height: 52px;
                     border-radius: 8px;
-                    background: AppTheme.surface;
+                    background: AppTheme.list-row;
+                    border-width: 2px;
+                    border-color: AppTheme.list-row-border;
                     HorizontalLayout {
                         padding-left: 8px;
                         padding-right: 8px;
@@ -620,6 +607,7 @@ component EditorPage inherits Rectangle {
                             ThemedField {
                                 text <=> row.label;
                                 placeholder-text: "Nome partecipante";
+                                focus-background: AppTheme.list-row;
                                 accessible-name: "Nome del partecipante " + (index + 1);
                                 opacity: row.included ? 1 : 0.6;
                                 edited(text) => { root.set-label(index, text); }
@@ -786,7 +774,7 @@ component MeetingsPage inherits Rectangle {
                             if row.attendees-warning : Text {
                                 text: "Lista partecipanti incompleta";
                                 font-size: 12px;
-                                color: AppTheme.timer-title;
+                                color: AppTheme.surface-accent;
                                 wrap: word-wrap;
                             }
                             HorizontalLayout {
@@ -797,7 +785,7 @@ component MeetingsPage inherits Rectangle {
                                         width: 8px;
                                         height: 8px;
                                         border-radius: 4px;
-                                        background: AppTheme.orange;
+                                        background: AppTheme.turn-text;
                                     }
                                 }
                                 Text {
@@ -961,7 +949,7 @@ component StepButton inherits Rectangle {
     FadeFill {
         width: parent.width;
         height: parent.height;
-        target: touch.has-hover && root.enabled ? AppTheme.orange-soft : AppTheme.orange-soft.transparentize(1);
+        target: touch.has-hover && root.enabled ? AppTheme.turn-soft : AppTheme.turn-soft.transparentize(1);
     }
     StepIcon {
         x: (parent.width - self.width) / 2;
@@ -1027,7 +1015,7 @@ component Stepper inherits Rectangle {
         height: parent.height;
         border-radius: self.height / 2;
         border-width: 2px;
-        border-color: AppTheme.orange-tint;
+        border-color: AppTheme.turn-tint;
     }
 }
 
@@ -1037,7 +1025,7 @@ component SoftRoundButton inherits Rectangle {
     in property <bool> enabled: true;
     in property <string> label;
     out property <length> icon-size: root.compact ? 14px : 22px;
-    out property <color> icon-color: touch.has-hover && root.enabled ? #FFFFFF : AppTheme.orange;
+    out property <color> icon-color: touch.has-hover && root.enabled ? AppTheme.on-turn : AppTheme.turn-text;
     callback clicked();
     forward-focus: focus;
     width: root.compact ? 30px : 46px;
@@ -1054,7 +1042,7 @@ component SoftRoundButton inherits Rectangle {
         width: parent.width;
         height: parent.height;
         border-radius: self.height / 2;
-        target: touch.has-hover && root.enabled ? AppTheme.orange : AppTheme.orange-tint;
+        target: touch.has-hover && root.enabled ? AppTheme.turn : AppTheme.turn-tint;
     }
     HorizontalLayout {
         alignment: center;
@@ -1114,7 +1102,7 @@ component TurnSelect inherits Rectangle {
         height: parent.height;
         border-radius: self.height / 2;
         border-width: 2px;
-        border-color: AppTheme.orange-tint;
+        border-color: AppTheme.turn-tint;
     }
     Text {
         x: root.compact ? 10px : 14px;
@@ -1168,7 +1156,7 @@ component TurnSelect inherits Rectangle {
             border-color: AppTheme.border-subtle;
             drop-shadow-blur: 24px;
             drop-shadow-offset-y: 8px;
-            drop-shadow-color: #1E1A2629;
+            drop-shadow-color: AppTheme.shadow;
             keys := FocusScope {
                 key-pressed(event) => {
                     if (event.text == Key.DownArrow) {
@@ -1198,7 +1186,7 @@ component TurnSelect inherits Rectangle {
                     for name[i] in root.names : Rectangle {
                         height: root.item-height;
                         border-radius: root.compact ? 8px : AppTheme.radius-item;
-                        background: item-touch.has-hover || i == root.highlight ? AppTheme.surface : #FFFFFF00;
+                        background: item-touch.has-hover || i == root.highlight ? AppTheme.surface : transparent;
                         accessible-role: list-item;
                         accessible-label: name;
                         Text {
@@ -1231,7 +1219,7 @@ component TurnBar inherits Rectangle {
     callback picked(int);
     callback minutes-delta(int);
     callback start();
-    background: AppTheme.orange-soft;
+    background: AppTheme.turn-soft;
     border-radius: root.compact ? 12px : AppTheme.radius-card;
     preferred-width: row.preferred-width;
     min-width: row.min-width;
@@ -1303,7 +1291,7 @@ component PersonBar inherits Rectangle {
     in property <duration> warn-under: 60s;
     in property <length> name-max: 260px;
     callback time-delta(int);
-    background: AppTheme.orange-soft;
+    background: AppTheme.turn-soft;
     border-radius: root.compact ? 12px : AppTheme.radius-card;
     preferred-width: row.preferred-width;
     min-width: row.min-width;
@@ -1346,7 +1334,7 @@ component PersonBar inherits Rectangle {
                             seconds: root.seconds;
                             dashes: root.dashes;
                             size: root.compact ? 13px : 18px;
-                            tint: root.left < root.warn-under && !root.dashes ? AppTheme.orange : AppTheme.text;
+                            tint: root.paused ? AppTheme.timer-paused : (root.left < root.warn-under && !root.dashes ? AppTheme.timer-warning : AppTheme.text);
                         }
                     }
                 }
@@ -1432,7 +1420,7 @@ component TimerPage inherits Rectangle {
             seconds: max(0, ceil(root.timer-time / 1s));
             size: root.compact && !root.plain ? 54px : (root.compact ? 84px : clamp(72px, root.width * 0.16, 160px));
             avail: root.width - 2 * root.side;
-            tint: root.timer-time < 150s ? AppTheme.orange : AppTheme.timer-title;
+            tint: root.timer-time <= 0s ? AppTheme.timer-expired : (root.timer-time < 150s ? AppTheme.timer-warning : AppTheme.timer-normal);
         }
         if root.plain : Rectangle { height: root.compact ? 4px : 12px; }
         if root.plain : Text {
@@ -1670,7 +1658,7 @@ component FinishedPage inherits Rectangle {
             delay: 0ms;
             area-width: root.width;
             area-height: root.height;
-            tint: i < 0 ? #000000 : (mod(i, 5) == 0 ? #6B2FBF : (mod(i, 5) == 1 ? #E07B00 : (mod(i, 5) == 2 ? #F6C453 : (mod(i, 5) == 3 ? #C9B3F0 : (AppTheme.dark ? #F3EFF9 : #1E1A26)))));
+            tint: mod(i, 5) == 0 ? AppTheme.decoration-one : (mod(i, 5) == 1 ? AppTheme.decoration-two : (mod(i, 5) == 2 ? AppTheme.decoration-three : (mod(i, 5) == 3 ? AppTheme.decoration-four : AppTheme.decoration-five)));
         }
         for i in 40 : ConfettiPiece {
             index: 200 + i;
@@ -1678,7 +1666,7 @@ component FinishedPage inherits Rectangle {
             delay: 1800ms + i * 155ms;
             area-width: root.width;
             area-height: root.height;
-            tint: mod(i, 5) == 0 ? #6B2FBF : (mod(i, 5) == 1 ? #E07B00 : (mod(i, 5) == 2 ? #F6C453 : (mod(i, 5) == 3 ? #C9B3F0 : (AppTheme.dark ? #F3EFF9 : #1E1A26))));
+            tint: mod(i, 5) == 0 ? AppTheme.decoration-one : (mod(i, 5) == 1 ? AppTheme.decoration-two : (mod(i, 5) == 2 ? AppTheme.decoration-three : (mod(i, 5) == 3 ? AppTheme.decoration-four : AppTheme.decoration-five)));
         }
     }
 
@@ -1747,7 +1735,27 @@ component FinishedPage inherits Rectangle {
     }
 }
 
+// This unshown root retains the native Palette binding, independent of mode overrides.
+export component SystemAppearanceObserver inherits Window {
+    out property <ColorScheme> native-scheme: Palette.color-scheme;
+    callback scheme-changed(ColorScheme);
+    changed native-scheme => { root.scheme-changed(root.native-scheme); }
+}
+
 export component MainWindow inherits Window {
+    in-out property <ColorScheme> system-color-scheme <=> AppTheme.system-color-scheme;
+    function sync-widget-scheme() {
+        Palette.color-scheme = root.appearance-mode == 1 ? ColorScheme.light
+            : (root.appearance-mode == 2 ? ColorScheme.dark : root.system-color-scheme);
+    }
+    init => { root.sync-widget-scheme(); }
+    changed appearance-mode => { root.sync-widget-scheme(); }
+    changed system-color-scheme => { root.sync-widget-scheme(); }
+
+    in-out property <ThemePalette> light-palette <=> AppTheme.light-palette;
+    in-out property <ThemePalette> dark-palette <=> AppTheme.dark-palette;
+    in-out property <int> appearance-mode <=> AppTheme.appearance-mode;
+
     title: "Schisaciaccole";
     background: AppTheme.page;
     icon: @image-url("../assets/icon_256.png");
@@ -1757,6 +1765,13 @@ export component MainWindow inherits Window {
     min-height: root.timer-mode ? 240px : 600px;
     default-font-family: "Momo Trust Display";
     forward-focus: scope;
+
+    in property <[string]> theme-options;
+    in property <int> theme-choice;
+    in property <string> theme-notice;
+    private property <bool> settings-open;
+    callback select-theme(int);
+    callback select-appearance(int);
 
     in-out property <bool> on-top: false;
     always-on-top: on-top;
@@ -1855,7 +1870,7 @@ export component MainWindow inherits Window {
     callback next-daily-speaker();
     callback adjust-daily-time(int);
 
-    changed page => { page-fade.restart(); scope.focus(); }
+    changed page => { root.settings-open = false; page-fade.restart(); scope.focus(); }
 
     if is-macos: MenuBar {
 	Menu {
@@ -1909,8 +1924,12 @@ export component MainWindow inherits Window {
                 Navigation {
                     meetings-page: root.page == Page.MeetingsPage;
                     signed-in: root.signed-in;
-                    manual => { root.set-manual-page(); }
+                    manual => {
+                        root.settings-open = false;
+                        root.set-manual-page();
+                    }
                     meetings => {
+                        root.settings-open = false;
                         if (root.page == Page.MeetingsPage) {
                             root.refresh-meetings();
                         } else {
@@ -1918,8 +1937,69 @@ export component MainWindow inherits Window {
                         }
                     }
                     logout => { root.logout(); }
+                    settings => { root.settings-open = true; }
                 }
-                if page == Page.ManualPage : ManualPage {
+                if root.settings-open : VerticalLayout {
+                    padding: 32px;
+                    spacing: 20px;
+                    PageTitle { text: "Impostazioni"; }
+                    ScrollList {
+                        vertical-stretch: 1;
+                        VerticalLayout {
+                            spacing: 14px;
+                            PageSub { text: "Tema"; color: AppTheme.timer-title; }
+                            AppText { text: "Colori"; font-size: 15px; }
+                            GridLayout {
+                                spacing: 8px;
+                                // Equal columns: the cell, not the label, decides the width.
+                                for option[index] in root.theme-options : Rectangle {
+                                    row: floor(index / 2);
+                                    col: mod(index, 2);
+                                    horizontal-stretch: 1;
+                                    preferred-width: 0px;
+                                    min-width: 0px;
+                                    height: 44px;
+                                    ThemedButton {
+                                        width: parent.width;
+                                        height: parent.height;
+                                        text: option;
+                                        primary: root.theme-choice == index;
+                                        checkable: true;
+                                        checked: root.theme-choice == index;
+                                        clicked => { root.select-theme(index); }
+                                    }
+                                }
+                            }
+                            AppText { text: "Modalità"; font-size: 15px; }
+                            HorizontalLayout {
+                                spacing: 12px;
+                                for label[index] in ["Sistema", "Chiaro", "Scuro"] : ThemedButton {
+                                    text: label;
+                                    primary: root.appearance-mode == index;
+                                    checkable: true;
+                                    checked: root.appearance-mode == index;
+                                    clicked => { root.select-appearance(index); }
+                                }
+                                Rectangle { horizontal-stretch: 1; }
+                            }
+                            if root.theme-notice != "" : AppText {
+                                text: root.theme-notice;
+                                color: AppTheme.error;
+                                font-size: 12px;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+                    HorizontalLayout {
+                        PillButton {
+                            text: "Indietro";
+                            kind: PillKind.outline;
+                            clicked => { root.settings-open = false; }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                }
+                if !root.settings-open && page == Page.ManualPage : ManualPage {
                     current-time: root.current-time;
                     options: root.options;
                     selected-slot: root.selected-slot;
@@ -1927,7 +2007,7 @@ export component MainWindow inherits Window {
                     select-slot(index) => { root.select-slot(index); }
                     start-timer => { root.start-selected(); }
                 }
-                if page == Page.MeetingsPage : MeetingsPage {
+                if !root.settings-open && page == Page.MeetingsPage : MeetingsPage {
                     account-name: root.account-name;
                     meetings: root.meetings;
                     loading: root.meetings-loading;
@@ -2083,7 +2163,7 @@ export component MainWindow inherits Window {
         height: 8px;
         x: root.width - 12px;
         y: 4px;
-        background: AppTheme.orange;
+        background: AppTheme.decoration-two;
         border-radius: 4px;
     }
 }
@@ -2096,7 +2176,7 @@ component KeyChip inherits Rectangle {
     background: AppTheme.surface;
     Text {
         text: root.key;
-        color: AppTheme.text-brand;
+        color: AppTheme.surface-accent;
         font-size: 16px;
         font-weight: 400;
         horizontal-alignment: center;
@@ -2105,6 +2185,19 @@ component KeyChip inherits Rectangle {
 }
 
 export component Help inherits Window {
+    in-out property <ColorScheme> system-color-scheme <=> AppTheme.system-color-scheme;
+    function sync-widget-scheme() {
+        Palette.color-scheme = root.appearance-mode == 1 ? ColorScheme.light
+            : (root.appearance-mode == 2 ? ColorScheme.dark : root.system-color-scheme);
+    }
+    init => { root.sync-widget-scheme(); }
+    changed appearance-mode => { root.sync-widget-scheme(); }
+    changed system-color-scheme => { root.sync-widget-scheme(); }
+
+    in-out property <ThemePalette> light-palette <=> AppTheme.light-palette;
+    in-out property <ThemePalette> dark-palette <=> AppTheme.dark-palette;
+    in-out property <int> appearance-mode <=> AppTheme.appearance-mode;
+
     title: "Schisaciaccole · Scorciatoie";
     background: AppTheme.page;
     preferred-width: 640px;

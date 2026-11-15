@@ -17,5 +17,6 @@ Quando codice e documentazione divergono, vale il codice.
 ## Design
 
 - [Preferenze dei meeting senza pesi, editor locale](./design/preferenze-meeting/design.md) (accepted): dati tutti dalla lista, editor locale con bozza per evento, preferenze senza pesi
+- [Temi selezionabili: quattro temi, chiaro e scuro, predefinito di build](./design/temi/design.md) (accepted): catalogo guidato dai dati, tre temi OpenMove, scelta locale e predefinito a compilazione
 
 Le convenzioni sono in [`design/README.md`](./design/README.md).
