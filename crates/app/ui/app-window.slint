@@ -580,7 +580,9 @@ component EditorPage inherits Rectangle {
                 Rectangle {
                     height: 52px;
                     border-radius: 8px;
-                    background: AppTheme.surface;
+                    background: AppTheme.list-row;
+                    border-width: 2px;
+                    border-color: AppTheme.list-row-border;
                     HorizontalLayout {
                         padding-left: 8px;
                         padding-right: 8px;
@@ -605,6 +607,7 @@ component EditorPage inherits Rectangle {
                             ThemedField {
                                 text <=> row.label;
                                 placeholder-text: "Nome partecipante";
+                                focus-background: AppTheme.list-row;
                                 accessible-name: "Nome del partecipante " + (index + 1);
                                 opacity: row.included ? 1 : 0.6;
                                 edited(text) => { root.set-label(index, text); }

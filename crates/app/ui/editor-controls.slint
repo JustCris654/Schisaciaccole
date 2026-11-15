@@ -129,6 +129,7 @@ export component ThemedField inherits Rectangle {
     in property <string> placeholder-text;
     out property <bool> has-focus: input.has-focus;
     in property <int> font-weight: 700;
+    in property <color> focus-background: AppTheme.surface;
     in property <TextHorizontalAlignment> horizontal-alignment: left;
     callback edited(string);
     forward-focus: input;
@@ -137,7 +138,7 @@ export component ThemedField inherits Rectangle {
     border-radius: 4px;
     border-width: input.has-focus ? 1px : 0px;
     border-color: AppTheme.focus;
-    background: input.has-focus ? AppTheme.surface : transparent;
+    background: input.has-focus ? root.focus-background : transparent;
     clip: true;
 
     if root.text == "" && root.placeholder-text != "" : Text {
