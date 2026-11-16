@@ -1,0 +1,17 @@
+---
+status: proposed
+updated: 2026-11-16
+---
+
+# Piano di implementazione: aggiornamento automatico
+
+Il design resta `proposed` fino all’approvazione dell’utente. Il confronto tra agenti è concluso con la proposta D: swap atomico supportato dal volume e vecchia app sorvegliante, secondo clic esplicito e rischio residuo dichiarato. Nessuna implementazione è avviata da questo piano. Ogni passo è un commit atomico. Dopo ognuno passano `cargo fmt --all --check`, `cargo build --workspace`, i test con `DATABASE_URL` e `cargo clippy --workspace --all-targets -- -D warnings`. I messaggi di commit descrivono la modifica, senza riferimenti a questo piano.
+
+| # | Commit | Contenuto | Agente e modello |
+| --- | --- | --- | --- |
+| 1 | `ci: publish SHA256SUMS and bake the update repository` | `release.yml`: `SCHISACIACCOLE_UPDATE_REPO` nei job `deb`, `arch` (anche attraverso `sudo env`) e `macos`; `SHA256SUMS` generato e allegato nel job `release`; aggiungere clippy a `macos-check` in `ci.yml`, che oggi esegue check/test senza clippy. | `ci-release`, sonnet: workflow e build Arch richiedono attenzione ai dettagli. |
+| 2 | `feat(app): show an update button linking to the newest release` | Modulo `updater.rs` con configurazione, controllo automatico all’avvio e manuale dal menu solo Manuale/Meeting; cache locale automatica 6 ore per repo/versione installata, manuale forza rete rispettando `Retry-After`/reset, worker unico ed esito manuale esplicito; funzioni pure testate; stato in `AppState` incluso `Checking`; pulsante in `Navigation` che apre `html_url` su tutte le piattaforme; dipendenza `semver`. | `desktop-dev`, sonnet: Rust e Slint su più file. |
+| 3 | `feat(app): install macOS updates in place and relaunch` | Download SHA-256 con `Downloading(Option<u8>)`; ZIP Rust validante e confinato prima/durante scrittura, niente symlink MVP, permessi eseguibili, default 1 GiB/10.000 entry da validare su asset firmato; firma/trust e compatibilità Mach-O/macOS. `ReadyToInstall` solo home e secondo clic esplicito con guardia UI idle. Lock stabile/CLOEXEC, stato minimo durevole e `RENAME_SWAP` supportato dal volume (altrimenti release); vecchia app sorvegliante, figlio `Command`/`Child`, conferma nonce UI pronta entro 30s, kill/wait solo figlio vivo prima rollback, mai kill dopo exit status da `try_wait`. Backup/stato conservati sugli errori e su crash ambiguo; nessun recovery helper indipendente MVP. Test simulati cross-platform e smoke Mac inclusi foreground/TCC/portachiavi, lock non ereditato e asset reale. Dipendenze ZIP/Mach-O/API native da scegliere. | `desktop-dev`, sonnet: file system, processi e gestione errori, con revisione attenta da parte dell'orchestratore. Opus solo se la prima consegna non regge la revisione. |
+| 4 | `docs: document the in-app update` | `README.md` (fonte locale per comportamento/build/release), guida delle schermate e documento del team se accessibile. Passare il design ad `accepted` solo dopo approvazione esplicita; nessun cambio di stato automatico per aver scritto documentazione. | `docs-keeper`, sonnet. |
+
+Le transizioni del passo 3 si provano anche su Linux attraverso operazioni simulate e fault injection. Gli adattatori macOS richiedono il job macOS (check/test attuali, clippy da aggiungere nel futuro lavoro CI) e uno smoke funzionale su un Mac vero prima del merge, inclusi timeout/rollback con sorvegliante vivo, conservazione del backup dopo crash e verifiche foreground/TCC/portachiavi (vedi [Test](./design.md#test)). Questo aggiornamento del piano non modifica alcun workflow.

@@ -13,4 +13,4 @@ The server uses SQLx with PostgreSQL 17. Read the affected store/query, numbered
 
 Development tests use `#[sqlx::test]` and require a role that can create temporary databases. Use only the intended development/test database for validation. Never connect to or mutate a live database without scope authorizing it.
 
-After query/migration changes, apply migrations to the development database with `sqlx migrate run --source crates/server/migrations`, run `cargo sqlx prepare --workspace`, and include `.sqlx/`. CI uses offline builds and `cargo sqlx prepare --workspace --check`. Use the CLI version/install command documented in `README.org`.
+After query/migration changes, apply migrations to the development database with `sqlx migrate run --source crates/server/migrations`, run `cargo sqlx prepare --workspace`, and include `.sqlx/`. CI uses offline builds and `cargo sqlx prepare --workspace --check`. Use the CLI version/install command documented in `README.md`.

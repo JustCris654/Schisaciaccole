@@ -2,7 +2,7 @@
 paths:
   - "crates/**"
   - "deploy/**"
-  - "README.org"
+  - "README.md"
   - "glossary/**"
   - ".env.example"
   - "Dockerfile*"
