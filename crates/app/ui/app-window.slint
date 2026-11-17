@@ -1875,6 +1875,8 @@ export component MainWindow inherits Window {
     callback next-daily-speaker();
     callback adjust-daily-time(int);
 
+    changed settings-open => { if (!root.settings-open) { scope.focus(); } }
+
     changed page => { root.settings-open = false; page-fade.restart(); scope.focus(); }
 
     if is-macos: MenuBar {
