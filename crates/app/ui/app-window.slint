@@ -3,7 +3,7 @@ import { ListView, AboutSlint, Palette } from "std-widgets.slint";
 import { AppTheme, AppText, PageTitle, PageSub, PillButton, PillKind, PlayIcon, StopIcon, PauseIcon, SkipIcon, HomeIcon, PeopleIcon, EyeOffIcon, ChevronIcon, StepIcon, DotsIcon, LogoutIcon, LogoMark, FadeFill, FocusRing, AppMotion, MotionProgress, ThemePalette } from "theme.slint";
 
 import "../assets/fonts/MomoTrustDisplay/MomoTrustDisplay-Regular.ttf";
-import "../assets/fonts/Manrope/static/Manrope-Bold.ttf";
+import "../assets/fonts/Fredoka/Fredoka-SemiBold.ttf";
 
 export enum Page { ManualPage, TimerPage, TimerFinished, LoadingPage, LoginPage, MeetingsPage, EditorPage }
 export enum StopType { TimerFinished, UserStopped }
@@ -848,24 +848,24 @@ component MeetingsPage inherits Rectangle {
 }
 
 // One fixed-width cell of the countdown, so the digits never shift while they tick.
-// Text clips to its box, so a cell must stay wider than its glyph. Manrope Bold digits are at
-// most 0.52 em wide, which leaves a gap inside the 0.6 em cell. The colon is raised to the
+// Text clips to its box, so a cell must stay wider than its glyph. Fredoka SemiBold digits are at
+// most 0.58 em wide, which leaves a gap inside the 0.64 em cell. The colon is raised to the
 // middle of the digit height.
 component ClockCell inherits Rectangle {
     in property <string> glyph;
     in property <bool> colon;
     in property <length> size;
     in property <color> tint;
-    width: root.colon ? root.size * 0.28 : root.size * 0.6;
+    width: root.colon ? root.size * 0.28 : root.size * 0.64;
     height: root.size;
     Text {
         width: parent.width;
         height: parent.height;
         y: root.colon ? -root.size * 0.1 : 0px;
         text: root.glyph;
-        font-family: "Manrope";
+        font-family: "Fredoka";
         font-size: root.size;
-        font-weight: 700;
+        font-weight: 600;
         color: root.tint;
         horizontal-alignment: center;
         vertical-alignment: center;
@@ -882,7 +882,7 @@ component ClockText inherits Rectangle {
     private property <int> hours: floor(root.seconds / 3600);
     private property <int> minutes: mod(floor(root.seconds / 60), 60);
     private property <int> secs: mod(root.seconds, 60);
-    private property <length> fitted: min(root.size, root.avail / (root.hours > 0 ? 4.3 : 2.8));
+    private property <length> fitted: min(root.size, root.avail / (root.hours > 0 ? 4.6 : 3.0));
     height: root.fitted;
     horizontal-stretch: 1;
 
