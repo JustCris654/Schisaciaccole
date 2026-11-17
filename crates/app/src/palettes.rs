@@ -250,7 +250,7 @@ fn openmove_2_dark() -> ThemePalette {
         error: color(0xFFB4ABFF),
         danger: color(0x4A47F7FF),
         on_danger: color(0xFFFFFFFF),
-        timer_normal: color(0xFFFFFFFF),
+        timer_normal: color(0xCBF02CFF),
         timer_paused: color(0xE2E1FFFF),
         timer_warning: color(0xF1E600FF),
         timer_expired: color(0xFFB4ABFF),
