@@ -2,7 +2,7 @@
 
 Guidance for Claude Code (claude.ai/code) in this repository.
 
-Schisaciaccole is a Slint desktop countdown for time-boxed Scrum ceremonies. Workspace crates: `crates/core` (`schisaciaccole-core`), `crates/app` (`schisaciaccole`), `crates/server` (`schisaciaccole-server`, axum). `deploy/` holds the server Dockerfile and Compose (PostgreSQL 17). `README.org` is the local source for behavior, setup, packaging and deployment.
+Schisaciaccole is a Slint desktop countdown for time-boxed Scrum ceremonies. Workspace crates: `crates/core` (`schisaciaccole-core`), `crates/app` (`schisaciaccole`), `crates/server` (`schisaciaccole-server`, axum). `deploy/` holds the server Dockerfile and Compose (PostgreSQL 17). `README.md` is the local source for behavior, setup, packaging and deployment.
 
 ## Project agent context
 
@@ -37,7 +37,7 @@ App built against a backend. The URL is fixed at compile time. Unset means the l
 SCHISACIACCOLE_BACKEND_URL=https://schisaciaccole.example.com cargo run --release -p schisaciaccole
 ```
 
-Server. Copy `.env.example` to `.env` and fill it. `TOKEN_ENC_KEY` is base64 of exactly 32 bytes. `JWT_SIGNING_KEY` is at least 32 characters. Generate both with `openssl rand -base64 32`. Google OAuth setup is in `README.org` under "Backend (local development)". Then:
+Server. Copy `.env.example` to `.env` and fill it. `TOKEN_ENC_KEY` is base64 of exactly 32 bytes. `JWT_SIGNING_KEY` is at least 32 characters. Generate both with `openssl rand -base64 32`. Google OAuth setup is in `README.md` under "Backend (local development)". Then:
 
 ```sh
 docker compose -f deploy/docker-compose.yml up -d db
