@@ -35,7 +35,7 @@ fn main() -> anyhow::Result<()> {
     info!("Starting schisaciaccole");
 
     let main_window = MainWindow::new().context("failed to create the main window")?;
-    let help_windows = configure_visual_preferences(&main_window)?;
+    let (help_windows, preferences) = configure_visual_preferences(&main_window)?;
     let _system_appearance_observer =
         configure_system_appearance(&main_window, help_windows.clone())?;
     let window_weak = main_window.as_weak();
@@ -91,6 +91,7 @@ fn main() -> anyhow::Result<()> {
     main_window.on_start_selected({
         let window_weak = main_window.as_weak();
         let state = app_state.clone();
+        let preferences = preferences.clone();
 
         move || {
             let Some(window) = window_weak.upgrade() else {
@@ -99,13 +100,14 @@ fn main() -> anyhow::Result<()> {
             let mut state = state.borrow_mut();
             let tick_sound = state.start_selected();
             state.render(&window);
-            play_for(tick_sound);
+            play_for(tick_sound, &preferences);
         }
     });
 
     main_window.on_select_meeting({
         let window_weak = main_window.as_weak();
         let state = app_state.clone();
+        let preferences = preferences.clone();
 
         move |index| {
             let Some(window) = window_weak.upgrade() else {
@@ -114,7 +116,7 @@ fn main() -> anyhow::Result<()> {
             let mut state = state.borrow_mut();
             let tick_sound = state.select_meeting(index);
             state.render(&window);
-            play_for(tick_sound);
+            play_for(tick_sound, &preferences);
         }
     });
 
@@ -358,13 +360,14 @@ fn main() -> anyhow::Result<()> {
     main_window.on_editor_start({
         let window_weak = main_window.as_weak();
         let state = app_state.clone();
+        let preferences = preferences.clone();
 
         move || {
             let mut sound = TickSound::None;
             update_state(&window_weak, &state, |state| {
                 sound = state.start_from_editor();
             });
-            play_for(sound);
+            play_for(sound, &preferences);
         }
     });
 
@@ -443,6 +446,7 @@ fn main() -> anyhow::Result<()> {
     main_window.on_tick({
         let window_weak = main_window.as_weak();
         let state = app_state.clone();
+        let preferences = preferences.clone();
 
         move || {
             let Some(window) = window_weak.upgrade() else {
@@ -451,7 +455,7 @@ fn main() -> anyhow::Result<()> {
             let mut state = state.borrow_mut();
             let tick_sound = state.tick();
             state.render(&window);
-            play_for(tick_sound);
+            play_for(tick_sound, &preferences);
         }
     });
 
@@ -598,12 +602,17 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Plays the sound that goes with a tick outcome: the finish sound for the end of the meeting,
-/// nothing otherwise.
-fn play_for(tick_sound: TickSound) {
+/// Plays the sound that goes with a tick outcome: the finish sound (the chosen file, else the
+/// bundled one) for the end of the meeting, a beep for the end of a turn, nothing otherwise.
+///
+/// The chosen file is read at play time, so a settings change applies to the next sound.
+fn play_for(tick_sound: TickSound, preferences: &RefCell<theme::VisualPreferences>) {
     match tick_sound {
         TickSound::None => {}
-        TickSound::MeetingEnd => sound::play_sound(),
+        TickSound::MeetingEnd => {
+            let custom = preferences.borrow().meeting_end_sound.clone();
+            sound::play_sound(custom);
+        }
         TickSound::TurnEnd => sound::play_beep(),
     }
 }
@@ -643,13 +652,18 @@ fn update_state(
     state.render(&window);
 }
 
-/// Loads local visual preferences and installs callbacks without touching meeting state.
+/// Help windows observed for palette and mode changes; expired ones are dropped on render.
+type HelpWindows = Rc<RefCell<Vec<Weak<Help>>>>;
+
+/// Loads local preferences and installs the settings callbacks without touching meeting state.
+///
+/// Returns the observed help windows and the shared preferences, read later at play time.
 ///
 /// # Errors
 /// Returns an error only if the compiled theme identity violates build validation.
 fn configure_visual_preferences(
     window: &MainWindow,
-) -> anyhow::Result<Rc<RefCell<Vec<Weak<Help>>>>> {
+) -> anyhow::Result<(HelpWindows, Rc<RefCell<theme::VisualPreferences>>)> {
     let distribution = theme_catalog::validate_default(Some(env!("SCHISACIACCOLE_COMPILED_THEME")))
         .map_err(anyhow::Error::msg)?;
     let path = theme::preferences_path();
@@ -695,6 +709,8 @@ fn configure_visual_preferences(
     });
     window.on_select_appearance({
         let window = window.as_weak();
+        let preferences = preferences.clone();
+        let path = path.clone();
         let help_windows = help_windows.clone();
         move |index| {
             let (Some(window), Some(mode)) =
@@ -717,7 +733,87 @@ fn configure_visual_preferences(
             );
         }
     });
-    Ok(help_windows)
+    window.on_choose_sound({
+        let window = window.as_weak();
+        let preferences = preferences.clone();
+        let path = path.clone();
+        let help_windows = help_windows.clone();
+        move || {
+            let window = window.clone();
+            let preferences = preferences.clone();
+            let path = path.clone();
+            let help_windows = help_windows.clone();
+            let picked = rfd::AsyncFileDialog::new()
+                .set_title("Suono di fine meeting")
+                .add_filter("Audio", &SOUND_EXTENSIONS)
+                .pick_file();
+            let spawned = slint::spawn_local(async move {
+                let Some(file) = picked.await else {
+                    return;
+                };
+                let Some(window) = window.upgrade() else {
+                    return;
+                };
+                set_meeting_end_sound(
+                    &window,
+                    &mut preferences.borrow_mut(),
+                    Some(file.path().to_path_buf()),
+                    path.as_deref(),
+                    distribution,
+                    &mut help_windows.borrow_mut(),
+                );
+            });
+            if let Err(e) = spawned {
+                error!("Could not open the sound file dialog: {e}");
+            }
+        }
+    });
+    window.on_reset_sound({
+        let window = window.as_weak();
+        let preferences = preferences.clone();
+        let help_windows = help_windows.clone();
+        move || {
+            let Some(window) = window.upgrade() else {
+                return;
+            };
+            set_meeting_end_sound(
+                &window,
+                &mut preferences.borrow_mut(),
+                None,
+                path.as_deref(),
+                distribution,
+                &mut help_windows.borrow_mut(),
+            );
+        }
+    });
+    Ok((help_windows, preferences))
+}
+
+/// Audio file extensions the settings dialog offers, matching the formats rodio decodes in this
+/// build. Upper-case variants are listed because some dialogs match patterns case-sensitively.
+const SOUND_EXTENSIONS: [&str; 12] = [
+    "mp3", "wav", "ogg", "oga", "flac", "m4a", "MP3", "WAV", "OGG", "OGA", "FLAC", "M4A",
+];
+
+/// Applies a meeting-end sound choice (`None` = bundled sound), saves it and re-renders.
+///
+/// Without a preferences path the choice stays for this session and a notice reports it was
+/// not saved. The file is not validated here; playback falls back when it cannot be decoded.
+fn set_meeting_end_sound(
+    window: &MainWindow,
+    preferences: &mut theme::VisualPreferences,
+    sound: Option<std::path::PathBuf>,
+    path: Option<&std::path::Path>,
+    distribution: theme_catalog::ThemeId,
+    help_windows: &mut Vec<Weak<Help>>,
+) {
+    preferences.meeting_end_sound = sound;
+    if let Some(path) = path {
+        preferences.save(path);
+    } else {
+        preferences.cannot_save();
+    }
+    render_visual_preferences(window, preferences, distribution, help_windows);
 }
 
 /// Builds the settings list: exactly the catalog names, in order.
@@ -745,6 +841,15 @@ fn render_visual_preferences(
     window.set_theme_options(theme_options());
     window.set_theme_choice(preferences.theme.catalog_index(distribution));
     window.set_theme_notice(preferences.notice.as_str().into());
+    let sound_name = match &preferences.meeting_end_sound {
+        Some(sound) => match sound.file_name() {
+            Some(name) => name.to_string_lossy().into_owned(),
+            None => sound.display().to_string(),
+        },
+        None => "Predefinito".into(),
+    };
+    window.set_sound_custom(preferences.meeting_end_sound.is_some());
+    window.set_sound_name(sound_name.into());
     help_windows.retain(|help| {
         let Some(help) = help.upgrade() else {
             return false;
@@ -762,7 +867,7 @@ fn render_visual_preferences(
 /// Returns an error if Slint cannot create the appearance observer component.
 fn configure_system_appearance(
     window: &MainWindow,
-    help_windows: Rc<RefCell<Vec<Weak<Help>>>>,
+    help_windows: HelpWindows,
 ) -> Result<SystemAppearanceObserver, slint::PlatformError> {
     let observer = SystemAppearanceObserver::new()?;
     window.set_system_color_scheme(observer.get_native_scheme());

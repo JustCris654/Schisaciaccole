@@ -10,6 +10,7 @@ use crate::theme_catalog::{THEME_CATALOG, ThemeId};
 const INVALID_NOTICE: &str = "Tema salvato non disponibile. Uso il tema predefinito.";
 const READ_NOTICE: &str = "Impossibile leggere le preferenze. Uso il tema predefinito.";
 const WRITE_NOTICE: &str = "Scelta applicata per questa sessione, ma non salvata.";
+const SOUND_NOTICE: &str = "Suono salvato non valido. Uso il suono predefinito.";
 
 /// No saved theme follows the build default; an explicit choice is saved by stable ID.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -77,18 +78,21 @@ impl AppearanceMode {
     }
 }
 
-/// Preferences and a recoverable inline notice for the current application session.
+/// Local preferences (theme, mode, meeting-end sound) and a recoverable inline notice for the
+/// current application session.
 #[derive(Debug, Default)]
 pub struct VisualPreferences {
     pub theme: ThemeChoice,
     pub mode: AppearanceMode,
+    /// Sound file played at the end of the meeting; `None` plays the bundled sound.
+    pub meeting_end_sound: Option<PathBuf>,
     pub notice: String,
     document: toml::Table,
 }
 
 impl VisualPreferences {
     /// Loads TOML; absent files are normal and other errors use defaults with a notice.
-    /// Unknown themes and modes also fall back without preventing startup.
+    /// Unknown themes, modes and invalid sounds also fall back without preventing startup.
     pub fn load(path: &Path) -> Self {
         match fs::read_to_string(path) {
             Ok(text) => Self::parse(&text),
@@ -103,8 +107,9 @@ impl VisualPreferences {
         }
     }
 
-    /// Parses local preferences; invalid values use build-default/system defaults.
-    /// A valid mode is retained when only the theme is unavailable, and vice versa.
+    /// Parses local preferences; invalid values use build-default/system/bundled-sound defaults.
+    /// Each valid value is retained when another one is invalid. The sound path is not checked
+    /// for existence here; playback falls back when it cannot be opened.
     fn parse(text: &str) -> Self {
         let document = match text.parse::<toml::Table>() {
             Ok(document) => document,
@@ -148,6 +153,15 @@ impl VisualPreferences {
                 }
             };
         }
+        if let Some(value) = preferences.document.get("meeting_end_sound") {
+            preferences.meeting_end_sound = match value.as_str() {
+                Some(path) if !path.is_empty() => Some(PathBuf::from(path)),
+                _ => {
+                    preferences.notice = SOUND_NOTICE.into();
+                    None
+                }
+            };
+        }
         preferences
     }
 
@@ -168,6 +182,17 @@ impl VisualPreferences {
             AppearanceMode::Dark => "dark",
         };
         self.document.insert("mode".into(), mode.into());
+        match &self.meeting_end_sound {
+            Some(sound) => {
+                self.document.insert(
+                    "meeting_end_sound".into(),
+                    sound.to_string_lossy().into_owned().into(),
+                );
+            }
+            None => {
+                self.document.remove("meeting_end_sound");
+            }
+        }
         match write_preferences(path, &self.document.to_string()) {
             Ok(()) => self.notice.clear(),
             Err(error) => {
@@ -351,6 +376,45 @@ mod tests {
         assert_eq!(preferences.mode, AppearanceMode::Dark);
         assert_eq!(fs::read_to_string(path).unwrap(), "untouched");
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn save_round_trips_meeting_end_sound_and_reset_removes_the_key() {
+        let directory = test_directory();
+        let path = directory.join("config.toml");
+        let mut preferences = VisualPreferences::parse("mode = 'dark'");
+        preferences.meeting_end_sound = Some(PathBuf::from("/music/gong.ogg"));
+        preferences.save(&path);
+        let loaded = VisualPreferences::load(&path);
+        assert_eq!(
+            loaded.meeting_end_sound,
+            Some(PathBuf::from("/music/gong.ogg"))
+        );
+        assert_eq!(loaded.mode, AppearanceMode::Dark);
+        preferences.meeting_end_sound = None;
+        preferences.save(&path);
+        let loaded = VisualPreferences::load(&path);
+        assert_eq!(loaded.meeting_end_sound, None);
+        assert!(loaded.document.get("meeting_end_sound").is_none());
+        assert!(loaded.notice.is_empty());
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn invalid_meeting_end_sound_keeps_valid_choices_and_reports_fallback() {
+        for data in [
+            "theme = 'schisaciaccole'\nmode = 'light'\nmeeting_end_sound = 42",
+            "theme = 'schisaciaccole'\nmode = 'light'\nmeeting_end_sound = ''",
+        ] {
+            let preferences = VisualPreferences::parse(data);
+            assert_eq!(preferences.meeting_end_sound, None);
+            assert_eq!(
+                preferences.theme,
+                ThemeChoice::Explicit(ThemeId::Schisaciaccole)
+            );
+            assert_eq!(preferences.mode, AppearanceMode::Light);
+            assert_eq!(preferences.notice, SOUND_NOTICE);
+        }
     }
 
     #[test]
