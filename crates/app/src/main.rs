@@ -673,6 +673,8 @@ fn configure_visual_preferences(
     );
     let preferences = Rc::new(RefCell::new(preferences));
     let help_windows = Rc::new(RefCell::new(Vec::new()));
+    // Set once: replacing the model would recreate the settings buttons and drop keyboard focus.
+    window.set_theme_options(theme_options());
     render_visual_preferences(
         window,
         &preferences.borrow(),
@@ -816,7 +818,7 @@ fn set_meeting_end_sound(
     render_visual_preferences(window, preferences, distribution, help_windows);
 }
 
-/// Builds the settings list: exactly the catalog names, in order.
+/// Builds the settings list: exactly the catalog names, in order. Installed once at startup.
 fn theme_options() -> slint::ModelRc<slint::SharedString> {
     let names: Vec<slint::SharedString> = theme_catalog::THEME_CATALOG
         .iter()
@@ -838,7 +840,6 @@ fn render_visual_preferences(
     window.set_light_palette(light.clone());
     window.set_dark_palette(dark.clone());
     window.set_appearance_mode(preferences.mode.index());
-    window.set_theme_options(theme_options());
     window.set_theme_choice(preferences.theme.catalog_index(distribution));
     window.set_theme_notice(preferences.notice.as_str().into());
     let sound_name = match &preferences.meeting_end_sound {
