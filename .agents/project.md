@@ -4,7 +4,7 @@ Read `AGENTS.md` first: its planning, delegation, validation, commit and Rust po
 
 ## Architecture
 
-`README.org` is the local source for behavior, setup, packaging and deployment.
+`README.md` is the local source for behavior, setup, packaging and deployment.
 
 - `crates/core` (`schisaciaccole-core`): pure quarter-hour/countdown, speaking turn, Daily, attendee, editor-row and meeting preference logic, plus shared API types and route constants. Time is passed into domain functions.
 - `crates/app` (`schisaciaccole`): Rust/Slint desktop app, UI in `ui/`, build script, assets, backend client, browser/loopback login and OS keychain sessions. The default build is a local timer. `SCHISACIACCOLE_BACKEND_URL` is fixed at compile time. The app uses meeting timers/turns/Daily and the server's meeting preferences (attendee renames and people added by hand); the editor is local, on a per-event draft.
@@ -27,7 +27,7 @@ DATABASE_URL=postgres://schisaciaccole:schisaciaccole@localhost:5432/schisaciacc
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-Server setup uses root `.env` from `.env.example`; consult `README.org` for OAuth configuration, keys, allowed domain and proxy settings. Do not expose real secrets. Server SQLx tests need a PostgreSQL role allowed to create databases. Run the required checks within the current conversation's scope; record failures or unavailable dependencies explicitly.
+Server setup uses root `.env` from `.env.example`; consult `README.md` for OAuth configuration, keys, allowed domain and proxy settings. Do not expose real secrets. Server SQLx tests need a PostgreSQL role allowed to create databases. Run the required checks within the current conversation's scope; record failures or unavailable dependencies explicitly.
 
 CI uses `--locked` and `SQLX_OFFLINE=true`. After a SQL query or migration change, with a development `DATABASE_URL`:
 
@@ -36,7 +36,7 @@ sqlx migrate run --source crates/server/migrations
 cargo sqlx prepare --workspace
 ```
 
-Commit regenerated `.sqlx/`; CI verifies it with `cargo sqlx prepare --workspace --check`. CLI installation is documented in `README.org`.
+Commit regenerated `.sqlx/`; CI verifies it with `cargo sqlx prepare --workspace --check`. CLI installation is documented in `README.md`.
 
 Run `cargo bundle --release --format deb` or `--format osx` from `crates/app`, and `makepkg -f` from `packaging/arch`. Consult the README before packaging or deployment; release tags must match the workspace version. Do not publish images, releases or git pushes without the requested scope.
 

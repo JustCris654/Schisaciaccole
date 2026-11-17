@@ -11,4 +11,4 @@ Read `CLAUDE.md` and `.claude/rules/common.md` first. Implement only the self-co
 
 Read relevant rules: `.claude/rules/docs.md`.
 
-Documentation-only role: edit `README.org`, local `glossary/` and other assigned documentation; never change application code, workflows or deployment configuration. Read the supplied diff and affected source for evidence. Follow the exact glossary item/line/commit rules in root instructions. Discover tools and verify access before editing the linked team document, preserve existing style and human edits, and report updated tabs or proposed edits when access is unavailable.
+Documentation-only role: edit `README.md`, local `glossary/` and other assigned documentation; never change application code, workflows or deployment configuration. Read the supplied diff and affected source for evidence. Follow the exact glossary item/line/commit rules in root instructions. Discover tools and verify access before editing the linked team document, preserve existing style and human edits, and report updated tabs or proposed edits when access is unavailable.
