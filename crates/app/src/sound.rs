@@ -1,11 +1,11 @@
 //! Playback of the sound that marks the end of a ceremony.
 
-use log::{error, info};
+use log::{error, info, warn};
 use rodio::source::SineWave;
 use rodio::{Decoder, DeviceSinkBuilder, Player, Source};
 use std::fs::File;
 use std::io::BufReader;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
@@ -47,18 +47,25 @@ fn sound_path(sound_asset_name: &str) -> Option<PathBuf> {
     candidates.into_iter().find(|p| p.exists())
 }
 
+/// Opens and decodes an audio file.
+///
+/// # Errors
+/// Returns a message naming the file when it cannot be opened or decoded.
+fn decode_file(path: &Path) -> Result<Decoder<BufReader<File>>, String> {
+    let file = File::open(path)
+        .map_err(|e| format!("Failed to open audio file {}: {e}", path.display()))?;
+    Decoder::try_from(file)
+        .map_err(|e| format!("Error while decoding audio file {}: {e}", path.display()))
+}
+
 /// Plays the finish sound once, on a background thread, and returns at once.
 ///
-/// Every failure (asset not found, no audio device, file not readable or not
-/// decodable) is logged and the sound is skipped; nothing is reported to the
-/// caller. Calls made while a sound is playing overlap instead of queueing.
-pub fn play_sound() {
-    thread::spawn(|| {
-        let Some(audio_path) = sound_path(SOUND_ASSET_NAME) else {
-            error!("Sound file not found: {SOUND_ASSET_NAME} (searched bundle + crate dirs)");
-            return;
-        };
-
+/// `custom` is tried first; when it cannot be opened or decoded the failure is logged and the
+/// bundled sound plays instead. Every other failure (bundled asset not found or not decodable, no
+/// audio device) is logged and the sound is skipped; nothing is reported to the caller. Calls made
+/// while a sound is playing overlap instead of queueing.
+pub fn play_sound(custom: Option<PathBuf>) {
+    thread::spawn(move || {
         let mut sink_handle = match DeviceSinkBuilder::open_default_sink() {
             Ok(sink_handle) => sink_handle,
             Err(e) => {
@@ -69,20 +76,29 @@ pub fn play_sound() {
         sink_handle.log_on_drop(false);
         let player = Player::connect_new(sink_handle.mixer());
 
-        match File::open(&audio_path) {
-            Ok(file) => {
-                let reader = BufReader::new(file);
-                if let Ok(source) = Decoder::new(reader) {
-                    info!("Playing sound: {}", audio_path.display());
+        if let Some(custom) = custom {
+            match decode_file(&custom) {
+                Ok(source) => {
+                    info!("Playing sound: {}", custom.display());
                     player.append(source);
                     player.sleep_until_end();
-                } else {
-                    error!("Error while decoding audio file: {}", audio_path.display());
+                    return;
                 }
+                Err(message) => warn!("{message}; using the bundled sound"),
             }
-            Err(e) => {
-                error!("Failed to open audio file {}: {}", audio_path.display(), e);
+        }
+
+        let Some(audio_path) = sound_path(SOUND_ASSET_NAME) else {
+            error!("Sound file not found: {SOUND_ASSET_NAME} (searched bundle + crate dirs)");
+            return;
+        };
+        match decode_file(&audio_path) {
+            Ok(source) => {
+                info!("Playing sound: {}", audio_path.display());
+                player.append(source);
+                player.sleep_until_end();
             }
+            Err(message) => error!("{message}"),
         }
     });
 }
