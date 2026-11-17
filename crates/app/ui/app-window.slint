@@ -202,7 +202,8 @@ component Navigation inherits Rectangle {
                     text: "Logout";
                     bare: true;
                     horizontal-stretch: 1;
-                    clicked => { menu.close(); root.logout(); }
+                    // The callback must be called before closing: closing drops the popup this conditional button reaches root through.
+                    clicked => { root.logout(); menu.close(); }
                 }
             }
         }
