@@ -361,7 +361,7 @@ La stessa pagina ha quattro viste. La finestra diventa compatta e sempre in prim
 **Vista semplice:** tempo rimanente, "Fine alle HH:MM", **Stop**. Se il timer viene da un meeting con almeno un partecipante compare anche **Turni di parola**.
 
 - **Stop**: torna alla pagina di origine (Manuale oppure I meeting di oggi).
-- Arrivo a zero: suono di fine e pagina **Meeting terminato**.
+- Arrivo a zero: suono di fine (il file scelto in **Impostazioni**, altrimenti quello incluso) e pagina **Meeting terminato**.
 - Se il computer era sospeso e la fine è passata da un pezzo, il timer si chiude senza suono, come uno Stop.
 
 </td>

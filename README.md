@@ -117,6 +117,17 @@ for the session, with an inline message that it was not saved; the previous
 configuration is retained. Unrelated TOML keys are preserved when a valid
 configuration is updated.
 
+The **Suono** section sets the sound played when the meeting ends. **Scegli
+file…** opens the system file dialog (MP3, WAV, OGG, FLAC, M4A); the chosen file
+name is shown and the choice applies to the next meeting end. **Predefinito**
+returns to the bundled `arcade_victory.mp3`. The choice is saved in the same
+file as the absolute path in `meeting_end_sound`, for example
+`meeting_end_sound = "/home/me/Music/gong.ogg"`; the key is removed when the
+default is restored. A non-string or empty value falls back to the bundled sound
+with a red message ("Suono salvato non valido. Uso il suono predefinito."). If
+the chosen file is missing or cannot be decoded when the meeting ends, the
+bundled sound plays and the error is logged.
+
 The default theme is embedded when compiling the desktop:
 
 ```sh
