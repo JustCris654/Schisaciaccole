@@ -34,7 +34,7 @@ Il dettaglio di ogni schermata e di ogni chiamata è in [Schermate e flusso fron
 | `.env.example` | Variabili d'ambiente del server da copiare in `.env` |
 | `docs/` | Documentazione: guida in `docs/guide/`, design e decisioni in `docs/design/`, indice in `docs/README.md` |
 
-Comandi di build, test, packaging e deploy: vedi il [README](../../README.md), in particolare [Build & run](../../README.md#build--run), [Backend (local development)](../../README.md#backend-local-development), [Tests](../../README.md#tests) e [Deploying the server](../../README.md#deploying-the-server).
+Presentazione, scorciatoie e avvio dell'app: vedi il [README](../../README.md) ([Install & run](../../README.md#install--run)).
 
 Quando codice e documentazione divergono, vale il codice.
 

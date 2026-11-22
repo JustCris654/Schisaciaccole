@@ -5,7 +5,7 @@ La documentazione è divisa in due parti:
 - [`guide/`](./guide/): come funziona e come si usa Schisaciaccole, per chi lavora sul progetto.
 - [`design/`](./design/): design e decisioni di sviluppo, con il loro stato ([convenzioni](./design/README.md)).
 
-Installazione, build, packaging e deploy sono descritti nel [README](../README.md) alla radice del repository.
+Presentazione, funzionalità, scorciatoie e installazione sono descritti nel [README](../README.md) alla radice del repository.
 
 Quando codice e documentazione divergono, vale il codice.
 
