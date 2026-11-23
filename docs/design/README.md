@@ -8,6 +8,7 @@ Questa cartella raccoglie i design e le decisioni di sviluppo di Schisaciaccole.
 | --- | --- | --- | --- |
 | Preferenze dei meeting senza pesi, editor locale | [`preferenze-meeting/design.md`](./preferenze-meeting/design.md) | accepted | 2026-11-14 |
 | Temi selezionabili: quattro temi, chiaro e scuro, predefinito di build | [`temi/design.md`](./temi/design.md) | accepted | 2026-11-15 |
+| Aggiornamento automatico dell'app desktop da GitHub Releases | [`aggiornamento-automatico/design.md`](./aggiornamento-automatico/design.md) | proposed | 2026-11-15 |
 
 ## Convenzioni
 

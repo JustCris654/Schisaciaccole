@@ -19,5 +19,6 @@ Quando codice e documentazione divergono, vale il codice.
 
 - [Preferenze dei meeting senza pesi, editor locale](./design/preferenze-meeting/design.md) (accepted): dati tutti dalla lista, editor locale con bozza per evento, preferenze senza pesi
 - [Temi selezionabili: quattro temi, chiaro e scuro, predefinito di build](./design/temi/design.md) (accepted): catalogo guidato dai dati, tre temi OpenMove, scelta locale e predefinito a compilazione
+- [Aggiornamento automatico dell'app desktop](./design/aggiornamento-automatico/design.md) (proposed): controllo di GitHub Releases all'avvio, installazione sul posto su macOS, pagina della release su Linux
 
 Le convenzioni sono in [`design/README.md`](./design/README.md).
