@@ -8,480 +8,73 @@ makes that easy — instead of asking "how long do we have left?", you pick the
 **wall-clock time the meeting must end** and the timer counts down precisely to
 that moment.
 
-In today's meeting list, **Avvia** starts the meeting timer directly. The
-**Editor** button to its left opens **Partecipanti di questo meeting**, where
-you can temporarily exclude attendees, rename them, add people by hand and save
-the renames and added people as a per-title preference. The editor opens locally
-and keeps a draft per meeting while the app is open. **Avvia** (from the list or
-the editor) starts the Daily when the row's Daily switch is on, otherwise a
-countdown whose speaking turns list the chosen participants.
+## Features
+
+- **Manual mode (`Manuale`)**: pick a quarter-hour end time and start the
+  countdown. Works offline with no sign-in.
+- **Today's meetings (`I miei meeting`)**: in backend-enabled builds, optional
+  Google sign-in lists today's Google Calendar meetings, expanding invited
+  Google Groups where accessible. Every countdown runs in a compact,
+  always-on-top window.
+- **Speaking turns (`Turni di parola`)**: assign timed turns to individual
+  participants during a meeting countdown and adjust their time on the fly.
+- **Daily mode (`Daily`)**: detected automatically for Daily/Stand-up meetings,
+  or toggled per meeting. Shuffles participants and splits remaining time evenly
+  among upcoming speakers, with pause, skip, and ±1 min adjustments.
+- **Participant editor (`Editor`)**: include or exclude attendees for the current
+  meeting, rename them, add people by hand, and optionally save renames and
+  additions per meeting title.
+- **Settings (`Impostazioni`)**: open the `⋯` menu to pick a custom
+  end-of-meeting sound or adjust the app's appearance.
 
 ## Screenshots
 
-| Google sign-in | Today's meetings |
+| Manual mode | Today's meetings |
 | --- | --- |
-| ![Google sign-in](assets/screenshot_google_sign_in.png) | ![Today's meetings](assets/screenshot_meetings.png) |
+| ![Manual mode](assets/screenshot_end_time.png) | ![Today's meetings](assets/screenshot_meetings.png) |
 
-| Meeting timer | Turni di parola |
+| Meeting timer | Speaking turns |
 | --- | --- |
-| ![Meeting timer](assets/screenshot_meeting_timer.png) | ![Turni di parola](assets/screenshot_speaking_slots.png) |
+| ![Meeting timer](assets/screenshot_meeting_timer.png) | ![Speaking turns](assets/screenshot_speaking_slots.png) |
 
-| Manuale: end time picked | Daily mode |
+| Daily mode | Participant editor |
 | --- | --- |
-| ![Manuale: end time picked](assets/screenshot_end_time.png) | ![Daily mode](assets/screenshot_daily.png) |
+| ![Daily mode](assets/screenshot_daily.png) | ![Participant editor](assets/screenshot_editor.png) |
 
-| Participant editor | Editor with the Daily switch on |
+| Google sign-in | Settings |
 | --- | --- |
-| ![Participant editor](assets/screenshot_editor.png) | ![Editor with the Daily switch on](assets/screenshot_editor_daily.png) |
+| ![Google sign-in](assets/screenshot_google_sign_in.png) | ![Settings](assets/screenshot_settings.png) |
 
-| Impostazioni |
-| --- |
-| ![Impostazioni: theme and appearance](assets/screenshot_settings.png) |
+## Keyboard shortcuts
 
-## Requirements
+| Key | Action |
+| --- | --- |
+| `Q` | Quit the app |
+| `M` | Toggle fullscreen |
+| `Esc` | Exit fullscreen |
+| `T` | Toggle always on top |
+| `H` | Show keyboard shortcuts |
 
-- [Rust](https://www.rust-lang.org/tools/install) (stable toolchain, `cargo`)
+On macOS, `Ctrl+T` also toggles **Always on top** from the **Window** menu.
 
-## Project layout
+## Install & run
 
-The repo is a Cargo workspace:
+Download a prebuilt release for Linux (`.deb`, Arch `.pkg.tar.zst`) or macOS
+(`.dmg`/`.zip`) from [GitHub Releases](https://github.com/JustCris654/Schisaciaccole/releases).
 
-- `crates/core` — the `schisaciaccole-core` library: shared time logic and API types.
-- `crates/app` — the `schisaciaccole` binary: Slint desktop app (`ui/`), `build.rs`,
-  assets (`assets/`: icons, sound, font) and the bundle metadata.
-- `crates/server` — the `schisaciaccole-server` binary: axum backend with Google
-  login, app sessions, meetings from Google Calendar and per-title meeting
-  preferences (attendee renames and people added by hand).
-- `deploy/` — `Dockerfile` for the server and `docker-compose.yml` (server and
-  PostgreSQL 17).
-- `assets/` — screenshots used by this README.
-
-## Build & run
+Or run the local timer (Manual mode) from source with
+[Rust](https://www.rust-lang.org/tools/install):
 
 ```sh
-cargo run -p schisaciaccole
-```
-
-For a release build:
-
-```sh
-cargo run -p schisaciaccole --release
-```
-
-Checks CI runs on every push and pull request (the server tests need PostgreSQL,
-see [Tests](#tests)):
-
-```sh
-cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
-cargo fmt --all --check
-```
-
-## Themes and appearance
-
-Open the three-dot menu in **Manuale** or **I miei meeting**, then choose
-**Impostazioni**. The **Tema** section has independent controls: a grid of theme
-names (**Schisaciaccole**, **Bubblegum**, **Lavanda elettrica**, **Campo Blu**)
-and the appearance (**Sistema**, **Chiaro**, **Scuro**). The appearance chooses
-the light or dark variant of the selected theme. Changes apply immediately,
-including open shortcut windows. **Sistema** follows native light/dark changes
-while the app is open. These preferences work locally without signing in or
-configuring a backend, and login/logout does not change them.
-
-Preferences are TOML in `~/.config/schisaciaccole/config.toml` on Linux and macOS,
-using the user's home directory even when `XDG_CONFIG_HOME` is set. The original
-app and forks share this path. A typical file is:
-
-```toml
-theme = "openmove-1"
-mode = "system"
-```
-
-Accepted theme values are `schisaciaccole`, `openmove-1`, `openmove-2` and
-`openmove-3`; appearance values are `system`, `light` and `dark`. With no saved
-theme, the build default is active and shown selected in the list. It keeps
-following the build default after an update until the user picks a theme.
-Saves write only explicit IDs: no `theme` key is written until a theme is
-chosen. A legacy `theme = "distribution"` is read as absent, without a notice.
-The removed `openmove` ID is no longer valid. An explicit theme ID is preserved
-across updates. Changing the theme does not reset the appearance mode.
-
-Missing files are normal. Invalid TOML, removed/invalid theme IDs and read
-errors fall back to the build default without blocking startup; a short red
-message near the settings explains the fallback ("Tema salvato non disponibile.
-Uso il tema predefinito." or "Impossibile leggere le preferenze. Uso il tema
-predefinito."). A valid appearance mode is retained when only the saved theme is
-invalid. Invalid modes fall back to **Sistema**. Saves use a sibling temporary
-file and atomic replacement. On a write error the current choice remains active
-for the session, with an inline message that it was not saved; the previous
-configuration is retained. Unrelated TOML keys are preserved when a valid
-configuration is updated.
-
-The **Suono** section sets the sound played when the meeting ends. **Scegli
-file…** opens the system file dialog (MP3, WAV, OGG, FLAC, M4A); the chosen file
-name is shown and the choice applies to the next meeting end. **Predefinito**
-returns to the bundled `arcade_victory.mp3`. The choice is saved in the same
-file as the absolute path in `meeting_end_sound`, for example
-`meeting_end_sound = "/home/me/Music/gong.ogg"`; the key is removed when the
-default is restored. A non-string or empty value falls back to the bundled sound
-with a red message ("Suono salvato non valido. Uso il suono predefinito."). If
-the chosen file is missing or cannot be decoded when the meeting ends, the
-bundled sound plays and the error is logged.
-
-The default theme is embedded when compiling the desktop:
-
-```sh
-SCHISACIACCOLE_DEFAULT_THEME=openmove-1 cargo run --release -p schisaciaccole
-```
-
-Unset means `schisaciaccole`. Empty, non-Unicode or unknown IDs (including the
-removed `openmove`) fail the build with a descriptive error; valid stable IDs
-are `schisaciaccole`, `openmove-1`, `openmove-2` and `openmove-3`.
-Cargo rechecks the choice when the variable changes, without `cargo clean`.
-The variable does not configure the server and is not read at app startup.
-It can be combined with the optional build-time backend URL:
-
-```sh
-SCHISACIACCOLE_BACKEND_URL=https://schisaciaccole.example.com \
-SCHISACIACCOLE_DEFAULT_THEME=openmove-1 \
 cargo run --release -p schisaciaccole
 ```
 
-Each OpenMove theme pairs a light and a dark palette: Bubblegum
-(`openmove-1`) is "Bubblegum" light with "Grafite e blu" dark; Lavanda
-elettrica (`openmove-2`) is "Bianco e blu" light with "Nero e lime" dark; Campo
-Blu (`openmove-3`) is "Lavanda elettrica" light with "Campo blu" dark. Design
-notes are in `docs/design/temi/`.
-
-| Theme | Chiaro | Scuro |
-| --- | --- | --- |
-| Schisaciaccole | ![Schisaciaccole, light](assets/themes/schisaciaccole-light.png) | ![Schisaciaccole, dark](assets/themes/schisaciaccole-dark.png) |
-| Bubblegum | ![Bubblegum, light](assets/themes/openmove-1-light.png) | ![Bubblegum, dark](assets/themes/openmove-1-dark.png) |
-| Lavanda elettrica | ![Lavanda elettrica, light](assets/themes/openmove-2-light.png) | ![Lavanda elettrica, dark](assets/themes/openmove-2-dark.png) |
-| Campo Blu | ![Campo Blu, light](assets/themes/openmove-3-light.png) | ![Campo Blu, dark](assets/themes/openmove-3-dark.png) |
-
-Adding a theme takes three changes in `crates/app/src`: a `ThemeId` variant, one
-entry in the ordered `THEME_CATALOG` in `theme_catalog.rs` (stable ID and name;
-the settings list follows this order), and its light and dark palette functions
-in `palettes.rs` (wired through the exhaustive match). Local persistence is in
-`theme.rs`. Slint components read the palette through `AppTheme`. Focus,
-warning/error states, speaking turns, accent text on cards (`surface-accent`)
-and decorations have independent tokens.
-
-## Packaging
-
-The app icons live at `crates/app/assets/icon_{128,256,512}.png` and the
-`crates/app/assets/arcade_victory.mp3` sound ships as a resource. At
-runtime the sound is located relative to the executable, so it works from
-every package layout (dev, deb, macOS app, Arch pkg).
-
-### Linux (.deb) and macOS (.app) — cargo-bundle
-
-Run cargo-bundle from the app crate, not from the workspace root: with
-`cargo bundle -p schisaciaccole` at the root it resolves the icon and resource
-paths against the current directory and silently leaves them out of the
-bundle.
-
-```sh
-cargo install --locked cargo-bundle   # once
-
-cd crates/app
-cargo bundle --release --format deb   # Linux  -> target/release/bundle/deb/*.deb
-cargo bundle --release --format osx   # macOS  -> *.app (must run on macOS)
-```
-
-The bundles land in the workspace `target/` dir at the repo root. Bundle
-metadata (name, identifier, icon, bundled resources) lives in the
-`[package.metadata.bundle]` section of `crates/app/Cargo.toml`.
-
-### Linux (.deb) via Docker
-
-Building the `.deb` directly needs `cargo-bundle` plus a handful of native
-dev libraries (ALSA, fontconfig, xcb...). `Dockerfile.deb` sets up a
-throwaway Ubuntu 22.04 image with Rust, `cargo-bundle` and those libraries
-pre-installed, so you don't need any of that on the host.
-
-Build the image once:
-
-```sh
-docker build -t deb-builder -f Dockerfile.deb .
-```
-
-Then run the bundle build, mounting the repo into the container:
-
-```sh
-docker run --rm \
-    --user $(id -u):$(id -g) \
-    -e HOME=/tmp \
-    -e CARGO_HOME=/tmp/cargo \
-    -v "$(pwd)":/app \
-    -w /app/crates/app \
-    deb-builder cargo bundle --release --format deb
-```
-
-- `--user $(id -u):$(id -g)` makes the container write files as your host
-  user instead of root.
-- `HOME` and `CARGO_HOME` are redirected to `/tmp` because the mounted-in
-  user has no home directory inside the container.
-
-The resulting package lands at `target/release/bundle/deb/*.deb`, same as
-the native `cargo bundle` build.
-
-### Arch Linux (pacman)
-
-> **Run `makepkg` from inside `packaging/arch/`, never from the repo root.**
-> makepkg uses `./src` and `./pkg` as its work dirs and the PKGBUILD finds the
-> repo two levels above its own directory. It builds a clean copy of the
-> workspace (`Cargo.toml`, `Cargo.lock`, `crates/`) under its own `src/`, so
-> the sources are never touched.
-
-```sh
-cd packaging/arch
-makepkg -f                  # rustup users without the pacman 'cargo' pkg: makepkg -fd
-sudo pacman -U schisaciaccole-*.pkg.tar.zst
-```
-
-This installs the binary, the sound, the icon, a `.desktop` launcher and the
-license under the standard `/usr` paths.
-
-### Releases (CI)
-
-Pushing a tag `vX.Y.Z` that matches the `version` in the
-`[workspace.package]` section of the root `Cargo.toml` triggers
-`.github/workflows/release.yml`, which builds the `.deb`, the Arch package
-and a macOS `.app` (as a `.zip` and a `.dmg`, unsigned unless the signing
-secrets below are set) and attaches them all to a GitHub Release:
-
-```sh
-git tag v0.2.0
-git push origin v0.2.0
-```
-
-A mismatched tag (e.g. tagging `v0.2.1` while `Cargo.toml` says `0.2.0`)
-fails the run before anything is built. The workflow can also be triggered
-manually (`workflow_dispatch`) to build and upload all three packages as
-run artifacts without cutting a release.
-
-Two repository settings affect the release:
-
-- The repository variable `SCHISACIACCOLE_BACKEND_URL` is the backend URL baked
-  into the desktop builds (see
-  [Building the app against a backend](#building-the-app-against-a-backend)).
-  Unset means local-only builds.
-- The optional macOS signing secrets. Set all seven or none: a partial set fails
-  the run instead of producing an unsigned build. Without them the macOS build
-  is unsigned. The names are:
-  - `APPLE_CERTIFICATE_P12_BASE64`
-  - `APPLE_CERTIFICATE_PASSWORD`
-  - `APPLE_SIGNING_IDENTITY`
-  - `APPLE_TEAM_ID`
-  - `APPLE_API_KEY_ID`
-  - `APPLE_API_ISSUER_ID`
-  - `APPLE_API_KEY_P8_BASE64`
-
-Tag pushes also build and push the server image to GHCR as
-`ghcr.io/justcris654/schisaciaccole-server:<version>` and
-`ghcr.io/justcris654/schisaciaccole-server:latest`, where `<version>` is the
-version without the `v`. The first push creates a private package: make it
-public, or log in to GHCR on the host that pulls it.
-
-## Backend (local development)
-
-The server is the `schisaciaccole-server` crate in `crates/server`. It needs a
-PostgreSQL database and a `.env` file in the repository root (the server loads
-it at startup).
-
-Copy the example and fill it in:
-
-```sh
-cp .env.example .env
-```
-
-Generate the secrets with:
-
-```sh
-openssl rand -base64 32
-```
-
-- `TOKEN_ENC_KEY` must be base64 that decodes to exactly 32 bytes (it encrypts
-  the stored Google tokens).
-- `JWT_SIGNING_KEY` must be at least 32 characters (it signs the server's JWTs).
-
-Start PostgreSQL 17 from the compose file:
-
-```sh
-docker compose -f deploy/docker-compose.yml up -d db
-```
-
-Run the server:
-
-```sh
-cargo run -p schisaciaccole-server
-```
-
-The server listens on `BIND_ADDR` (default `0.0.0.0:8080`), runs the database
-migrations at startup, and needs the Google OpenID discovery document
-(`GOOGLE_ISSUER_URL`, default `https://accounts.google.com`) to be reachable.
-
-### Google Cloud setup (real login)
-
-A real login needs a Google OAuth client. Create a project inside the company
-Google Cloud organization, then:
-
-- Enable the **Google Calendar API** and **Cloud Identity API**.
-- Configure the **OAuth consent screen** with user type **Internal** and the scopes
-  `openid`, `email`, `profile`,
-  `https://www.googleapis.com/auth/cloud-identity.groups.readonly` and
-  `https://www.googleapis.com/auth/calendar.events.owned.readonly`. If the Calendar
-  scope is not enough, use `https://www.googleapis.com/auth/calendar.events.readonly`
-  instead and set `GOOGLE_CALENDAR_SCOPE` to it.
-- Create an **OAuth client ID** of type **Web application** with the authorized
-  redirect URI `<PUBLIC_BASE_URL>/auth/google/callback` (locally:
-  `http://localhost:8080/auth/google/callback`).
-- Put the client ID and secret in `.env` as `GOOGLE_CLIENT_ID` and
-  `GOOGLE_CLIENT_SECRET`, and set `ALLOWED_HD` to the company domain.
-
-### Google Groups participants
-
-Meeting lists and the turn editor resolve invited Google Groups, including nested
-groups, using the signed-in user's Cloud Identity access. Enable the Cloud
-Identity API in the OAuth project and include the read-only groups scope above.
-The scope permits reading accessible groups and memberships; the user's domain,
-group settings and membership role still determine visibility. See Google's
-[authorization guide](https://docs.cloud.google.com/identity/docs/concepts/auth)
-and [membership-list scope reference](https://docs.cloud.google.com/identity/docs/reference/rest/v1/groups.memberships/list).
-
-Existing sessions without this grant keep their Calendar meetings. Use
-**Ricollega Google** when prompted to grant access; declining or cancelling keeps
-those meetings usable. Repeated refreshes never open a login automatically.
-Ordinary group permission failures do not ask for repeated consent.
-
-Members are read at request time, so they reflect **current membership**, not the
-membership at invitation time. Members added through a group have no individual
-Calendar RSVP and are shown as participants awaiting a response. Direct attendee
-metadata takes precedence, duplicates are matched without email case, and
-participants who declined are excluded from counts and speaking turns. The same
-participant list feeds **Avvia**, Daily and the editor's participants. Opening the
-editor reads membership again; **Ripristina partecipanti** uses that fresh list.
-
-Resolution is best effort. If a top-level group's complete membership cannot be
-read, its original invitation stays in the list and **Lista partecipanti
-incompleta** appears. Partial members of that group are discarded; independent
-successful groups remain expanded. Calendar's omitted-attendee flag produces the
-same warning. Only invitations that could be groups are looked up: the signed-in
-user and attendees who accepted, declined or answered maybe are people. Cloud
-Identity answers a lookup for a person, a missing group or a group the user
-cannot see with 404 or a bare 403 `PERMISSION_DENIED`, so for an invited address
-either means it stays a direct attendee without a warning; such hidden groups
-are therefore not flagged. A 403 carrying an error reason (disabled API, missing
-scope) and the same answers for a nested member of unknown type still warn.
-Known user members are leaves and need no additional group lookup. Complete empty
-groups contribute no participants. Warnings never prevent starting or editing.
-
-Each authenticated request has its own membership cache and one expansion budget:
-5 seconds overall, at most 64 Cloud Identity HTTP requests, 8 nesting levels,
-10 membership pages per group, 5,000 discovered membership records and 5,000
-cumulative staged members, including repeated traversal of cached groups.
-Individual HTTP calls have a timeout of at most 2 seconds within the remaining
-budget and response bodies are limited to 2,000,000 bytes. Cycles, malformed
-responses, access failures and exhausted limits fall back with an incomplete
-warning. Membership data is not shared between users or cached across requests.
-`GOOGLE_GROUPS_BASE_URL` defaults to
-`https://cloudidentity.googleapis.com/v1`; override it only for development mocks.
-The app reads Calendar events and group memberships without modifying invitations
-or group membership.
-
-To check the feature manually, prepare a Calendar event inviting
-`team-backend@openmove.com` using an account allowed to view that group's members,
-then open today's meetings in a backend-enabled app. Compare its participant
-count, Daily names and the editor's **Ripristina partecipanti** against the visible group members;
-include a direct invitation for one member to check deduplication. Open the editor
-after changing membership to check its fresh read. With a session missing the
-scope, check the explicit reconnect action; with denied group access, check the
-warning and that **Avvia** and editor remain usable. Test invitations are created
-manually by the developer; the app itself only reads them.
-
-## Tests
-The server tests need a running PostgreSQL. `#[sqlx::test]` creates a throwaway
-database per test, so the user in `DATABASE_URL` must be allowed to create
-databases (the compose database user is the superuser).
-
-```sh
-DATABASE_URL=postgres://schisaciaccole:schisaciaccole@localhost:5432/schisaciaccole cargo test --workspace
-```
-
-SQL queries are checked at compile time with sqlx. After changing a query or a
-migration, install the sqlx CLI once, apply the migrations and regenerate the
-offline data:
-
-```sh
-cargo install sqlx-cli --version 0.8.6 --no-default-features --features rustls,postgres --locked   # once
-sqlx migrate run --source crates/server/migrations   # with DATABASE_URL set, as in CI
-cargo sqlx prepare --workspace
-```
-
-Commit the `.sqlx/` directory. Builds without a database use `.sqlx/`
-automatically; `SQLX_OFFLINE=true` forces that.
-
-## Building the app against a backend
-The desktop app talks to the backend through a URL fixed at compile time:
-
-```sh
-SCHISACIACCOLE_BACKEND_URL=https://schisaciaccole.example.com cargo build --release -p schisaciaccole
-```
-
-Without the variable the app is the local-only quarter-hour timer. The session
-refresh token is stored in the OS keychain (macOS Keychain, Linux Secret
-Service).
-
-## Deploying the server
-
-The server runs from the image published by the release workflow, next to a
-PostgreSQL 17 database, as defined in `deploy/docker-compose.yml`.
-
-On the host, check out the repository and put the real `.env` in its root:
-compose reads `../.env` relative to `deploy/`. Then start the stack with the
-image tag, which is the version without the `v`:
-
-```sh
-SERVER_TAG=<version> docker compose -f deploy/docker-compose.yml pull server
-SERVER_TAG=<version> docker compose -f deploy/docker-compose.yml up -d
-```
-
-- The `server` service uses `ghcr.io/justcris654/schisaciaccole-server:${SERVER_TAG}`
-  (`latest` if `SERVER_TAG` is unset) and publishes port 8080. Its
-  `DATABASE_URL` is overridden to point to the `db` service.
-- `TRUSTED_PROXY_HOPS` tells the server how many reverse proxies sit in front
-  of it, for the per-client rate limit on `/auth` and the per-client cap on
-  logins in progress. Leave it at `0` (the default) when the server is exposed
-  directly: forwarding headers are ignored and the client is the peer address.
-  Set it to `1` behind one reverse proxy with HTTPS that appends the client
-  address to `X-Forwarded-For` (nginx `$proxy_add_x_forwarded_for`): the last
-  entry of the header is the client. Never set it higher than the number of
-  proxies, or clients can pick their own address.
-- `PUBLIC_BASE_URL` must be the public HTTPS URL of the server.
-- The server serves at most 1024 connections at once and stops accepting
-  while at the cap. It closes a connection that does not send complete
-  request headers within 10 seconds or stays 10 seconds with no request in
-  handling, and answers 408 to a request (body included) that takes more
-  than 30 seconds. On `SIGTERM` it waits at most 30 seconds for open
-  requests before exiting.
-
-## Logging
-
-The app uses `env_logger`. Control verbosity with the `RUST_LOG` environment
-variable (default is `warn`):
-
-```sh
-RUST_LOG=info cargo run -p schisaciaccole     # callback events: selection, start, stop, sound
-RUST_LOG=debug cargo run -p schisaciaccole    # also the periodic option refresh
-```
+Google sign-in and Calendar features require a backend-enabled build; see the
+[backend setup guide](docs/guide/setup-backend.md).
 
 ## License
 
-Schisaciaccole is released under the
-[PolyForm Noncommercial License 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0)
-(see `LICENSE`). Noncommercial use only: commercial use requires the author's
-written permission. Copyright (c) 2026 Cristian Scapin.
-
-The UI is built with [Slint](https://slint.dev), used under the Slint Royalty-free license 2.0.
+[PolyForm Noncommercial License 1.0.0](LICENSE). Noncommercial use only;
+commercial use requires the author's written permission.
+Copyright (c) 2026 Cristian Scapin.
+Built with [Slint](https://slint.dev), under the Slint Royalty-free license 2.0.

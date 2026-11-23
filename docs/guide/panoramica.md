@@ -34,10 +34,11 @@ Il dettaglio di ogni schermata e di ogni chiamata è in [Schermate e flusso fron
 | `.env.example` | Variabili d'ambiente del server da copiare in `.env` |
 | `docs/` | Documentazione: guida in `docs/guide/`, design e decisioni in `docs/design/`, indice in `docs/README.md` |
 
-Comandi di build, test, packaging e deploy: vedi il [README](../../README.md), in particolare [Build & run](../../README.md#build--run), [Backend (local development)](../../README.md#backend-local-development), [Tests](../../README.md#tests) e [Deploying the server](../../README.md#deploying-the-server).
+Presentazione, scorciatoie e avvio dell'app: vedi il [README](../../README.md) ([Install & run](../../README.md#install--run)).
 
 Quando codice e documentazione divergono, vale il codice.
 
 ## Pagine di questa guida
 
+- [Setup del backend](./setup-backend.md): Google Cloud Console, configurazione, avvio del server e build dell'app
 - [Schermate e flusso frontend-backend](./flusso-frontend-backend.md): tutte le schermate dell'app desktop e le chiamate al server per login, meeting e preferenze dei meeting ([versione HTML](../flusso-frontend-backend.html))
