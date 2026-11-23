@@ -69,7 +69,8 @@ Or run the local timer (Manual mode) from source with
 cargo run --release -p schisaciaccole
 ```
 
-Google sign-in and Calendar features require a backend-enabled build.
+Google sign-in and Calendar features require a backend-enabled build; see the
+[backend setup guide](docs/guide/setup-backend.md).
 
 ## License
 

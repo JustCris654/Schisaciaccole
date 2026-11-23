@@ -40,4 +40,5 @@ Quando codice e documentazione divergono, vale il codice.
 
 ## Pagine di questa guida
 
+- [Setup del backend](./setup-backend.md): Google Cloud Console, configurazione, avvio del server e build dell'app
 - [Schermate e flusso frontend-backend](./flusso-frontend-backend.md): tutte le schermate dell'app desktop e le chiamate al server per login, meeting e preferenze dei meeting ([versione HTML](../flusso-frontend-backend.html))
